@@ -108,7 +108,7 @@ def test_the_four_routes_are_keyed_pre_write_and_transfer_is_unkeyed_pre_write()
     names = {_name(c) for c in _calls(_tree(_handlers()[TRANSFER]))}
     assert "prepare_transfer" in names and "transfer_campaign_ownership" not in names
     end = ("POST", CAMPAIGN + "/memberships/{campaign_membership_id}/end")
-    assert end in R01_PENDING_ROUTES, "end membership is S5-E3"
+    assert end not in R01_PENDING_ROUTES and end in R01_FINALIZED_ROUTES, "end membership is S5-E3"
 
 
 @pytest.mark.parametrize("route", sorted(ROUTE))

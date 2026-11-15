@@ -140,7 +140,9 @@ def test_the_access_management_family_is_not_in_the_post_write_check() -> None:
         for writes in record["command_writes"].values()
         for w in writes
     }
-    assert {"security.membership_roles", "security.resource_grants"} <= written
+    # S5-E2 and S5-E3 migrated the role and membership-end routes, whose manifest records no longer trace a
+    # legacy command; the routes still pending (grants, relationships, groups, delegations) write the readers' tables
+    assert {"security.resource_grants", "security.membership_character_relationships"} <= written
     assert (written & AUTHORITY_READER_TABLES) - REVIEWED_POST_WRITE_TABLES
 
 

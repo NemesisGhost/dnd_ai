@@ -76,6 +76,7 @@ from pydantic import BaseModel
 from sqlalchemy import Connection
 
 from dnd_ai.commands._pre_write_steps import receipt_params
+from dnd_ai.commands.membership_end_plans import prepare_end_membership, write_end_membership
 from dnd_ai.commands.membership_role_plans import (
     MEMBERSHIP_RECEIPT,
     prepare_add_member,
@@ -89,17 +90,13 @@ from dnd_ai.commands.membership_role_plans import (
     write_revoke_role,
     write_transfer,
 )
-from dnd_ai.commands.memberships import end_campaign_membership
 from dnd_ai.domain.access import LOCAL_AUTH_ISSUER, AccessContext
 from dnd_ai.domain.authorization import AuthorizationPlan
 
-from ._shared import timeline_world_id
 from .access import require_campaign_capability
-from .audit import record_change_log
 from .campaigns import _begin_lifecycle_request
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
-from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
 from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["memberships"])
@@ -411,108 +408,50 @@ def end_campaign_membership_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> EndCampaignMembershipResponse:
-    """Ends one existing, currently open campaign membership — the portal
-    Access page's "Remove member" action (Phase 13E-B checkpoint 3,
-    `dnd_ai.commands.memberships.end_campaign_membership`). No request
-    body: the route path already carries everything this command needs.
-    Self-removal is permitted, with no special-case check here or in the
-    command — the campaign's own access-manager retention invariant, the
-    identical one `revoke_membership_role_endpoint`/`change_membership_
-    role_endpoint` already rely on, is what actually protects an active
-    campaign from ending up with no `access.manage` holder, including when
-    the caller is removing their own last such membership.
-
-    Response contract mirrors `revoke_membership_role_endpoint`'s own
-    "200/an id echoed back, not a bodyless 204" shape for the identical
-    reason: `begin_idempotent_request`/`complete_idempotent_request` need
-    something to cache. `200`, not `201`: this closes an existing row, it
-    creates nothing.
-
-    Idempotency/audit mirrors `revoke_membership_role_endpoint` exactly:
-    an `Idempotency-Key` replay returns the original cached response
-    verbatim, never re-running the command; independent of any key, the
-    audit write below is conditioned on `EndCampaignMembershipResult.
-    ended`, so a plain retry that lands on an already-ended membership
-    (whether or not it reuses a key) writes no second audit row for one
-    real removal."""
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {
-            "campaign_membership_id": str(campaign_membership_id)
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_END_MEMBERSHIP_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return EndCampaignMembershipResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = end_campaign_membership(
-        connection,
-        campaign_membership_id=campaign_membership_id,
-        campaign_id=campaign_id,
-        ended_by_membership_id=access.campaign_membership_id,
+) -> Any:
+    """Ends one existing, currently open campaign membership: the portal Access page's "Remove member" action
+    (Phase 13E-B checkpoint 3); a keyed-optional pre-write route (R01 S5-E3,
+    `dnd_ai.commands.membership_end_plans`). No request body. Self-removal is permitted and judged against the
+    pre-command authority; the campaign's access-manager retention invariant (checked before `finalize`, with the
+    deferred triggers as the backstop) is what protects an active campaign from losing its last `access.manage`
+    holder. `200`, not `201`: this closes an existing row. An already-ended membership is the documented no-op:
+    no write and no audit row (a fresh keyed one still completes its receipt)."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
+        connection=connection,
+        access=access,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        command_name=_END_MEMBERSHIP_COMMAND_NAME,
+        payload={"campaign_membership_id": str(campaign_membership_id)},
     )
-
-    if result.ended:
-        record_change_log(
-            connection,
-            change_action_code=_UPDATED_CHANGE_ACTION,
-            schema_name="security",
-            table_name="campaign_memberships",
-            record_id=campaign_membership_id,
-            entity_id=None,
-            world_id=timeline_world_id(connection, access.timeline_id),
-            actor_user_id=access.user_id,
-            correlation_id=correlation_id,
-            command_name=_END_MEMBERSHIP_COMMAND_NAME,
-            event_id=None,
-            previous_status="active",
-            new_status="revoked",
-            changed_fields={
-                "revoked_membership_role_ids": [
-                    str(role_id) for role_id in result.revoked_membership_role_ids
-                ],
-                "revoked_membership_character_relationship_ids": [
-                    str(relationship_id)
-                    for relationship_id in result.revoked_membership_character_relationship_ids
-                ],
-                "revoked_resource_grant_ids": [
-                    str(grant_id) for grant_id in result.revoked_resource_grant_ids
-                ],
-                "removed_access_group_membership_ids": [
-                    str(access_group_membership_id)
-                    for access_group_membership_id in result.removed_access_group_membership_ids
-                ],
-                "closed_character_revelation_ids": [
-                    str(revelation_id) for revelation_id in result.closed_character_revelation_ids
-                ],
-                "removed_character_revelation_member_ids": [
-                    str(member_id) for member_id in result.removed_character_revelation_member_ids
-                ],
-            },
-        )
-
+    if replay is not None:
+        return replay
+    prepared = prepare_end_membership(
+        connection,
+        plan,
+        campaign_id=campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        target_membership_id=campaign_membership_id,
+        reservation_id=reservation_id,
+    )
+    plan.finalize(connection)
+    write_end_membership(
+        connection,
+        plan,
+        prepared,
+        campaign_membership_id=campaign_membership_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        correlation_id=correlation_id,
+    )
     response = EndCampaignMembershipResponse(campaign_membership_id=campaign_membership_id)
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=200,
-            response_body=response.model_dump(mode="json"),
-        )
-
+    _complete_receipt_with(connection, plan, reservation_id, 200, response)
     return response
 
 

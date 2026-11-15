@@ -28,7 +28,6 @@ import pytest
 from sqlalchemy import Engine, create_engine, event, text
 
 import dnd_ai.api.deps as deps
-import dnd_ai.api.memberships as memberships_api
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_engine
@@ -48,6 +47,7 @@ from tests.database.test_idempotency_key_lock import (
     _receipts,
     _urls,
 )
+from tests.end_audit_failure import fail_end_audit
 from tests.factories import oidc_principal
 from tests.unit.test_request_transaction_lifecycle import _Barrier, _Events
 
@@ -212,10 +212,10 @@ def _case(
     barrier = _Barrier(monkeypatch, op, events, hold=True, fail=fail)
     if handler_error:
 
-        def broken(*args: Any, **kwargs: Any) -> Any:
+        def broken() -> None:
             raise ValueError("deliberate failure after the reservation")
 
-        monkeypatch.setattr(memberships_api, "record_change_log", broken)
+        fail_end_audit(monkeypatch, broken)
     call = _Call(postgres_engine, small, g, _urls(g)["end_player"], key)
     ids = _key_lock_ids(postgres_engine, g, key)
     hold = _hold_membership(postgres_engine, g.player) if block_handler else None

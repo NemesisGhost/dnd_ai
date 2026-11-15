@@ -20,7 +20,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
-import dnd_ai.api.memberships as memberships_api
 from dnd_ai.api.idempotency import idempotency_key_lock_scope
 from dnd_ai.commands.access_grants import create_resource_grant
 from dnd_ai.commands.character_public_profile import (
@@ -63,6 +62,7 @@ from tests.database.test_character_revelations import (  # noqa: F401 - fixtures
     url,
 )
 from tests.database.test_idempotency_key_lock import _key_lock_state
+from tests.end_audit_failure import fail_end_audit
 from tests.lock_race_support import Budget, LockRace
 from tests.r01_support import fixture_plan
 
@@ -621,15 +621,13 @@ def test_xr3_the_first_request_rolls_back_and_the_waiting_create_runs_fresh(
 ) -> None:
     c = rev.character_id
     key = f"xr3-{uuid.uuid4().hex[:8]}"
-    real = memberships_api.record_change_log
 
-    def fail_once(*args: Any, **kwargs: Any) -> Any:
+    def fail_once() -> None:
         if not getattr(fail_once, "failed", False):
             fail_once.failed = True  # type: ignore[attr-defined]
             raise ValueError("the end fails after its reservation")
-        return real(*args, **kwargs)
 
-    monkeypatch.setattr(memberships_api, "record_change_log", fail_once)
+    fail_end_audit(monkeypatch, fail_once)
     hold = _PidHold(
         postgres_engine,
         "SELECT 1 FROM security.membership_roles WHERE membership_role_id = :r FOR SHARE",

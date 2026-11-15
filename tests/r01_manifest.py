@@ -599,6 +599,11 @@ _S5E2_TRANSFER_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {("POST", _CAMPAIGN + "/ownership-transfer")}
 )
 
+#: S5-E3 migrates end campaign membership, a keyed-optional pre-write plan (`dnd_ai.commands.membership_end_plans`).
+_S5E3_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {("POST", _CAMPAIGN + "/memberships/{campaign_membership_id}/end")}
+)
+
 MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     frozenset(
         {
@@ -617,6 +622,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S5E1_ROUTES
     | _S5E2_ROUTES
     | _S5E2_TRANSFER_ROUTES
+    | _S5E3_ROUTES
 )
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline

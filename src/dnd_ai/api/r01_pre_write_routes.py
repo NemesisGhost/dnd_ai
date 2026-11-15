@@ -6,7 +6,7 @@ outcome (`ReservationDeclarations`). Every lock of the request is taken before `
 is a declared `plan.execute` step after it, and the reservation's campaign foreign key is deferred.
 
 The set grows only with a reviewed slice (S5-D: the two invitation routes; S5-E1: the three campaign
-lifecycle routes; S5-E2: add member and the four role operations; S5-E3 onward: the rest).
+lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4 onward: the rest).
 
 `R01_UNKEYED_PRE_WRITE_ROUTES` (S5-E2 ownership-transfer amendment, T4) is the registry of routes that open a
 pre-write plan with **one** declaration and no reservation: they are not idempotent, an `Idempotency-Key`
@@ -24,6 +24,7 @@ from dnd_ai.commands.campaign_lifecycle_plans import (
     REACTIVATE_DECLARATIONS,
     UPDATE_DECLARATIONS,
 )
+from dnd_ai.commands.membership_end_plans import END_DECLARATIONS
 from dnd_ai.commands.membership_role_plans import (
     ADD_DECLARATIONS,
     ASSIGN_DECLARATIONS,
@@ -60,6 +61,10 @@ R01_KEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], ReservationDeclaratio
                 "POST",
                 "/campaigns/{campaign_id}/memberships/roles/{membership_role_id}/revoke",
             ): REVOKE_ROLE_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/memberships/{campaign_membership_id}/end",
+            ): END_DECLARATIONS,
         }
     )
 )

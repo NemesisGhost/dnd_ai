@@ -8687,25 +8687,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.memberships.end_campaign_membership": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.membership_end_plans.prepare_end_membership": [],
+   "dnd_ai.commands.membership_end_plans.write_end_membership": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.memberships.end_campaign_membership": [
-    "security.access_group_memberships",
-    "security.campaign_memberships",
-    "security.character_reveal_delegations",
-    "security.character_revelation_members",
-    "security.character_revelations",
-    "security.membership_character_relationships",
-    "security.membership_roles",
-    "security.resource_grants"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.membership_end_plans.prepare_end_membership": [],
+   "dnd_ai.commands.membership_end_plans.write_end_membership": []
   },
   "commands": [
-   "dnd_ai.commands.memberships.end_campaign_membership"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.membership_end_plans.prepare_end_membership",
+   "dnd_ai.commands.membership_end_plans.write_end_membership"
   ],
   "dependencies": [
    {
@@ -8727,7 +8724,6 @@
   "path": "/campaigns/{campaign_id}/memberships/{campaign_membership_id}/end",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",

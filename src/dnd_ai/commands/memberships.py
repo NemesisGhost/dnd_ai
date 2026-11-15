@@ -340,6 +340,22 @@ class OwnershipTransferRecipientChangedError(SafeMessageError):
     )
 
 
+class MembershipEndedStateChangedError(SafeMessageError):
+    """Raised by the pre-write end route (`membership_end_plans`, R01 S5-E3) when a role assignment or a reveal
+    delegation of the member being removed appeared while the request waited for the member's membership row **and**
+    is held by another transaction, so it cannot be locked without waiting. The role and delegation rows are locked
+    **before** the membership (the approved lock-class order); a row created in that window is locked afterwards
+    `FOR UPDATE NOWAIT` (it never waits, so it never closes a cycle) and only a row someone else holds is refused.
+    Nothing is written; a retry locks the row in the early pass and closes it. 409."""
+
+    safe_status_code = 409
+    safe_error_code = "membership_end_state_changed"
+    safe_message = (
+        "The member's access changed while the removal was in progress. "
+        "Nothing was changed; try again."
+    )
+
+
 class OwnershipTransferRecipientAssignmentExpiresError(SafeMessageError):
     """Raised by a relinquishing `transfer_campaign_ownership` when the recipient's live owner
     assignment has an `expires_at` (DEF-011, owner-approved policy option b, 2026-11-06). Handing

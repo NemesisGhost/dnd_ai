@@ -91,9 +91,11 @@ ROLE_CATALOGUE = (
     r"^SELECT security\.roles\.role_id FROM security\.roles WHERE security\.roles\.role_id = \S+ "
     r"OR security\.roles\.role_id = \S+ ORDER BY security\.roles\.role_id FOR UPDATE$"
 )
-END_ACTOR_KEY_SHARE = (
-    r"FROM security\.campaign_memberships WHERE campaign_membership_id = \S+ FOR KEY SHARE$"
-)
+#: Where the end route is parked in the races that need it to hold its role rows, delegation and memberships and not
+#: yet its campaign. Before S5-E3 this was the legacy command's actor `FOR KEY SHARE` statement; the pre-write end
+#: route (plan 6.30) has none, and its account statement is the statement taken after the membership class and
+#: before the campaign, the same position.
+END_ACTOR_KEY_SHARE = ACTOR_ACCOUNT
 
 
 def tag(side: str, suffix: str) -> uuid.UUID:

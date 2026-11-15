@@ -82,7 +82,10 @@ DRAFT_INSERT = r"INSERT INTO campaign\.character_public_profiles"
 DRAFT_UPDATE = r"UPDATE campaign\.character_public_profiles SET"
 RELEASE_INSERT = r"INSERT INTO campaign\.character_public_profile_releases"
 ROLE_REVOKE = r"UPDATE security\.membership_roles SET revoked_at"
-CAMPAIGN_LOCK = r"FROM campaign\.campaigns WHERE campaign_id = .* FOR UPDATE"
+# the end route (S5-E3) takes it as a Core `select` (`campaign.campaigns.campaign_id = ...`); the legacy commands as text
+CAMPAIGN_LOCK = (
+    r"FROM campaign\.campaigns WHERE (campaign\.campaigns\.)?campaign_id = .* FOR UPDATE"
+)
 GRANT_CAMPAIGN_LOCK = r"SELECT ls\.code FROM campaign\.campaigns c .* FOR UPDATE OF c"
 GRANT_INSERT = r"INSERT INTO security\.resource_grants"
 ENTITY_UPDATE = r"UPDATE core\.entities"

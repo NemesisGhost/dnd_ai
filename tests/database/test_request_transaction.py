@@ -29,7 +29,6 @@ from sqlalchemy import Connection, Engine, create_engine, event, text
 from sqlalchemy.exc import OperationalError
 
 import dnd_ai.api.deps as deps
-import dnd_ai.api.memberships as memberships_api
 from dnd_ai.api.app import create_app
 from dnd_ai.api.auth import get_authenticated_user_id
 from dnd_ai.api.deps import get_connection, get_engine
@@ -51,6 +50,7 @@ from tests.database.test_idempotency_key_lock import (
     _role_active,
     _urls,
 )
+from tests.end_audit_failure import fail_end_audit
 from tests.factories import make_user, oidc_principal
 
 pytestmark = pytest.mark.database
@@ -305,16 +305,14 @@ def test_a_handler_failure_rolls_back_and_the_key_then_works_on_another_target(
 ) -> None:
     key = _fresh_key("r1")
     urls = _urls(g)
-    real = memberships_api.record_change_log
     calls = {"n": 0}
 
-    def fail_once(*args: Any, **kwargs: Any) -> Any:
+    def fail_once() -> None:
         calls["n"] += 1
         if calls["n"] == 1:
             raise ValueError("deliberate failure after the reservation")
-        return real(*args, **kwargs)
 
-    monkeypatch.setattr(memberships_api, "record_change_log", fail_once)
+    fail_end_audit(monkeypatch, fail_once)
     correlation_id = str(uuid.uuid4())
     response, at_start = _observed_end(postgres_engine, g, urls["end_player"], key, correlation_id)
     assert response.status_code == 400
@@ -463,12 +461,10 @@ def test_a_failed_rollback_keeps_the_original_error_and_ends_the_session(
     name = small_engine.application_name  # type: ignore[attr-defined]
     pool_log = _PoolLog(small_engine)
 
-    real = memberships_api.record_change_log
-
-    def fail(*args: Any, **kwargs: Any) -> Any:
+    def fail() -> None:
         raise ValueError("deliberate failure after the reservation")
 
-    monkeypatch.setattr(memberships_api, "record_change_log", fail)
+    fail_end_audit(monkeypatch, fail)
 
     def broken_rollback(connection: Connection) -> None:
         raise OperationalError("ROLLBACK", {"secret": "do-not-log"}, Exception("secret detail"))
@@ -501,7 +497,6 @@ def test_a_failed_rollback_keeps_the_original_error_and_ends_the_session(
     messages = [r.getMessage() for r in caplog.records if r.name == "dnd_ai.api.deps"]
     assert messages == ["request transaction rollback failed: OperationalError"]
     assert "secret" not in "".join(messages)
-    assert real is not fail  # (the unpatched command stays reachable for later tests)
 
 
 # --- T6: a serialization failure rolls back -----------------------------------------------------
@@ -588,16 +583,16 @@ def test_a_request_cannot_open_a_second_request_connection(
 # --- T9: DEF-019, a different-key commit-time deadlock, observed (not fixed by P3) ----------------
 
 
-def test_def019_two_keyed_ends_by_one_owner_deadlock_and_the_loser_persists_nothing(
+def test_def019_two_keyed_ends_by_one_owner_no_longer_deadlock_and_both_commit(
     postgres_engine: Engine, g: Gate
 ) -> None:
     """Two keyed ends by the same owner with different keys, on the player's and O2's memberships.
-    The first is held at the player's membership row; the second waits behind it; releasing the hold
-    makes them deadlock (each holds the campaign `KEY SHARE` from its reservation and wants the
-    campaign `FOR UPDATE`). Exactly one request succeeds. The other is a non-2xx with no end, no
-    audit row and no receipt. Before A3a the second waited at COMMIT for the retention trigger's
-    campaign lock; `end_campaign_membership` now takes that lock itself, earlier, so the wait and
-    the deadlock moved into the command and the outcome is the same. This test changes with DEF-019."""
+    The first is held at the player's membership row; the second waits behind it; releasing the hold lets
+    them run. Before S5-E3 each held the campaign `KEY SHARE` from its reservation and wanted the campaign
+    `FOR UPDATE`, so exactly one survived (the DEF-019 commit-time deadlock this test used to pin). The end
+    is a pre-write plan now: the reservation's campaign foreign key is deferred, the plan takes the campaign
+    `FOR UPDATE` itself before `finalize`, and the two ends serialize: both commit, no deadlock, one audit
+    row and one receipt each. DEF-019 itself stays open for the routes not yet migrated."""
     urls = _urls(g)
     keys = (_fresh_key("def19-one"), _fresh_key("def19-two"))
     correlations = (str(uuid.uuid4()), str(uuid.uuid4()))
@@ -624,13 +619,13 @@ def test_def019_two_keyed_ends_by_one_owner_deadlock_and_the_loser_persists_noth
         time.sleep(0.02)
     threads.append(threading.Thread(target=run, args=(1, urls["end_o2"]), daemon=True))
     threads[1].start()
+    # The second end (O2's membership) needs nothing the first holds: the first waits at the player's role rows,
+    # holding only the reservation, and the campaign is taken only after the member's rows. It finishes first.
     deadline = time.monotonic() + _WAIT_SECONDS
-    while time.monotonic() < deadline and _lock_waiters(postgres_engine) < 2:
-        assert 1 not in results, getattr(results.get(1), "text", errors)
+    while time.monotonic() < deadline and 1 not in results:
+        assert not errors, errors
         time.sleep(0.02)
-    # The first waits on the hold; the second waits on the first (since A3a at the end command's
-    # explicit campaign lock, where it used to wait at COMMIT).
-    assert _lock_waiters(postgres_engine) >= 2, "the second request never waited on the first"
+    assert 1 in results and 0 not in results, "the second end ran past the blocked first"
     hold.release()
     for thread in threads:
         thread.join(timeout=_WAIT_SECONDS)
@@ -638,21 +633,14 @@ def test_def019_two_keyed_ends_by_one_owner_deadlock_and_the_loser_persists_noth
     assert not errors, errors
 
     statuses = [results[0].status_code, results[1].status_code]
-    assert sum(1 for s in statuses if 200 <= s < 300) == 1, statuses
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and _deadlocks(postgres_engine) < deadlocks_before + 1:
-        time.sleep(0.1)
-    assert _deadlocks(postgres_engine) == deadlocks_before + 1
-
-    memberships = (g.player, g.o2)
-    for index in (0, 1):
-        ended = not _open(postgres_engine, memberships[index])
-        audited = _audit_for(postgres_engine, correlations[index])
-        receipt = _receipts(postgres_engine, g, keys[index])
-        if 200 <= statuses[index] < 300:
-            assert ended and audited == 1 and receipt == [(200, True)]
-        else:
-            assert not ended and audited == 0 and receipt == []
+    assert statuses == [200, 200], statuses
+    assert _deadlocks(postgres_engine) == deadlocks_before, (
+        "the two ends serialized without a deadlock"
+    )
+    for index, membership in enumerate((g.player, g.o2)):
+        assert not _open(postgres_engine, membership)
+        assert _audit_for(postgres_engine, correlations[index]) == 1
+        assert _receipts(postgres_engine, g, keys[index]) == [(200, True)]
 
 
 def _lock_waiters(engine: Engine) -> int:
