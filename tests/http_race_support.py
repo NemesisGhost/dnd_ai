@@ -77,6 +77,7 @@ class StatementGate:
         *,
         hold_seconds: float | None = None,
         strict: bool = False,
+        cleanup_seconds: float | None = None,
     ) -> None:
         import re
 
@@ -92,6 +93,11 @@ class StatementGate:
         self.strict = strict
         self.expired = False
         self.released_by: str | None = None
+        # workers (`Request`s) that must have finished before the listener may be removed (`track`)
+        self.cleanup_seconds = WAIT_SECONDS if cleanup_seconds is None else cleanup_seconds
+        self._tracked: list[Any] = []
+        self.listener_retained = False
+        self.listener_removed = threading.Event()
         self._fired = False
         diagnostics.LIVE_GATES.add(self)
 
@@ -131,12 +137,53 @@ class StatementGate:
         event.listen(self.engine, "before_cursor_execute", self._hook)
         return self
 
-    def __exit__(self, *_: object) -> None:
-        # release first, so a parked request is never left stuck; then remove the listener, and never let a failed
-        # removal mask the exception that is already propagating
-        self.resume.set()
+    def track(self, request: Any) -> Any:
+        """Registers a request worker that uses this gate's listener. `__exit__` releases the gate, waits (bounded by
+        `cleanup_seconds`, in total) for every tracked worker to finish, and removes the listener only then."""
+        self._tracked.append(request)
+        return request
+
+    def _remove_listener(self) -> None:
         with contextlib.suppress(Exception):  # already removed, or the engine was disposed
             event.remove(self.engine, "before_cursor_execute", self._hook)
+        self.listener_removed.set()
+
+    def _remove_when_finished(self, unfinished: list[Any]) -> None:
+        for request in unfinished:
+            request.done.wait()  # a daemon thread: it never keeps the process alive, and ends with the worker
+        self._remove_listener()
+
+    def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> None:
+        # Release first, so a parked request is never left stuck. Then establish that every tracked worker has finished:
+        # a listener removed from under an active worker is a silent detach. If completion cannot be established inside
+        # the bounded wait, the listener is **retained** (a daemon thread removes it when the workers do) and the
+        # failure is explicit: an `AssertionError` when nothing else is propagating, a note on the exception that is
+        # (which is never replaced). A failed removal never masks the exception that is already propagating.
+        self.resume.set()
+        deadline = time.monotonic() + self.cleanup_seconds
+        unfinished: list[Any] = []
+        for request in self._tracked:
+            if not request.done.wait(max(0.0, deadline - time.monotonic())):
+                unfinished.append(request)
+        if not unfinished:
+            self._remove_listener()
+            return
+        self.listener_retained = True
+        threading.Thread(
+            target=self._remove_when_finished,
+            args=(unfinished,),
+            daemon=True,
+            name="gate-listener-removal",
+        ).start()
+        message = (
+            f"the gate's listener was RETAINED: {len(unfinished)} worker(s) had not finished after the bounded "
+            f"cleanup wait of {self.cleanup_seconds}s ({'; '.join(r.describe() for r in unfinished)}); it is removed "
+            f"when they finish. {self.describe()}"
+        )
+        if exc is not None:
+            exc.add_note(message)
+            return
+        raise AssertionError(message)
 
     def wait_reached(self) -> None:
         # The deadline report is taken here, inside the `with`, before this assertion is raised: the parked requests,

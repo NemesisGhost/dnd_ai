@@ -54,6 +54,7 @@ from tests.database.test_player_profile_provenance_restrictions import (
     release_provenance,
     source,  # noqa: F401 - fixture
 )
+from tests.database.test_r01_s2_profile_routes import idle_in_transaction
 from tests.http_race_support import (
     WAIT_SECONDS,
     StatementGate,
@@ -287,6 +288,7 @@ def test_r2_edit_first_the_release_of_the_earlier_version_is_stale_and_writes_no
                     {"expected_row_version": version, "public_appearance": EXCERPT}, key="r2-edit-1",
                 ),
             )  # fmt: skip
+            gate.track(editing)
             gate.wait_reached()  # the edit holds the draft FOR UPDATE
             stages.append(f"edit parked at the draft UPDATE on pid {gate.pid}")
             if scheduling == "delayed":
@@ -297,6 +299,7 @@ def test_r2_edit_first_the_release_of_the_earlier_version_is_stale_and_writes_no
             releasing = run_in_thread(
                 "release", lambda: release(client_factory, g.o1_user_id, g, npc, version)
             )
+            gate.track(releasing)
             stages.append("release request started")
             wait_until_blocked(postgres_engine, gate)
             assert gate.pid is not None
@@ -309,12 +312,9 @@ def test_r2_edit_first_the_release_of_the_earlier_version_is_stale_and_writes_no
         except BaseException as exc:
             # before cleanup changes anything: capture, then release and join both workers (bounded)
             note = _capture(postgres_engine, g, npc, gate, (editing, releasing), stages)
-            gate.release()
-            for worker in (editing, releasing):
-                if worker is not None:
-                    worker.done.wait(WAIT_SECONDS)
             exc.add_note(note)
-            raise
+            gate.release()
+            raise  # the gate's __exit__ now waits (bounded) for the tracked workers and keeps the listener if one is active
         edited, released = editing.wait("edit"), releasing.wait("release")
         assert (
             editing.done.is_set() and releasing.done.is_set()
@@ -385,3 +385,145 @@ def test_r2_release_first_covers_only_the_earlier_text_and_the_edit_restricts_ag
     assert restricted["draft"]["public_appearance"] is None and restricted["can_release"] is False
     assert EXCERPT not in str(restricted)
     assert body(read(client_factory, g.o2_user_id, g, npc))["draft"]["public_appearance"] == EXCERPT
+
+
+class _ControlledWorker:
+    """A stand-in worker whose completion the test controls with an event (no sleeps)."""
+
+    def __init__(self) -> None:
+        self.name = "controlled"
+        self.done = threading.Event()
+
+    def describe(self) -> str:
+        return f"controlled: {'finished' if self.done.is_set() else 'still running'}"
+
+
+def _park_edit_and_block_release(
+    client_factory: Factory, postgres_engine: Engine, g: Gate, m: Members, npc: uuid.UUID, version: int,
+    gate: StatementGate,
+) -> tuple[Any, Any]:  # fmt: skip
+    editing = run_in_thread(
+        "edit",
+        lambda: save(
+            client_factory, m.gm_user_id, g, npc,
+            {"expected_row_version": version, "public_appearance": EXCERPT}, key="r2-cleanup-1",
+        ),
+    )  # fmt: skip
+    gate.track(editing)
+    gate.wait_reached()
+    releasing = run_in_thread(
+        "release", lambda: release(client_factory, g.o1_user_id, g, npc, version)
+    )
+    gate.track(releasing)
+    wait_until_blocked(postgres_engine, gate)
+    return editing, releasing
+
+
+def test_a_failure_after_the_block_is_established_finishes_both_workers_before_the_listener_is_removed(
+    client_factory: Factory, postgres_engine: Engine, g: Gate, m: Members, npc: uuid.UUID,
+    source: dict[str, str],
+) -> None:  # fmt: skip
+    """*cleanup path*: the test body fails while the edit is parked and the release is blocked behind it. The original
+    failure is the one that propagates; the gate is released, **both workers finish** (edit 200, release 409, no leaked
+    transaction, no checked-out connection) and only then is the listener removed."""
+    from sqlalchemy import event
+
+    version = _released_pp_copy_with_a_later_authored_edit(
+        client_factory, postgres_engine, g, m, npc
+    )
+    seen: dict[str, Any] = {}
+
+    class Injected(RuntimeError):
+        pass
+
+    with (
+        pytest.raises(Injected) as raised,
+        StatementGate(
+            postgres_engine, DRAFT_UPDATE, hold_seconds=EDIT_HOLD_SECONDS, strict=True
+        ) as gate,
+    ):
+        seen["gate"] = gate
+        try:
+            editing, releasing = _park_edit_and_block_release(
+                client_factory, postgres_engine, g, m, npc, version, gate
+            )
+            seen["workers"] = (editing, releasing)
+            raise Injected("the test's own failure while the block is established")
+        except BaseException as exc:
+            exc.add_note("diagnostics captured here, before cleanup")
+            gate.release()
+            raise
+    assert "diagnostics captured here, before cleanup" in raised.value.__notes__
+    editing, releasing = seen["workers"]
+    gate = seen["gate"]
+    assert editing.done.is_set() and releasing.done.is_set(), (
+        "both workers finished before the listener went"
+    )
+    assert (code(editing.result), code(releasing.result)) == (200, 409)
+    assert not gate.listener_retained and gate.listener_removed.is_set()
+    assert not event.contains(postgres_engine, "before_cursor_execute", gate._hook)
+    assert idle_in_transaction(postgres_engine) == 0
+    assert postgres_engine.pool.checkedout() == 0  # type: ignore[attr-defined]
+
+
+def test_a_worker_still_active_after_the_cleanup_wait_keeps_the_listener_until_it_finishes(
+    client_factory: Factory, postgres_engine: Engine, g: Gate, m: Members, npc: uuid.UUID,
+    source: dict[str, str],
+) -> None:  # fmt: skip
+    """*cleanup path, controlled*: the real workers finish, but a third tracked worker is held unfinished by an event
+    beyond the (short) cleanup wait. The unfinished state is detected and explicit, the original failure still
+    propagates, the listener **stays installed**, and it is removed only after the worker is let go. A genuine cleanup
+    failure (no other exception in flight) is an `AssertionError`, not a silent pass."""
+    from sqlalchemy import event
+
+    version = _released_pp_copy_with_a_later_authored_edit(
+        client_factory, postgres_engine, g, m, npc
+    )
+    stuck = _ControlledWorker()
+    seen: dict[str, Any] = {}
+
+    with (
+        pytest.raises(RuntimeError, match="the test's own failure") as raised,
+        StatementGate(
+            postgres_engine,
+            DRAFT_UPDATE,
+            hold_seconds=EDIT_HOLD_SECONDS,
+            strict=True,
+            cleanup_seconds=3.0,
+        ) as gate,
+    ):
+        seen["gate"] = gate
+        gate.track(stuck)
+        try:
+            _park_edit_and_block_release(client_factory, postgres_engine, g, m, npc, version, gate)
+            raise RuntimeError("the test's own failure")
+        except BaseException:
+            gate.release()
+            raise
+    gate = seen["gate"]
+    assert gate.listener_retained and not gate.listener_removed.is_set()
+    assert any(
+        "RETAINED" in note and "controlled: still running" in note
+        for note in raised.value.__notes__
+    )
+    assert event.contains(postgres_engine, "before_cursor_execute", gate._hook), (
+        "installed while a worker is active"
+    )
+    stuck.done.set()  # the worker finishes: removal is now permitted
+    assert gate.listener_removed.wait(WAIT_SECONDS)
+    assert not event.contains(postgres_engine, "before_cursor_execute", gate._hook)
+    assert idle_in_transaction(postgres_engine) == 0
+    assert postgres_engine.pool.checkedout() == 0  # type: ignore[attr-defined]
+
+    # no other failure in flight: the unfinished worker is itself the failure
+    stuck_again = _ControlledWorker()
+    with (
+        pytest.raises(AssertionError, match="RETAINED"),
+        StatementGate(postgres_engine, DRAFT_UPDATE, cleanup_seconds=0.2) as later,
+    ):
+        later.track(stuck_again)
+    assert later.listener_retained and event.contains(
+        postgres_engine, "before_cursor_execute", later._hook
+    )
+    stuck_again.done.set()
+    assert later.listener_removed.wait(WAIT_SECONDS)
