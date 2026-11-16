@@ -6,7 +6,7 @@ outcome (`ReservationDeclarations`). Every lock of the request is taken before `
 is a declared `plan.execute` step after it, and the reservation's campaign foreign key is deferred.
 
 The set grows only with a reviewed slice (S5-D: the two invitation routes; S5-E1: the three campaign
-lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4: resource grants and character relationships; S5-E5 onward: the rest).
+lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4: resource grants and character relationships; S5-E5: the six access-group routes; S5-E6 onward: the rest).
 
 `R01_UNKEYED_PRE_WRITE_ROUTES` (S5-E2 ownership-transfer amendment, T4) is the registry of routes that open a
 pre-write plan with **one** declaration and no reservation: they are not idempotent, an `Idempotency-Key`
@@ -24,6 +24,24 @@ from dnd_ai.commands.access_grant_plans import (
     GRANT_RELATIONSHIP_DECLARATIONS,
     REVOKE_GRANT_DECLARATIONS,
     REVOKE_RELATIONSHIP_DECLARATIONS,
+)
+from dnd_ai.commands.access_group_plans import (
+    ADD_DECLARATIONS as ADD_GROUP_MEMBER_DECLARATIONS,
+)
+from dnd_ai.commands.access_group_plans import (
+    CREATE_DECLARATIONS as CREATE_GROUP_DECLARATIONS,
+)
+from dnd_ai.commands.access_group_plans import (
+    DEACTIVATE_DECLARATIONS as DEACTIVATE_GROUP_DECLARATIONS,
+)
+from dnd_ai.commands.access_group_plans import (
+    REACTIVATE_DECLARATIONS as REACTIVATE_GROUP_DECLARATIONS,
+)
+from dnd_ai.commands.access_group_plans import (
+    REMOVE_DECLARATIONS as REMOVE_GROUP_MEMBER_DECLARATIONS,
+)
+from dnd_ai.commands.access_group_plans import (
+    UPDATE_DECLARATIONS as UPDATE_GROUP_DECLARATIONS,
 )
 from dnd_ai.commands.campaign_invitation_plans import CREATE_DECLARATIONS, REVOKE_DECLARATIONS
 from dnd_ai.commands.campaign_lifecycle_plans import (
@@ -89,6 +107,27 @@ R01_KEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], ReservationDeclaratio
                 "POST",
                 "/campaigns/{campaign_id}/resource-grants/{resource_grant_id}/revoke",
             ): REVOKE_GRANT_DECLARATIONS,
+            ("POST", "/campaigns/{campaign_id}/access-groups"): CREATE_GROUP_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/access-groups/{access_group_id}/update",
+            ): UPDATE_GROUP_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/access-groups/{access_group_id}/deactivate",
+            ): DEACTIVATE_GROUP_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/access-groups/{access_group_id}/reactivate",
+            ): REACTIVATE_GROUP_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/access-groups/{access_group_id}/members",
+            ): ADD_GROUP_MEMBER_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/access-group-memberships/{access_group_membership_id}/remove",
+            ): REMOVE_GROUP_MEMBER_DECLARATIONS,
         }
     )
 )

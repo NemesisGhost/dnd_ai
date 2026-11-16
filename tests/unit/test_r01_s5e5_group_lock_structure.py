@@ -19,19 +19,21 @@ from dnd_ai.commands import access_grant_plans as plans
 pytestmark = pytest.mark.unit
 
 SRC = Path(plans.__file__).resolve().parents[1]
-#: Modules with a statement that locks an `access_groups` row, as of the S5-E5 correction. `access_group_plans.py` (S5-E5's routes)
-#: joins this set with that slice and must keep the order.
+#: Modules with a statement that locks an `access_groups` row, as of S5-E5. `access_group_plans.py` (the six migrated routes)
+#: joined this set with that slice and keeps the order (`tests/unit/test_r01_s5e5_route_shape.py`).
 GROUP_LOCKERS = {
+    "commands/access_group_plans.py",  # the six S5-E5 routes: role rows, then the group (AO-1)
     "commands/access_grant_plans.py",  # the S5-E4 group-grantee grant (corrected: role rows, then the group)
     "commands/access_grants.py",  # the legacy `create_resource_grant` command (no route)
-    "commands/access_groups.py",  # the six legacy group commands (routes migrate in S5-E5)
+    "commands/access_groups.py",  # the six legacy group commands (no route calls them since S5-E5)
     "commands/character_revelations.py",  # revelation creation: authority role rows, then the group `FOR KEY SHARE`
 }
 _SQL_LOCK = re.compile(
     r"(?:FROM|JOIN)\s+security\.access_groups\b[^;]{0,600}?FOR\s+(?:KEY\s+SHARE|NO\s+KEY\s+UPDATE|UPDATE|SHARE)",
     re.DOTALL,
 )
-_CORE_LOCK = re.compile(r"select\(access_groups\.c.{0,500}?with_for_update", re.DOTALL)
+#: `access_group_plans.py` aliases the table as `ag`
+_CORE_LOCK = re.compile(r"select\((?:access_groups|ag)\.c.{0,500}?with_for_update", re.DOTALL)
 
 
 def test_the_group_grantee_branch_takes_the_actor_role_rows_before_the_group_row() -> None:

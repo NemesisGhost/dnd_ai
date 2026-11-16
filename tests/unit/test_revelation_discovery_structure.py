@@ -20,6 +20,7 @@ REVELATION_TABLES = re.compile(r"security\.character_revelation(s|_members)\b")
 # roster -- reaches them only through `AccessContext.revelations`
 # or the resolver's exported SQL.
 REVELATION_TABLE_MODULES = {
+    "commands/access_group_plans.py",  # S5-E5: the deactivation's declared close of a group's live revelations
     "commands/access_groups.py",
     "commands/character_revelations.py",
     "commands/memberships.py",

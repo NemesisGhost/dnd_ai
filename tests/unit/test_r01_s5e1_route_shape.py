@@ -38,6 +38,7 @@ from tests.r01_manifest import (
     _S5E2_ROUTES,
     _S5E3_ROUTES,
     _S5E4_ROUTES,
+    _S5E5_ROUTES,
     _iter_api_routes,
 )
 
@@ -121,7 +122,12 @@ def test_the_world_routes_and_the_other_access_management_routes_are_untouched()
     }
     assert set(R01_PENDING_ROUTES) >= world
     assert (
-        set(R01_KEYED_PRE_WRITE_ROUTES) - _S5E1_ROUTES - _S5E2_ROUTES - _S5E3_ROUTES - _S5E4_ROUTES
+        set(R01_KEYED_PRE_WRITE_ROUTES)
+        - _S5E1_ROUTES
+        - _S5E2_ROUTES
+        - _S5E3_ROUTES
+        - _S5E4_ROUTES
+        - _S5E5_ROUTES
     ) == {
         ("POST", CAMPAIGN + "/invitations"),
         ("POST", CAMPAIGN + "/invitations/{campaign_invitation_id}/revoke"),

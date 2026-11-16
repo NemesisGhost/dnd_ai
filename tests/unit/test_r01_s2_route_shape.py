@@ -41,6 +41,7 @@ from tests.r01_manifest import (
     _S5E2_TRANSFER_ROUTES,
     _S5E3_ROUTES,
     _S5E4_ROUTES,
+    _S5E5_ROUTES,
     _iter_api_routes,
 )
 
@@ -60,6 +61,7 @@ S2_ROUTES = (
     - _S5E2_TRANSFER_ROUTES
     - _S5E3_ROUTES
     - _S5E4_ROUTES
+    - _S5E5_ROUTES
 )
 
 DB_CALLS = {

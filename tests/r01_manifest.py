@@ -622,6 +622,22 @@ _S5E4_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: S5-E5 migrates the six access-group routes, keyed-optional pre-write plans
+#: (`dnd_ai.commands.access_group_plans`).
+_S5E5_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/access-groups"),
+        ("POST", _CAMPAIGN + "/access-groups/{access_group_id}/update"),
+        ("POST", _CAMPAIGN + "/access-groups/{access_group_id}/deactivate"),
+        ("POST", _CAMPAIGN + "/access-groups/{access_group_id}/reactivate"),
+        ("POST", _CAMPAIGN + "/access-groups/{access_group_id}/members"),
+        (
+            "POST",
+            _CAMPAIGN + "/access-group-memberships/{access_group_membership_id}/remove",
+        ),
+    }
+)
+
 MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     frozenset(
         {
@@ -642,6 +658,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S5E2_TRANSFER_ROUTES
     | _S5E3_ROUTES
     | _S5E4_ROUTES
+    | _S5E5_ROUTES
 )
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline

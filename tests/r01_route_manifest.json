@@ -661,18 +661,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_groups.remove_access_group_member": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_remove_member": [],
+   "dnd_ai.commands.access_group_plans.write_remove_member": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_groups.remove_access_group_member": [
-    "security.access_group_memberships"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_remove_member": [],
+   "dnd_ai.commands.access_group_plans.write_remove_member": []
   },
   "commands": [
-   "dnd_ai.commands.access_groups.remove_access_group_member"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_group_plans.prepare_remove_member",
+   "dnd_ai.commands.access_group_plans.write_remove_member"
   ],
   "dependencies": [
    {
@@ -694,7 +698,6 @@
   "path": "/campaigns/{campaign_id}/access-group-memberships/{access_group_membership_id}/remove",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -703,18 +706,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_groups.create_access_group": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_create_group": [],
+   "dnd_ai.commands.access_group_plans.write_create_group": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_groups.create_access_group": [
-    "security.access_groups"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_create_group": [],
+   "dnd_ai.commands.access_group_plans.write_create_group": []
   },
   "commands": [
-   "dnd_ai.commands.access_groups.create_access_group"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_group_plans.prepare_create_group",
+   "dnd_ai.commands.access_group_plans.write_create_group"
   ],
   "dependencies": [
    {
@@ -736,7 +743,6 @@
   "path": "/campaigns/{campaign_id}/access-groups",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -745,21 +751,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_groups.deactivate_access_group": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_deactivate_group": [],
+   "dnd_ai.commands.access_group_plans.write_deactivate_group": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_groups.deactivate_access_group": [
-    "security.access_group_memberships",
-    "security.access_groups",
-    "security.character_revelations",
-    "security.resource_grants"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_deactivate_group": [],
+   "dnd_ai.commands.access_group_plans.write_deactivate_group": []
   },
   "commands": [
-   "dnd_ai.commands.access_groups.deactivate_access_group"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_group_plans.prepare_deactivate_group",
+   "dnd_ai.commands.access_group_plans.write_deactivate_group"
   ],
   "dependencies": [
    {
@@ -781,7 +788,6 @@
   "path": "/campaigns/{campaign_id}/access-groups/{access_group_id}/deactivate",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -790,18 +796,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_groups.add_access_group_members": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_add_members": [],
+   "dnd_ai.commands.access_group_plans.write_add_members": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_groups.add_access_group_members": [
-    "security.access_group_memberships"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_add_members": [],
+   "dnd_ai.commands.access_group_plans.write_add_members": []
   },
   "commands": [
-   "dnd_ai.commands.access_groups.add_access_group_members"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_group_plans.prepare_add_members",
+   "dnd_ai.commands.access_group_plans.write_add_members"
   ],
   "dependencies": [
    {
@@ -823,7 +833,6 @@
   "path": "/campaigns/{campaign_id}/access-groups/{access_group_id}/members",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -832,60 +841,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_groups.add_access_group_members": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_reactivate_group": [],
+   "dnd_ai.commands.access_group_plans.write_reactivate_group": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_groups.add_access_group_members": [
-    "security.access_group_memberships"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_reactivate_group": [],
+   "dnd_ai.commands.access_group_plans.write_reactivate_group": []
   },
   "commands": [
-   "dnd_ai.commands.access_groups.add_access_group_members"
-  ],
-  "dependencies": [
-   {
-    "allow_archived_campaign": false,
-    "allow_foundry_access": false,
-    "capability": "access.manage",
-    "foundry_scope": null,
-    "kind": "campaign_capability",
-    "world_capability": null
-   }
-  ],
-  "early_commit": false,
-  "family": "access_management",
-  "handler": "dnd_ai.api.access_groups.add_access_group_member_endpoint",
-  "idempotency": [
-   "idempotency:campaign"
-  ],
-  "method": "POST",
-  "path": "/campaigns/{campaign_id}/access-groups/{access_group_id}/members",
-  "precheck_markers": [],
-  "route_markers": [
-   "audit:change_log",
-   "idempotency:campaign",
-   "reader:access_context",
-   "reader:world_authority",
-   "reader:world_capability"
-  ],
-  "unresolved": []
- },
- {
-  "audit": true,
-  "command_markers": {
-   "dnd_ai.commands.access_groups.reactivate_access_group": []
-  },
-  "command_scope_markers": [],
-  "command_writes": {
-   "dnd_ai.commands.access_groups.reactivate_access_group": [
-    "security.access_groups"
-   ]
-  },
-  "commands": [
-   "dnd_ai.commands.access_groups.reactivate_access_group"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_group_plans.prepare_reactivate_group",
+   "dnd_ai.commands.access_group_plans.write_reactivate_group"
   ],
   "dependencies": [
    {
@@ -907,7 +878,6 @@
   "path": "/campaigns/{campaign_id}/access-groups/{access_group_id}/reactivate",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -916,18 +886,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_groups.update_access_group": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_update_group": [],
+   "dnd_ai.commands.access_group_plans.write_update_group": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_groups.update_access_group": [
-    "security.access_groups"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_group_plans.prepare_update_group": [],
+   "dnd_ai.commands.access_group_plans.write_update_group": []
   },
   "commands": [
-   "dnd_ai.commands.access_groups.update_access_group"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_group_plans.prepare_update_group",
+   "dnd_ai.commands.access_group_plans.write_update_group"
   ],
   "dependencies": [
    {
@@ -949,7 +923,6 @@
   "path": "/campaigns/{campaign_id}/access-groups/{access_group_id}/update",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",

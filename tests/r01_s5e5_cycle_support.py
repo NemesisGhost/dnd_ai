@@ -14,6 +14,7 @@ an independent connection. Every failure is reported with its SQLSTATE; the dead
 import re
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -260,9 +261,11 @@ def run_cycle_schedule(
     gate_pattern: str | None = None,
     park_after: str | None = None,
     v_blockers_within: set[str],
+    x_call: Callable[[Any, Pool, Scene], Any] | None = None,
 ) -> Result:
     """X parked (`gate_pattern`) -> C started, observed waiting at the group on **X's** pid -> V started, observed waiting at
-    its ordered role statement -> NOWAIT probes of both X's and C's role rows -> X released.
+    its ordered role statement -> NOWAIT probes of both X's and C's role rows -> X released. `x_call` replaces X's request (the
+    S5-E5 group routes, T-5; the default is the S5-E4 group-grantee grant).
 
     `v_blockers_within` names which of `"x"`, `"c"` V may be waiting on (the corrected tree: whichever of the two holds the
     row V reaches first; at HEAD: C only)."""
@@ -275,7 +278,7 @@ def run_cycle_schedule(
         else NthGate(pool.engine, gate_pattern or "")
     )
     with gate_ctx as gate:
-        x = run_in_thread("x", lambda: x_request(w, pool, sc))
+        x = run_in_thread("x", lambda: (x_call or x_request)(w, pool, sc))
         assert gate.reached.wait(WAIT_SECONDS), "SETUP: X never reached its gate"
         assert gate.pid is not None
         x_pid = gate.pid
