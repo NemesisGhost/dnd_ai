@@ -17,6 +17,7 @@ R2  a permitted GM's edit of a released player-profile field, against a restrict
     the earlier draft version.
 """
 
+import threading
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -53,7 +54,14 @@ from tests.database.test_player_profile_provenance_restrictions import (
     release_provenance,
     source,  # noqa: F401 - fixture
 )
-from tests.http_race_support import StatementGate, run_in_thread, wait_until_blocked
+from tests.http_race_support import (
+    WAIT_SECONDS,
+    StatementGate,
+    activity_report,
+    run_in_thread,
+    sessions_blocked_by,
+    wait_until_blocked,
+)
 
 pytestmark = pytest.mark.database
 
@@ -192,38 +200,138 @@ def _released_pp_copy_with_a_later_authored_edit(
     return 2
 
 
+#: The edit's gate must outlive the blocking wait it supports: `wait_until_blocked` may take up to `WAIT_SECONDS` (15 s)
+#: after the release request has started, and the release request starts only after the edit has reached its gate. The
+#: hold is therefore that wait plus a stated margin for the release request's own start (thread, client, routing); it is
+#: **strict**, so a hold that still runs out fails the parked edit visibly instead of releasing it silently.
+EDIT_HOLD_SECONDS = WAIT_SECONDS + 20.0
+
+
+def _database_clock(engine: Engine) -> Any:
+    with engine.connect() as connection:
+        return connection.execute(text("SELECT clock_timestamp()")).scalar_one()
+
+
+def _let_the_database_clock_pass(engine: Engine, seconds: float, *, stages: list[str]) -> None:
+    """Hold the test until the **database's own clock** has advanced `seconds` since the call (polled, not a sleep of
+    the test's choosing): the deliberate scheduling delay at the formerly vulnerable boundary."""
+    start = _database_clock(engine)
+    stages.append(f"delay begins at database time {start.isoformat()}")
+    tick = threading.Event()
+    while not tick.wait(0.1):
+        now = _database_clock(engine)
+        if (now - start).total_seconds() >= seconds:
+            stages.append(f"delay ends at database time {now.isoformat()}")
+            return
+
+
+def _capture(
+    engine: Engine,
+    g: Gate,
+    npc: uuid.UUID,
+    gate: StatementGate,
+    requests: tuple[Any, ...],
+    stages: list[str],
+) -> str:
+    """Everything a failed setup needs, taken **before** cleanup changes it: stages, request outcomes, the gate, the
+    backends and the pool, and the durable records."""
+    parts = ["STAGES: " + " | ".join(stages), f"GATE: {gate.describe()}"]
+    parts += [f"REQUEST: {r.describe()}" for r in requests if r is not None]
+    parts.append(activity_report(engine))
+    parts.append(f"POOL: {engine.pool.status()}")  # type: ignore[attr-defined]
+    try:
+        parts.append(f"DRAFT: {draft_state(engine, g, npc)}")
+        parts.append(f"RELEASES: {release_rows(engine, g, npc)}")
+        parts.append(f"RECEIPTS: {_receipts(engine)}  COUNTS: {counts(engine, g)}")
+    except Exception as exc:  # noqa: BLE001 - a diagnostic never masks the failure
+        parts.append(f"durable records unavailable: {exc!r}")
+    return "\n".join(parts)
+
+
+@pytest.mark.parametrize("scheduling", ("prompt", "delayed"))
 def test_r2_edit_first_the_release_of_the_earlier_version_is_stale_and_writes_nothing(
-    client_factory: Factory, postgres_engine: Engine, g: Gate, m: Members, npc: uuid.UUID,
-    source: dict[str, str],
+    scheduling: str, client_factory: Factory, postgres_engine: Engine, g: Gate, m: Members,
+    npc: uuid.UUID, source: dict[str, str],
 ) -> None:  # fmt: skip
+    """R2, edit first. The edit is parked at its draft `UPDATE` (it holds the draft `FOR UPDATE`); the release request is
+    then started and **observed blocked behind that backend** (`pg_blocking_pids`) before anything is released.
+
+    Synchronization: the edit's gate is strict and holds `EDIT_HOLD_SECONDS`, longer than the blocking wait it supports, so
+    it cannot be released by timeout while the block is still being established (the weakness of the earlier version: a
+    15-second hold that began at the gate and a 15-second blocking wait that began later, so on a loaded machine the gate
+    released the edit at about the moment the wait expired). The wait is still bounded by `WAIT_SECONDS`; the hold by its
+    own budget. A failure captures stages, request outcomes, the gate, backends, pool and durable records before the gate
+    is released and both workers have been joined; the listener is removed only after both have finished.
+
+    `scheduling="delayed"` inserts a deliberate delay at the formerly vulnerable boundary: the release request is not
+    started until the *database clock* shows more than the old 15-second hold has passed with the edit parked. With the
+    old gate the edit would have been released silently before the release request even began."""
     version = _released_pp_copy_with_a_later_authored_edit(
         client_factory, postgres_engine, g, m, npc
     )
-    releases_before, receipts_before = (
+    releases_before, receipts_before, counts_before = (
         release_rows(postgres_engine, g, npc),
         _receipts(postgres_engine),
+        counts(postgres_engine, g),
     )
-    with StatementGate(postgres_engine, DRAFT_UPDATE) as gate:
-        editing = run_in_thread(
-            "edit",
-            lambda: save(
-                client_factory, m.gm_user_id, g, npc,
-                {"expected_row_version": version, "public_appearance": EXCERPT}, key="r2-edit-1",
-            ),
-        )  # fmt: skip
-        gate.wait_reached()  # the edit holds the draft FOR UPDATE
-        releasing = run_in_thread(
-            "release", lambda: release(client_factory, g.o1_user_id, g, npc, version)
-        )
-        wait_until_blocked(postgres_engine, gate)
-        gate.release()
+    stages: list[str] = []
+    with StatementGate(
+        postgres_engine, DRAFT_UPDATE, hold_seconds=EDIT_HOLD_SECONDS, strict=True
+    ) as gate:
+        editing = releasing = None
+        try:
+            editing = run_in_thread(
+                "edit",
+                lambda: save(
+                    client_factory, m.gm_user_id, g, npc,
+                    {"expected_row_version": version, "public_appearance": EXCERPT}, key="r2-edit-1",
+                ),
+            )  # fmt: skip
+            gate.wait_reached()  # the edit holds the draft FOR UPDATE
+            stages.append(f"edit parked at the draft UPDATE on pid {gate.pid}")
+            if scheduling == "delayed":
+                _let_the_database_clock_pass(postgres_engine, WAIT_SECONDS + 2.0, stages=stages)
+                assert not gate.expired, (
+                    f"the strict gate expired during the delay: {gate.describe()}"
+                )
+            releasing = run_in_thread(
+                "release", lambda: release(client_factory, g.o1_user_id, g, npc, version)
+            )
+            stages.append("release request started")
+            wait_until_blocked(postgres_engine, gate)
+            assert gate.pid is not None
+            blocked_behind_edit = sessions_blocked_by(postgres_engine, gate.pid)
+            stages.append(f"release observed blocked behind pid {gate.pid} ({blocked_behind_edit})")
+            assert blocked_behind_edit >= 1 and not gate.expired and gate.released_by is None, (
+                gate.describe()
+            )
+            gate.release()
+        except BaseException as exc:
+            # before cleanup changes anything: capture, then release and join both workers (bounded)
+            note = _capture(postgres_engine, g, npc, gate, (editing, releasing), stages)
+            gate.release()
+            for worker in (editing, releasing):
+                if worker is not None:
+                    worker.done.wait(WAIT_SECONDS)
+            exc.add_note(note)
+            raise
         edited, released = editing.wait("edit"), releasing.wait("release")
+        assert (
+            editing.done.is_set() and releasing.done.is_set()
+        )  # both finished before the listener is removed
+    assert gate.released_by == "test" and not gate.expired, gate.describe()
     assert code(edited) == 200 and body(edited)["row_version"] == version + 1, body(edited)
     # The restricted releaser never saw the new text: the release names a draft version that is gone.
     assert (code(released), error_code(released)) == (409, "stale_write"), released.text
     assert EXCERPT not in released.text
+    # no prohibited release write: no release row; the edit's own audit row only
     assert release_rows(postgres_engine, g, npc) == releases_before
     assert _receipts(postgres_engine) == receipts_before + 1  # the edit's receipt only
+    drafts, releases, audits, revisions = counts(postgres_engine, g)
+    assert (drafts, releases) == counts_before[:2] and audits == counts_before[2] + 1, (
+        counts_before,
+        (drafts, releases, audits, revisions),
+    )
     state = draft_state(postgres_engine, g, npc)
     assert state["row_version"] == version + 1 and state["public_appearance"] == EXCERPT
     assert (

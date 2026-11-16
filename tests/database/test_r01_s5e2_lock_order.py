@@ -1236,17 +1236,158 @@ def expiring_recipient(w: World, label: str) -> Cast:
     return cast
 
 
-def test_h_expiry_between_the_two_recipient_statements_is_a_409(w: World, pool: Pool) -> None:
+def _database_times(engine: Engine, role: uuid.UUID) -> str:
+    r = rows(
+        engine,
+        "SELECT expires_at, clock_timestamp() AS now, expires_at <= clock_timestamp() AS expired "
+        "FROM security.membership_roles WHERE membership_role_id = :r",
+        r=role,
+    )[0]
+    return f"expires_at={r['expires_at']} database_now={r['now']} expired={r['expired']}"
+
+
+def _set_recipient_expiry(engine: Engine, role: uuid.UUID, expression: str) -> None:
+    """A **setup write of the recipient's own `expires_at`** (the production predicates are untouched: the transfer still
+    compares this column with `clock_timestamp()` in its own statements). Triggers are off for the write only because the
+    role-row UPDATE would queue the deferred retention trigger's campaign lock at the test's COMMIT, which the parked
+    transfer's own campaign lock would block: a test-made deadlock that is no part of the scenario."""
+    with engine.begin() as c:
+        c.execute(text("SET LOCAL session_replication_role = replica"))
+        c.execute(
+            text(
+                f"UPDATE security.membership_roles SET expires_at = {expression} WHERE membership_role_id = :r"
+            ),  # noqa: S608
+            {"r": role},
+        )
+
+
+def _let_the_database_clock_pass(engine: Engine, seconds: float, stages: list[str]) -> None:
+    """Hold the test until the *database's* clock has advanced `seconds` (polled): a deliberate scheduling delay."""
+    import threading
+
+    def now() -> Any:
+        return rows(engine, "SELECT clock_timestamp() AS t")[0]["t"]
+
+    start = now()
+    stages.append(f"delay begins at database time {start}")
+    tick = threading.Event()
+    while not tick.wait(0.1):
+        if (now() - start).total_seconds() >= seconds:
+            stages.append(f"delay ends at database time {now()}")
+            return
+
+
+@pytest.mark.parametrize("scheduling", ("prompt", "delayed"))
+def test_h_expiry_between_the_two_recipient_statements_is_a_409(
+    scheduling: str, w: World, pool: Pool
+) -> None:
+    """The recipient's owner row is **live when the expired-owner pass evaluates it** and **expires between the two
+    recipient statements**; the transfer answers the unchanged 409 `ownership_transfer_recipient_changed` and writes
+    nothing.
+
+    The earlier version armed a 1.5-second expiry *before* the request ran, so a slow start (a loaded shard) let the row
+    expire before the first recipient statement and the request took a different, valid path (200). The sequence is now
+    established by gates and the database's own clock, not by a window:
+
+    1. the row is made live for an hour (so it is live whenever the pass runs);
+    2. the request is parked **before** the expired-owner statement (every earlier lock held) and the row is observed live
+       by the database;
+    3. the pass is released; the request is parked again **at the live-owner statement** (between the two recipient
+       statements, the pass having found the row live);
+    4. the row's `expires_at` is set to the database's `clock_timestamp()` and the test waits until the database itself
+       reports `expires_at <= clock_timestamp()`;
+    5. only then is the live-owner statement released; it evaluates the production predicate `expires_at > clock_timestamp()`
+       against the real column and the drift check refuses.
+
+    `scheduling="delayed"` inserts a deliberate delay at the formerly vulnerable boundary (between request start and the
+    first recipient statement) of more than the old 1.5-second window, timed by the database clock; the outcome is the same.
+    A failure reports the stages, the database timestamps of the row, both gates, the request and the backends, taken
+    before either gate is released."""
+    from tests.http_race_support import activity_report, run_in_thread  # noqa: PLC0415
+
     make_managers(w.engine, w.campaign_id, label="H3")
-    cast = expiring_recipient(w, "H3")
+    cast = owners(w, "H3")
+    role = cast.ids["r_a"]
+    stages: list[str] = []
+    _set_recipient_expiry(w.engine, role, "clock_timestamp() + interval '1 hour'")
+    stages.append(f"recipient row made live for an hour: {_database_times(w.engine, role)}")
     audits = transfer_audits(w.engine)
-    response = park_transfer(
-        w, pool, cast, TRANSFER_LIVE, lambda: wait_expired(w.engine, cast.ids["r_a"])
+    owner_rows_before = rows(
+        w.engine,
+        "SELECT membership_role_id, campaign_membership_id, revoked_at FROM security.membership_roles "
+        "WHERE campaign_membership_id = ANY(:ms) ORDER BY membership_role_id",
+        ms=[cast.c_m, cast.x_m],
     )
-    assert (code(response), error_of(response)) == (409, "ownership_transfer_recipient_changed")
-    assert live_roles(w.engine, [cast.x_m])["campaign_owner"] == [cast.ids["r_a"]], (
-        "nothing was written"
+    with (
+        NthGate(pool.engine, TRANSFER_EXPIRED) as before_pass,
+        NthGate(pool.engine, TRANSFER_LIVE) as between,
+    ):
+        request = run_in_thread(
+            "transfer",
+            lambda: post(
+                pool, cast.c_user, f"{w.base}/ownership-transfer", transfer_body(cast.x_m, False)
+            ),
+        )
+        try:
+            assert before_pass.reached.wait(PATIENCE), (
+                "the request never reached the expired-owner pass"
+            )
+            stages.append(
+                f"parked before the expired-owner pass; {_database_times(w.engine, role)}"
+            )
+            live_before_pass = rows(
+                w.engine,
+                "SELECT expires_at > clock_timestamp() AS live FROM security.membership_roles "
+                "WHERE membership_role_id = :r",
+                r=role,
+            )[0]["live"]
+            assert live_before_pass, "the recipient row must be live when the pass evaluates it"
+            if scheduling == "delayed":
+                _let_the_database_clock_pass(w.engine, 3.0, stages)
+            before_pass.release()
+            assert between.reached.wait(PATIENCE), (
+                "the request never reached the live-owner statement"
+            )
+            stages.append(
+                f"parked between the recipient statements; {_database_times(w.engine, role)}"
+            )
+            _set_recipient_expiry(w.engine, role, "clock_timestamp()")
+            wait_expired(w.engine, role)  # the database reports expires_at <= clock_timestamp()
+            stages.append(
+                f"expiry established before the release; {_database_times(w.engine, role)}"
+            )
+            between.release()
+        except BaseException as exc:
+            note = "\n".join(
+                [
+                    "STAGES: " + " | ".join(stages),
+                    f"ROW NOW: {_database_times(w.engine, role)}",
+                    f"GATE before pass: {before_pass.pid} reached={before_pass.reached.is_set()}",
+                    f"GATE between: {between.pid} reached={between.reached.is_set()}",
+                    f"REQUEST: {request.describe()}",
+                    activity_report(w.engine),
+                ]
+            )
+            before_pass.release()
+            between.release()
+            request.done.wait(PATIENCE)
+            exc.add_note(note)
+            raise
+        response = finish(request, "the transfer finishes")
+    assert (code(response), error_of(response)) == (409, "ownership_transfer_recipient_changed"), (
+        response.text,
+        stages,
     )
+    assert live_roles(w.engine, [cast.x_m])["campaign_owner"] == [role], "nothing was written"
+    assert (
+        rows(
+            w.engine,
+            "SELECT membership_role_id, campaign_membership_id, revoked_at FROM security.membership_roles "
+            "WHERE campaign_membership_id = ANY(:ms) ORDER BY membership_role_id",
+            ms=[cast.c_m, cast.x_m],
+        )
+        == owner_rows_before
+    ), "no owner row was closed or added"
     assert transfer_audits(w.engine) == audits
 
 

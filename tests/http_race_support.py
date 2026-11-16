@@ -56,8 +56,28 @@ def activity_report(engine: Engine) -> str:
     return "backends:\n" + ("\n".join(lines) if lines else "  (none non-idle)")
 
 
+class GateExpired(AssertionError):
+    """A strict `StatementGate` was never released inside its hold budget. Raised **in the parked request**, so it fails
+    visibly instead of proceeding as if the test had released it."""
+
+
 class StatementGate:
-    def __init__(self, engine: Engine, pattern: str) -> None:
+    """Stops the first matching statement. By default the hold is `WAIT_SECONDS` and an unreleased gate then lets the
+    request proceed (unchanged); the proceed is now *recorded* (`expired`, `released_by == "timeout"`).
+
+    `hold_seconds` sets the budget, and `strict=True` makes an expired hold fail the parked request with `GateExpired`
+    instead of letting it run on. A test whose gate must outlive a wait it is still establishing (for example, a second
+    request that must be observed blocked behind the parked one) uses both: the hold is then longer than that wait by a
+    stated margin, and a hold that nevertheless runs out is an error, never a silent release."""
+
+    def __init__(
+        self,
+        engine: Engine,
+        pattern: str,
+        *,
+        hold_seconds: float | None = None,
+        strict: bool = False,
+    ) -> None:
         import re
 
         self.engine = engine
@@ -68,6 +88,10 @@ class StatementGate:
         self.matched: str | None = None
         self.armed_at = time.monotonic()
         self.reached_at: float | None = None
+        self.hold_seconds = WAIT_SECONDS if hold_seconds is None else hold_seconds
+        self.strict = strict
+        self.expired = False
+        self.released_by: str | None = None
         self._fired = False
         diagnostics.LIVE_GATES.add(self)
 
@@ -77,7 +101,13 @@ class StatementGate:
             if self.reached_at is not None
             else f"not reached after {time.monotonic() - self.armed_at:.2f}s"
         )
-        return f"gate {self.pattern.pattern!r}: {reached}; statement={self.matched!r}"
+        held = (f"released by {self.released_by}" if self.released_by else "not released") + (
+            ", EXPIRED" if self.expired else ""
+        )
+        return (
+            f"gate {self.pattern.pattern!r}: {reached}; statement={self.matched!r}; "
+            f"hold={self.hold_seconds:.0f}s strict={self.strict}, {held}"
+        )
 
     def _hook(self, conn: Any, cursor: Any, statement: Any, *_: Any) -> None:
         if self._fired or not self.pattern.search(" ".join(str(statement).split())):
@@ -87,7 +117,15 @@ class StatementGate:
         self.matched = " ".join(str(statement).split())[:150]
         self.reached_at = time.monotonic()
         self.reached.set()
-        self.resume.wait(WAIT_SECONDS)
+        if self.resume.wait(self.hold_seconds):
+            self.released_by = "test"
+            return
+        self.expired = True
+        self.released_by = "timeout"
+        if self.strict:
+            raise GateExpired(
+                f"the gate was never released inside {self.hold_seconds}s: {self.describe()}"
+            )
 
     def __enter__(self) -> "StatementGate":
         event.listen(self.engine, "before_cursor_execute", self._hook)
@@ -141,6 +179,9 @@ def wait_until_blocked(engine: Engine, gate: StatementGate, *, expected: int = 1
     while time.monotonic() < deadline:
         if sessions_blocked_by(engine, gate.pid) >= expected:
             return
+        assert not gate.expired, (
+            f"the gate released by timeout while the block was being established: {gate.describe()}"
+        )
         time.sleep(0.02)
     raise AssertionError(
         f"expected {expected} session(s) blocked by pid {gate.pid}; "
