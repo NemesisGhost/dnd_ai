@@ -476,7 +476,75 @@ class AnyConfirmed:
             raise DeclarationError("AnyConfirmed names a step twice")
 
 
-type Cardinality = Exactly | Between | EachLockedRow | PerEvidence | PerAbsence | AnyConfirmed
+@dataclass(frozen=True, eq=False)
+class PerEvidenceRow:
+    """One INSERT per key of one declared `PreLock`'s evidence (R01 S5-E5, I-1; design 4.1). Where `PerEvidence` owes
+    zero-or-one INSERT, this owes **exactly one INSERT per evidence key**, each carrying that key through `via`.
+
+    Evidence is the keys recorded by successful `plan.lock` calls of this exact lock object, on this plan's own
+    connection and transaction, before `finalize`, merged across calls. A lock that never ran, failed, ran through
+    another plan, connection, transaction or lock object, ran after `finalize` or inside a rolled-back savepoint
+    is *missing* evidence and fails closed; a lock that ran and returned nothing is *empty* evidence, a different
+    state: nothing is owed and nothing is permitted.
+
+    Declaration: an INSERT only; `lock` is one of the declaration's locks; `via` is required (there is no
+    count-only form), is one of this step's own `FkBinding`s, and `via.lock is lock`. Admission (before the
+    driver, each refusal latches): evidence missing or empty -> `EVIDENCE`; the carried FK value is not an evidence
+    key -> `FK_NOT_LOCKED`; the value was already attempted by this step -> `DUPLICATE_TARGET`; attempts >=
+    |evidence| -> `COUNT`. At COMMIT the set of carried values attempted must equal the evidence and exactly
+    |evidence| rows must be confirmed (`INCOMPLETE` otherwise). The mechanism proves a one-to-one correspondence
+    between INSERTs and evidence rows; the handler is responsible for calling the lock once per requested id."""
+
+    lock: "PreLock"
+    via: "FkBinding"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.lock, PreLock):
+            raise DeclarationError("PerEvidenceRow needs a PreLock")
+        if not isinstance(self.via, FkBinding):
+            raise DeclarationError(
+                "PerEvidenceRow needs the FkBinding it carries the evidence key through"
+            )
+
+
+@dataclass(frozen=True, eq=False)
+class PerConfirmedRow:
+    """One INSERT per row an earlier `PerEvidenceRow` step *confirmed*, identity-bound (R01 S5-E5, I-2; design 4.2).
+    The audit row of each inserted link names that link: the value of `bind` must be a key `step` confirmed.
+
+    Declaration: an INSERT only; `step` is a different, strictly earlier step of the same declaration, is a
+    `PerEvidenceRow` INSERT (never the receipt and never another `PerConfirmedRow`), and its table has a
+    single-column UUID primary key; `bind` is one of this step's own **value** binds (not a target or FK bind) on a
+    column of the same kind. Admission: the source lock's evidence missing, or the bound value (as a 1-tuple) not
+    among the keys `step` confirmed -> `EVIDENCE` (the wrong-identity refusal); the value already used by this step
+    -> `DUPLICATE_TARGET`; attempts >= the number of keys `step` confirmed -> `COUNT`. Skippable exactly when `step` is.
+    Complete when the set of values used equals the set of keys `step` confirmed and the confirmed counts are equal.
+    It guarantees audit *identity*; the content of a JSON payload stays route-tested."""
+
+    step: "WriteStep"
+    bind: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.step, WriteStep):
+            raise DeclarationError(
+                "PerConfirmedRow needs the WriteStep whose confirmed rows it follows"
+            )
+        if type(self.bind) is not str or not self.bind:
+            raise DeclarationError(
+                "PerConfirmedRow needs the name of one of the step's value binds"
+            )
+
+
+type Cardinality = (
+    Exactly
+    | Between
+    | EachLockedRow
+    | PerEvidence
+    | PerAbsence
+    | AnyConfirmed
+    | PerEvidenceRow
+    | PerConfirmedRow
+)
 
 
 class RowExpectation(enum.Enum):
@@ -621,10 +689,66 @@ def _check_bind(bind: elements.BindParameter[Any]) -> None:
         raise DeclarationError("an embedded literal of an unsupported type")
 
 
-def _walk_value(
-    expr: object, column: Column[Any], collected: _Collected, *, what: str, key: bool
+def _fk_column_set(table: Table) -> set[Column[Any]]:
+    return {column for constraint in table.foreign_key_constraints for column in constraint.columns}
+
+
+def _check_greatest(
+    expr: functions.Function[Any],
+    column: Column[Any],
+    collected: _Collected,
+    update_table: Table,
+    *,
+    what: str,
 ) -> None:
-    """Accept a `<value>`: a bind, a literal, NULL/TRUE/FALSE or a `pg_catalog` time function."""
+    """I-3 (R01 S5-E5; design 4.3): the one `GREATEST` form, `func.greatest(<time function>, <column>)`, as the value
+    of a timestamptz column an UPDATE sets. Two arguments, in that order: a zero-argument `pg_catalog` time function,
+    then a NOT NULL, non-key, non-FK timestamptz column of **the table being updated**, different from the column
+    being set. Nothing else: no literal, bind, nested expression or other table. `GREATEST` is SQL grammar, so it
+    renders unqualified; the time function inside it stays `pg_catalog`-qualified. The argument column joins the
+    compared columns, so the live catalogue verifies that it really is timestamptz."""
+    arguments = list(expr.clauses)
+    if len(arguments) != 2:
+        raise DeclarationError(f"{what}: greatest() takes exactly two arguments")
+    first, second = arguments
+    if not _is_time_function(first):
+        raise DeclarationError(
+            f"{what}: greatest()'s first argument must be a pg_catalog time function"
+        )
+    if (
+        not isinstance(second, Column)
+        or second.table is not update_table
+        or update_table.c.get(second.key) is not second
+    ):
+        raise DeclarationError(
+            f"{what}: greatest()'s second argument must be a column of the updated table"
+        )
+    if second is column:
+        raise DeclarationError(f"{what}: greatest() may not read the column it sets")
+    fk_columns = _fk_column_set(update_table)
+    for item, role in ((second, "argument"), (column, "set")):
+        if kind_of(item)[0] is not Kind.DATETIME:
+            raise DeclarationError(f"{what}: greatest() {role} column must be timestamptz")
+        if item.primary_key or item in fk_columns:
+            raise DeclarationError(
+                f"{what}: greatest() {role} column may not be a key or foreign key"
+            )
+    if second.nullable:
+        raise DeclarationError(f"{what}: greatest()'s argument column must be NOT NULL")
+    collected.compared.add(second)
+
+
+def _walk_value(
+    expr: object,
+    column: Column[Any],
+    collected: _Collected,
+    *,
+    what: str,
+    key: bool,
+    greatest_in: Table | None = None,
+) -> None:
+    """Accept a `<value>`: a bind, a literal, NULL/TRUE/FALSE, a `pg_catalog` time function or, only when
+    `greatest_in` names the table an UPDATE sets (I-3), the `GREATEST(<time function>, <column>)` form."""
     if isinstance(expr, elements.BindParameter):
         _check_bind(expr)
         if expr.required:
@@ -641,6 +765,16 @@ def _walk_value(
     if _is_time_function(expr):
         if key:
             raise DeclarationError(f"{what}: a key or foreign-key column takes a supplied bind")
+        return
+    if (
+        greatest_in is not None
+        and type(expr) is functions.Function
+        and tuple(expr.packagenames) == ()
+        and expr.name == "greatest"
+    ):
+        if key:
+            raise DeclarationError(f"{what}: a key or foreign-key column takes a supplied bind")
+        _check_greatest(expr, column, collected, greatest_in, what=what)
         return
     raise DeclarationError(f"{what}: unsupported value expression {type(expr).__name__}")
 
@@ -927,10 +1061,25 @@ class WriteStep:
         _check_deferrable_pk(table, what)
         if not isinstance(
             self.cardinality,
-            (Exactly, Between, EachLockedRow, PerEvidence, PerAbsence, AnyConfirmed),
+            (
+                Exactly,
+                Between,
+                EachLockedRow,
+                PerEvidence,
+                PerAbsence,
+                AnyConfirmed,
+                PerEvidenceRow,
+                PerConfirmedRow,
+            ),
         ):
             raise DeclarationError(f"{what}: unsupported cardinality")
-        if isinstance(self.cardinality, (PerEvidence, PerAbsence, AnyConfirmed)) and is_update:
+        if (
+            isinstance(
+                self.cardinality,
+                (PerEvidence, PerAbsence, AnyConfirmed, PerEvidenceRow, PerConfirmedRow),
+            )
+            and is_update
+        ):
             raise DeclarationError(
                 f"{what}: {type(self.cardinality).__name__} applies to an INSERT only"
             )
@@ -1039,6 +1188,7 @@ class WriteStep:
                 collected,
                 what=what,
                 key=column in fk_columns or column.primary_key,
+                greatest_in=table if is_update else None,
             )
             if (
                 isinstance(expr, elements.BindParameter)
@@ -1134,6 +1284,40 @@ class WriteStep:
         for kind in pk_kinds:
             if kind not in _KEY_KINDS:
                 raise DeclarationError(f"{what}: primary-key columns must be uuid or int")
+        cardinality = self.cardinality
+        if isinstance(cardinality, PerEvidenceRow):
+            if not any(cardinality.via is binding for binding in self.fks):
+                raise DeclarationError(
+                    f"{what}: PerEvidenceRow's via must be one of this step's own FkBindings"
+                )
+            if cardinality.via.lock is not cardinality.lock:
+                raise DeclarationError(
+                    f"{what}: PerEvidenceRow's via must be bound to the evidence lock"
+                )
+            if any(kb.column.nullable for kb in cardinality.via.binds):
+                raise DeclarationError(
+                    f"{what}: PerEvidenceRow's carried FK columns must be NOT NULL"
+                )
+        if isinstance(cardinality, PerConfirmedRow):
+            source = cardinality.step
+            if source is self:
+                raise DeclarationError(f"{what}: PerConfirmedRow may not name itself")
+            if not isinstance(source.cardinality, PerEvidenceRow) or source.is_update:
+                raise DeclarationError(f"{what}: PerConfirmedRow must name a PerEvidenceRow INSERT")
+            if _is_receipt_table(source.table) or _is_receipt_table(table):
+                raise DeclarationError(f"{what}: PerConfirmedRow may not involve the receipt")
+            if len(source.pk_kinds) != 1 or source.pk_kinds[0] is not Kind.UUID:
+                raise DeclarationError(
+                    f"{what}: PerConfirmedRow's source needs a single UUID primary key"
+                )
+            if cardinality.bind not in self.value_binds:
+                raise DeclarationError(
+                    f"{what}: PerConfirmedRow's bind must be one of this step's value binds"
+                )
+            if specs[cardinality.bind].kind is not source.pk_kinds[0]:
+                raise DeclarationError(
+                    f"{what}: PerConfirmedRow's bind must have the source key's kind"
+                )
         pk_binds: list[str | None] = []
         for column in table.primary_key.columns:
             expr = values.get(column.key)
@@ -1202,6 +1386,26 @@ class PreWriteDeclaration:
                 raise DeclarationError(
                     f"step {step.name!r}: PerAbsence names a PreLock that is not in locks"
                 )
+            if isinstance(step.cardinality, PerEvidenceRow):
+                if id(step.cardinality.lock) not in lock_ids:
+                    raise DeclarationError(
+                        f"step {step.name!r}: PerEvidenceRow names a PreLock that is not in locks"
+                    )
+                if _is_receipt_table(step.table):
+                    raise DeclarationError("the receipt step cannot be PerEvidenceRow")
+            if isinstance(step.cardinality, PerConfirmedRow):
+                named_index = step_index.get(id(step.cardinality.step))
+                if named_index is None or named_index >= step_index[id(step)]:
+                    raise DeclarationError(
+                        f"step {step.name!r}: PerConfirmedRow names a step that is not strictly earlier "
+                        "in this declaration"
+                    )
+                if self.steps[named_index] is not step.cardinality.step:
+                    raise DeclarationError(
+                        f"step {step.name!r}: PerConfirmedRow names a step that is not in this declaration"
+                    )
+                if _is_receipt_table(step.table):
+                    raise DeclarationError("the receipt step cannot be PerConfirmedRow")
             if isinstance(step.cardinality, AnyConfirmed):
                 for named in step.cardinality.steps:
                     named_index = step_index.get(id(named))
@@ -1263,6 +1467,8 @@ REPLAY_DECLARATION: Final = PreWriteDeclaration(locks=(), steps=(), replay=True)
 __all__ = [
     "REPLAY_DECLARATION",
     "PerEvidence",
+    "PerEvidenceRow",
+    "PerConfirmedRow",
     "PerAbsence",
     "AnyConfirmed",
     "REVIEWED_EXECUTION_OPTIONS",

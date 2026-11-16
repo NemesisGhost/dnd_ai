@@ -120,6 +120,31 @@ T1-T3; plan section 6.27.4). Both apply to an INSERT only and are validated per 
 - A savepoint rollback also latches once any step has been attempted (T3), because a confirmed key is an
   obligation input.
 
+**Per-key INSERTs** (`PerEvidenceRow`, `PerConfirmedRow`; R01 S5-E5, I-1 and I-2; design sections 4.1-4.2). `PerEvidence`
+owes zero-or-one INSERT; these owe *one INSERT per key*, so a route can insert one link per locked member (1-100) and one
+audit row per inserted link. *Evidence* is the keys recorded by successful `plan.lock` calls of one exact `PreLock` object,
+through this plan, before `finalize`, merged across calls. A lock that never ran, failed (it latches `LOCK_FAILED`), ran
+through another plan, connection, transaction or lock object, ran after `finalize` or inside a rolled-back savepoint is
+*missing* evidence and fails closed; a lock that ran and returned nothing is *empty* evidence, a different state.
+
+- `PerEvidenceRow(lock, via)` (INSERT only; `via` is one of the step's own `FkBinding`s and is bound to `lock`; there is no
+  count-only form): evidence missing or empty -> `EVIDENCE`; the carried FK value is not an evidence key -> `FK_NOT_LOCKED`;
+  the value was already attempted -> `DUPLICATE_TARGET`; attempts >= |evidence| -> `COUNT`. Skippable only on evidence that
+  exists and is empty. Complete at COMMIT when the set of carried values attempted equals the evidence and exactly
+  |evidence| rows are confirmed (`INCOMPLETE` otherwise); missing evidence never satisfies it. The handler is responsible
+  for calling the lock once per requested id.
+- `PerConfirmedRow(step, bind)` (INSERT only; `step` is a strictly earlier `PerEvidenceRow` INSERT with a single UUID
+  primary key; `bind` is one of the step's value binds of the same kind): the source lock's evidence missing, or the bound
+  value (a 1-tuple) not among the keys `step` confirmed -> `EVIDENCE` (the wrong-identity refusal); the value already used
+  -> `DUPLICATE_TARGET`; attempts >= the number `step` confirmed -> `COUNT`. Skippable exactly when `step` is. Complete when
+  the set of values used equals the set of keys `step` confirmed and the confirmed counts are equal. It guarantees audit
+  *identity* (member -> exactly one link -> exactly one audit row naming that link), not the content of a JSON payload.
+
+**`GREATEST` value form** (I-3; `authorization_steps._check_greatest`): an UPDATE may set a timestamptz column to
+`greatest(pg_catalog.<time function>(), <column>)`, the column being a NOT NULL, non-key, non-FK timestamptz column of the
+updated table, different from the one set. It adds no bind parameter, so the statement-snapshot and driver checks are
+unchanged. Nothing else is accepted (no literal, bind, other table, nesting, or INSERT).
+
 `AuthorizationPlanNotFinalizedError` and `AuthorizationPlanViolationError` are **direct** `RuntimeError`
 subclasses. They must never derive from `ValueError`, `SafeMessageError` or `ApiError`: those map to a 4xx,
 and a refused commit is a 5xx.
@@ -153,7 +178,9 @@ from .authorization_steps import (
     LockMode,
     ParameterError,
     PerAbsence,
+    PerConfirmedRow,
     PerEvidence,
+    PerEvidenceRow,
     PreLock,
     PreWriteDeclaration,
     RowExpectation,
@@ -1231,6 +1258,14 @@ class AuthorizationPlan:
             return keys is not None and len(keys) == 1
         if isinstance(cardinality, AnyConfirmed):
             return not self._any_confirmed(cardinality)
+        if isinstance(cardinality, PerEvidenceRow):
+            # skippable only on *proven* empty evidence (I-1)
+            keys = self._evidence.get(cardinality.lock)
+            return keys is not None and not keys
+        if isinstance(cardinality, PerConfirmedRow):
+            # exactly when its source step is (I-2)
+            source = self._declaration.index_of_step(cardinality.step)
+            return source is not None and self._skippable(source)
         if cardinality.complete:
             return not self._evidence.get(step.target_lock, ()) if step.target_lock else True
         return True
@@ -1252,6 +1287,24 @@ class AuthorizationPlan:
             return keys is not None and len(keys) <= 1 and len(confirmed) == 1 - len(keys)
         if isinstance(cardinality, AnyConfirmed):
             return len(confirmed) == (1 if self._any_confirmed(cardinality) else 0)
+        if isinstance(cardinality, PerEvidenceRow):
+            keys = self._evidence.get(cardinality.lock)
+            return (
+                keys is not None
+                and self._attempted_keys[index] == keys
+                and len(confirmed) == len(keys)
+            )
+        if isinstance(cardinality, PerConfirmedRow):
+            source = self._declaration.index_of_step(cardinality.step)
+            assert source is not None  # validated when the declaration was built
+            source_lock = cardinality.step.cardinality
+            assert isinstance(source_lock, PerEvidenceRow)
+            source_confirmed = set(self._confirmed[source])
+            return (
+                self._evidence.get(source_lock.lock) is not None
+                and self._attempted_keys[index] == source_confirmed
+                and len(confirmed) == len(self._confirmed[source])
+            )
         if not cardinality.complete:
             return True
         assert step.target_lock is not None
@@ -1360,6 +1413,36 @@ class AuthorizationPlan:
                 self._refuse(ViolationReason.EVIDENCE)
             if attempts >= 1:
                 self._refuse(ViolationReason.COUNT)
+        tracked: tuple[Any, ...] | None = None
+        if isinstance(cardinality, PerEvidenceRow):
+            # one INSERT per evidence key (I-1): missing or empty evidence permits nothing, the carried value must be
+            # an evidence key and is attempted at most once, and attempts never exceed the evidence
+            keys = self._evidence.get(cardinality.lock)
+            if not keys:
+                self._refuse(ViolationReason.EVIDENCE)
+            tracked = tuple(frozen[kb.bind] for kb in cardinality.via.binds)
+            if any(value is None for value in tracked) or tracked not in keys:
+                self._refuse(ViolationReason.FK_NOT_LOCKED)
+            if tracked in self._attempted_keys[index]:
+                self._refuse(ViolationReason.DUPLICATE_TARGET)
+            if attempts >= len(keys):
+                self._refuse(ViolationReason.COUNT)
+        if isinstance(cardinality, PerConfirmedRow):
+            # one INSERT per row the source step confirmed (I-2), identity-bound
+            source = self._declaration.index_of_step(cardinality.step)
+            assert source is not None  # validated when the declaration was built
+            source_lock = cardinality.step.cardinality
+            assert isinstance(source_lock, PerEvidenceRow)
+            if self._evidence.get(source_lock.lock) is None:
+                self._refuse(ViolationReason.EVIDENCE)
+            source_confirmed = set(self._confirmed[source])
+            tracked = (frozen[cardinality.bind],)
+            if tracked not in source_confirmed:
+                self._refuse(ViolationReason.EVIDENCE)
+            if tracked in self._attempted_keys[index]:
+                self._refuse(ViolationReason.DUPLICATE_TARGET)
+            if attempts >= len(source_confirmed):
+                self._refuse(ViolationReason.COUNT)
         if target is not None:
             # A repeated target key within one declared step is refused for every cardinality.
             if target in self._attempted_keys[index]:
@@ -1376,7 +1459,7 @@ class AuthorizationPlan:
                 self._refuse(ViolationReason.FK_PARTIAL_NULL)
             if binding.lock is not None and values not in self._evidence.get(binding.lock, ()):
                 self._refuse(ViolationReason.FK_NOT_LOCKED)
-        return target
+        return target if target is not None else tracked
 
     def _validate_rows(
         self,
