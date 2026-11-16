@@ -4,7 +4,7 @@ runtime proof is `tests/database/test_r01_s5e4_access_grants.py` and `test_r01_s
 - The five routes are finalized, in the keyed registry only, and no handler calls a legacy command.
 - Every handler defers, reserves, binds, prepares, finalizes once, and after `finalize` runs only the module write
   function and the receipt step.
-- The lock order, each row once at the mode it needs: a group grantee first; the actor's role rows; the memberships;
+- The lock order, each row once at the mode it needs: the actor's role rows, then a group grantee's row (AO-1); the memberships;
   the accounts; the campaign (`FOR UPDATE` to write a new row, `FOR KEY SHARE` to revoke); the catalogue rows; the
   targets; the receipt last. **No lock waits less than the S5-E3 exception allows: none of these locks is `NOWAIT`**
   (the S5-E3 owner exception does not extend to other routes), and no route can answer a new retryable status.
@@ -199,8 +199,10 @@ def test_the_lock_order_of_each_route() -> None:
             plans.RELATIONSHIP_OUTSTANDING_LOCK,
         ],
         CREATE_GRANT: [
+            # the group row right after the actor's role rows (R01 S5-E4 correction SA-1, order AO-1; finding NF-1)
+            plans.ACTOR_ROLES_LOCK,
             plans.GROUP_GRANTEE_LOCK,
-            *common_actor,
+            plans.ACTOR_MEMBERSHIP_LOCK,
             plans.TARGET_MEMBERSHIP_LOCK,
             plans.ACTOR_ACCOUNT_LOCK,
             plans.TARGET_ACCOUNT_LOCK,
@@ -267,8 +269,13 @@ def test_each_lock_has_the_mode_it_needs() -> None:
         assert plans.CAMPAIGN_KEY_SHARE_LOCK in locks and plans.CAMPAIGN_ROW_LOCK not in locks
 
 
-def test_the_group_row_is_declared_first_and_only_the_grant_has_one() -> None:
-    assert plans.CREATE_GRANT_DECLARATIONS.unkeyed.locks[0] is plans.GROUP_GRANTEE_LOCK  # type: ignore[union-attr]
+def test_the_group_row_is_declared_right_after_the_actor_role_rows_and_only_the_grant_has_one() -> (
+    None
+):
+    """AO-1 (correction SA-1): a transaction that holds a group row never waits for a role row, so the group row is declared
+    after the actor's role rows and before the actor's membership."""
+    locks = list(plans.CREATE_GRANT_DECLARATIONS.unkeyed.locks)  # type: ignore[union-attr]
+    assert locks[0] is plans.ACTOR_ROLES_LOCK and locks[1] is plans.GROUP_GRANTEE_LOCK
     for route, d in ROUTES.items():
         if route != CREATE_GRANT:
             assert plans.GROUP_GRANTEE_LOCK not in d.unkeyed.locks  # type: ignore[union-attr]
@@ -320,9 +327,12 @@ def test_every_insert_foreign_key_is_bound_to_a_held_lock_except_the_audit_looku
     assert bound["granted_by_membership_id"] is plans.ACTOR_MEMBERSHIP_LOCK
 
 
-def test_prepare_takes_a_group_grantee_first_and_the_membership_class_before_the_campaign() -> None:
+def test_prepare_takes_the_actor_role_rows_then_a_group_grantee_and_the_membership_class_before_the_campaign() -> (
+    None
+):
     source = inspect.getsource(plans.prepare_create_grant)
-    assert source.index("GROUP_GRANTEE_LOCK") < source.index("ACTOR_ROLES_LOCK")
+    assert source.index("ACTOR_ROLES_LOCK") < source.index("GROUP_GRANTEE_LOCK")
+    assert source.index("GROUP_GRANTEE_LOCK") < source.index("lock_memberships(")
     assert source.index("ACTOR_ACCOUNT_LOCK") < source.index("CAMPAIGN_ROW_LOCK")
     change = inspect.getsource(plans.prepare_change_relationship)
     assert change.index("lock_memberships(") < change.index("RELATIONSHIP_ROW_LOCK")

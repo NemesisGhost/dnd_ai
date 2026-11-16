@@ -44,21 +44,26 @@ World -> role rows -> delegation rows -> memberships -> accounts -> campaign -> 
 | change relationship | the same actor rows, then the **owning membership** U; accounts; **campaign U**; the new type row U; the character's entity U and `characters` KS; the old relationship row U (candidate-bound); the timeline and world-time rows KS the new row carries forward; [receipt U] |
 | revoke relationship | actor's role rows S, open membership S, account S; **campaign KS**; the relationship row U, only while it is unrevoked (candidate-bound; its evidence is the "this request revokes" fact); [receipt U] |
 | create grant, **membership grantee** | the grantee's role pass is the actor's alone (S); actor's membership S and the grantee's U (C4); actor's account S, the grantee's account KS; **campaign U**; the capability row U (by code); the target (entity U and the kind's child row KS, or the session row U); [receipt U] |
-| create grant, **group grantee** | **the group row U first**, then actor's role rows S, actor's open membership S, actor's account S; **campaign U**; capability U; the target; [receipt U] |
+| create grant, **group grantee** | actor's role rows S, **then the group row U** (R01 S5-E4 correction SA-1, order AO-1), then actor's open membership S, actor's account S; **campaign U**; capability U; the target; [receipt U] |
 | revoke grant | actor's role rows S, open membership S, account S; **campaign KS**; the grant row U, only while it is unrevoked (campaign- and id-bound); [receipt U] |
 
-### Why the group grantee is locked first (an exception to the class order, recorded)
+### Why the group grantee's row comes right after the actor's role rows (AO-1; correction SA-1, finding NF-1)
 
-The approved order puts targets, and so a group row, after the campaign. Three group routes are **not yet migrated**
-(S5-E5): deactivate and the group-member operations lock the **group row first**, then the campaign (`reactivate`:
-group U then campaign U; `add members`: group U, the members' memberships NKU, the actor's membership KS, the campaign
-KS). A migrated route that took the campaign U and then the group U would close a cycle with each of them that
-**did not exist before** (they were consistent with the old create-grant's group-then-campaign order), and one that
-held the actor's membership `FOR SHARE` before the group would deadlock with a concurrent add that names the actor
-as a member (`FOR NO KEY UPDATE` on the actor's membership while holding the group). So a group grantee's row is the
-first row the route locks. This preserves the relative order every unmigrated group route already has; S5-E5, which
-migrates them, must place the group row in this position or revisit this route (recorded in 6.31 as a limitation).
-A membership grantee has no such exposure (no unmigrated route holds a membership and then a group).
+For every transaction that locks an access-group row the order is: [keyed prefix] -> **role rows -> delegation rows -> group row** ->
+memberships -> accounts -> campaign -> catalogue rows -> targets -> dependent rows. This route's group-grantee branch locks the
+actor's role rows `FOR SHARE` and only then the group row `FOR UPDATE`.
+
+The first S5-E4 version locked the group **before** the actor's role rows (a "group first" exception to the class order). That
+order closes a three-party cycle with revelation creation and a role writer: revelation creation holds its caller's role rows
+`FOR SHARE` and waits for the group `FOR KEY SHARE`; this route holds the group and waits for its actor's role rows `FOR SHARE`;
+a role revoke by the revelation's caller holds the actor's role row `FOR UPDATE` and waits for the caller's rows. Reproduced
+through the application (a 40P01 with a different victim per run) and absent at the S5-E4 parent. With the role rows first, a
+transaction that holds a group row never waits for a role row, so no cycle of that shape can contain a group-row wait.
+
+What stays: the group row still comes **before** the actor's membership, the memberships, the accounts and the campaign. A
+grant that locked the actor's membership `FOR SHARE` before the group would deadlock with a concurrent add that names the actor
+as a member (`FOR NO KEY UPDATE` on that membership while holding the group), and the campaign before the group is still the
+rejected class order. Both are pinned as deadlocks by tests. A membership grantee has no group lock and is unchanged.
 
 ## Why the lock sets are complete
 
@@ -207,7 +212,7 @@ class GrantRowRefusedError(SafeMessageError):
 
 # -- locks ----------------------------------------------------------------------------------------------
 
-#: The group grantee, `FOR UPDATE`, **taken first** (module docstring, "Why the group grantee is locked first").
+#: The group grantee, `FOR UPDATE`, taken **right after the actor's role rows** (module docstring, AO-1 and NF-1).
 #: Bound `group`, `campaign`; a group of another campaign matches nothing.
 GROUP_GRANTEE_LOCK = PreLock(
     "grantee_group_update",
@@ -632,8 +637,8 @@ REVOKE_RELATIONSHIP_DECLARATIONS = ReservationDeclarations(
     ),
 )
 _CREATE_GRANT_LOCKS = (
-    GROUP_GRANTEE_LOCK,
     ACTOR_ROLES_LOCK,
+    GROUP_GRANTEE_LOCK,
     ACTOR_MEMBERSHIP_LOCK,
     TARGET_MEMBERSHIP_LOCK,
     ACTOR_ACCOUNT_LOCK,
@@ -1335,14 +1340,15 @@ def prepare_create_grant(  # noqa: C901, PLR0912, PLR0915 - one linear lock and 
     target_field = _supplied_target_field(**targets)
     entity_rooted = character_id or entity_id or knowledge_item_id or quest_id or event_id
     status_before = _status_before(connection, grantee_membership_id)
-    # 1. the group grantee first (module docstring); a membership grantee wins when both are supplied, as before
+    # 1. actor role rows, then the group grantee (AO-1: a transaction holding a group row never waits for a role row; a membership
+    #    grantee wins when both are supplied, as before)
+    plan.lock(connection, ACTOR_ROLES_LOCK, {"membership": actor_membership_id})
     group_keys: tuple[tuple[Any, ...], ...] = ()
     if grantee_membership_id is None and grantee_group_id is not None:
         group_keys = plan.lock(
             connection, GROUP_GRANTEE_LOCK, {"group": grantee_group_id, "campaign": campaign_id}
         )
-    # 2. actor role rows, then the membership class (C4), then accounts
-    plan.lock(connection, ACTOR_ROLES_LOCK, {"membership": actor_membership_id})
+    # 2. the membership class (C4), then accounts
     if grantee_membership_id is not None:
         lock_memberships(
             connection,

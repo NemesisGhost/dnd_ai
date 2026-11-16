@@ -540,9 +540,13 @@ unreachable by a request that was valid and uncontended before:
   `FOR UPDATE` for the three routes that write a new row and `FOR KEY SHARE` for the two revokes; the relationship type or
   capability row `FOR UPDATE`; the target rows (the entity `FOR UPDATE` and the kind's class-table row `FOR KEY SHARE`, the
   session `FOR UPDATE`, the timeline and world-time rows `FOR KEY SHARE`); the row a change or revoke closes `FOR UPDATE`
-  (a revoke locks it only while it is unrevoked). **A group grantee's row is locked first**, before the actor's rows: the
-  group routes that are not yet migrated lock the group before the campaign, and a grant that locked the campaign first would
-  cycle with them (`reactivate`, `add members`); S5-E5 must keep this position or revisit it.
+  (a revoke locks it only while it is unrevoked). **A group grantee's row is locked right after the actor's role rows** (order AO-1: role rows, then the group row, then
+  memberships, accounts and the campaign; correction SA-1 of finding NF-1). The first S5-E4 version locked the group before the
+  role rows, which closed a three-party cycle with revelation creation (it holds the caller's role rows `FOR SHARE` and waits for
+  the group) and a role revoke by that caller (it holds the grant actor's role row `FOR UPDATE` and waits for the caller's rows):
+  a 40P01, absent at the S5-E4 parent. A transaction that holds a group row must never wait for a role row. The group still
+  precedes the actor's membership, because the add of a group member takes that member's membership `FOR NO KEY UPDATE` while
+  holding the group.
 - **Change versus end:** the change now locks the owning membership before the relationship row, the order the end takes, so
   the pair no longer deadlocks (it did at the baseline, in either order).
 - **Shapes refused earlier:** a grant with no grantee or two, no target or several, or a target that is not a row of the named

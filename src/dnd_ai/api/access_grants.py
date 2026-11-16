@@ -403,7 +403,7 @@ def create_resource_grant_endpoint(
 ) -> Any:
     """Creates one resource grant (an allow or a deny) for a membership or an access group, on one of the six
     target kinds; a keyed-optional pre-write route (R01 S5-E4, `dnd_ai.commands.access_grant_plans`). A group
-    grantee's row is the first row the request locks (see that module). The audit row carries the grant's bounded,
+    grantee's row is locked right after the actor's role rows (see that module, order AO-1). The audit row carries the grant's bounded,
     non-free-form `changed_fields` (never `reason`)."""
     replay, reservation_id = _begin_lifecycle_request(
         plan=plan,

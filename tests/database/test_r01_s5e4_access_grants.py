@@ -453,10 +453,11 @@ def test_the_route_runs_its_statements_in_the_declared_order(
     assert code(response) == route.status, response.text
     ev = recorded.events
     final = index(ev, FINAL)
-    chain: list[int] = []
+    chain: list[int] = [index(ev, ROLES_S)]
     if route is GROUP_ROUTE:
-        chain.append(index(ev, GROUP_U))
-    chain += [index(ev, ROLES_S), index(ev, ACCOUNT_S)]
+        # R01 S5-E4 correction SA-1 (order AO-1): the actor's role rows, then the group row, then the membership class
+        chain += [index(ev, GROUP_U), index(ev, MEMBERSHIP_S)]
+    chain.append(index(ev, ACCOUNT_S))
     creating = route.name in (
         "grant_relationship",
         "change_relationship",
@@ -496,9 +497,11 @@ def test_the_route_runs_its_statements_in_the_declared_order(
         assert not [
             x for x in ev if re.search(r"pg_advisory|idempotent_requests|SET CONSTRAINTS", x)
         ]
-    # the group row is the first row lock; for a membership grantee the first lock after the key is the role pass
+    # the actor's role rows are the first row lock for every route (a group grantee's group row follows them)
     first_lock = min(i for i, x in enumerate(ev) if re.search(r"FOR (KEY SHARE|SHARE|UPDATE)", x))
-    assert first_lock == (index(ev, GROUP_U) if route is GROUP_ROUTE else index(ev, ROLES_S))
+    assert first_lock == index(
+        ev, ROLES_S
+    )  # the role rows come first for every route, a group grantee's included
     assert len([x for x in ev if re.search(AUDIT_INSERT, x)]) == 1
 
 
@@ -1175,17 +1178,18 @@ def test_an_update_leaving_a_partial_unique_index_never_waits_for_a_competing_in
 # --- the group grantee and the other kinds of target -----------------------------------------------------------------------------------------
 
 
-def test_a_group_grantee_is_locked_first_and_a_deactivated_group_is_the_unchanged_409(
+def test_a_group_grantee_is_locked_after_the_actor_role_rows_and_a_deactivated_group_is_the_unchanged_409(
     s: Scene, env: Env, pooled: Engine, pooled_factory: Factory
 ) -> None:
-    """*route* and *sql*: for a group grantee the first row lock is the group `FOR UPDATE` (no membership of the grantee
-    to lock; the target's account is not locked); a deactivated group is refused before `finalize` with the unchanged 409
+    """*route* and *sql*: for a group grantee the first row lock is the actor's role rows `FOR SHARE`, then the group `FOR UPDATE`,
+    then the actor's membership (AO-1, correction SA-1: a transaction holding a group row never waits for a role row); no
+    membership of the grantee to lock; the target's account is not locked; a deactivated group is refused before `finalize` with the unchanged 409
     and nothing persists."""
     with Recorder(pooled) as recorded:
         response = send(pooled_factory, s, GROUP_ROUTE, env)
     assert code(response) == 201, response.text
     ev = recorded.events
-    assert index(ev, GROUP_U) < index(ev, ROLES_S)
+    assert index(ev, ROLES_S) < index(ev, GROUP_U) < index(ev, MEMBERSHIP_S)
     assert not any(re.search(ACCOUNT_KS, x) for x in ev), "a group has no account to lock"
     assert not any(re.search(MEMBERSHIP_U, x) for x in ev), "no grantee membership to lock"
     with s.w.engine.begin() as c:

@@ -392,7 +392,7 @@ def test_a_group_grant_and_the_deactivation_of_the_group_serialize_in_both_order
 def test_a_group_grant_by_a_manager_who_is_being_added_to_the_group_never_waits_in_a_cycle(
     arrival: str, s: Scene, env: Env, pool: Pool
 ) -> None:
-    """*race*, the reason the group row is locked first: the owner grants to the group while another request adds that
+    """*race*, the reason the group row precedes the actor's membership (R01 S5-E4 correction SA-1: it follows only the actor's role rows): the owner grants to the group while another request adds that
     **owner** to the group. The add (a still-pending route) holds the group row `FOR UPDATE` and then takes the added
     member's membership `FOR NO KEY UPDATE`, which conflicts with the grant's `FOR SHARE` on the actor's own membership.
     A grant that took the actor's membership before the group row would hold the one and wait for the other while the add
