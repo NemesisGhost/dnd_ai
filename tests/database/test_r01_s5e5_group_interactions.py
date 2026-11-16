@@ -6,10 +6,10 @@
   (the group route) is parked right after its group lock (it holds its role rows `FOR SHARE` and the group `FOR UPDATE`); C
   (revelation creation) is *observed* waiting at the group on X's backend; V (C's revoke of X's role) is *observed* waiting at its
   ordered role statement holding no row. Released: no driver exception, the deadlock counter unmoved, X then C then V.
-* **T-7** (CA-1): keyed authoring by M (it holds the campaign `FOR KEY SHARE` from its reservation, then waits for M's role row),
-  the revoke of M's role by Y (it holds M's row and waits for Y's rows) and create or reactivate by Y (it holds Y's rows and
-  wants the campaign). With the campaign at `FOR UPDATE` (the legacy mode) that is a three-party cycle (the DEF-019 family);
-  with `FOR KEY SHARE` (CA-1) it is clean.
+* **T-7** (owner-approved amendment): create / reactivate introduce no cycle (T-7a, CA-1); the *independent* keyed-authoring /
+  role-revoke DEF-019 cycle stays precisely characterized (T-7 with a group route in the schedule, T-7b without one): one 40P01 on a
+  cycle-edge statement, either request the victim, exact responses, the winner's committed state, the loser's absent changes, the
+  loser's retry. Deferred, not fixed.
 * **Pairs** (design section 10.7, items 1-9): a group route and one other writer, each *parked at its final authority statement*
   (every lock held) in turn; the other is observed queued or finished; no driver exception, no moved deadlock counter, the
   statuses the pair allows, and the invariant the pair must keep.
@@ -29,9 +29,15 @@ from tests.database.test_r01_s2_profile_routes import FINAL, pooled, pooled_fact
 from tests.database.test_r01_s3_authoring_routes import (  # noqa: F401 - fixture by name
     World,
     code,
+    error_of,
     w,
 )
-from tests.database.test_r01_s5e2_authoring_transfer_cycles import AUTHORING_WORLD
+from tests.database.test_r01_s5e2_authoring_transfer_cycles import (
+    AUTHORING_WORLD,
+    dungeons_named,
+    reservations_for,
+    victim_from,
+)
 from tests.database.test_r01_s5e2_lock_order import (  # noqa: F401 - fixture by name
     PATIENCE,
     NthGate,
@@ -163,30 +169,165 @@ def test_t5_the_three_party_schedule_is_clean_with_each_group_route_as_the_group
 
 
 # =====================================================================================================
-# T-7: CA-1, keyed authoring + the revoke of the author's role + create / reactivate by the revoker
+# T-7: CA-1 (group create / reactivate) and the independent keyed-authoring / role-revoke cycle (DEF-019)
 # =====================================================================================================
+#
+# Owner-approved amendment (recorded in the uncommitted design and plan): the original "the whole three-party schedule is
+# clean" expectation is replaced by (1) group create / reactivate introduce no cycle (T-7a) and (2) the independent DEF-019
+# authoring/revoke cycle stays *precisely characterized* (T-7, T-7b), not fixed. This does not approve a new cycle, close
+# DEF-019 or lift its before-A6 / R01-closure requirement.
+
+OK_REVOKE = (200, None)
+OK_AUTHORING_RESPONSE = (201, None)
+INTERNAL_ERROR = (500, "internal_error")
+
+
+def outcome(response: Any) -> tuple[int, str | None]:
+    return (code(response), error_of(response))
+
+
+def keyed_author(pool: Pool, w: World, name: str, key: str) -> Any:
+    """The keyed authoring request of the cycle (the author is `w.gm_user`); `name` and `key` are fixed so a retry reuses them."""
+    return post(
+        pool,
+        w.gm_user,
+        f"{w.base}/authoring/dungeons",
+        {"name": name, "summary": None},
+        **{"Idempotency-Key": key},
+    )
+
+
+def t7_state(w: World, *, name: str, key: str) -> dict[str, Any]:
+    """The committed state the cycle's requests can change, read on the admin engine (nothing is cleaned before it is read)."""
+    audits = rows(
+        w.engine,
+        "SELECT command_name, count(*) AS n FROM audit.change_log WHERE world_id = :w GROUP BY command_name",
+        w=w.world_id,
+    )
+    return {
+        "gm_role_live": bool(
+            rows(
+                w.engine,
+                "SELECT revoked_at IS NULL AS live FROM security.membership_roles WHERE membership_role_id = :r",
+                r=w.gm_role,
+            )[0]["live"]
+        ),
+        "dungeons": dungeons_named(w, name),
+        "reservations": reservations_for(w, key),
+        "audits": {r["command_name"]: int(r["n"]) for r in audits},
+    }
+
+
+def assert_authoring_revoke_cycle(
+    w: World,
+    pool: Pool,
+    *,
+    name: str,
+    key: str,
+    revoker: uuid.UUID,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    failures: list[tuple[str | None, str]],
+    delta: int,
+    author_response: Any,
+    revoke_response: Any,
+    extra_audits: dict[str, int],
+) -> str:
+    """The exact contract of the deferred authoring/revoke cycle. PostgreSQL may pick either request as the victim (the choice
+    is *not* pinned); whichever it picks: one 40P01 on a cycle-edge statement (the deadlock counter corroborates, it is not the
+    evidence), the victim a 500 `internal_error`, the winner's committed state exact, the loser's business, audit and reservation
+    changes absent, and the loser's retry as stated. `extra_audits`: audit rows other requests of the schedule legitimately added
+    (the group route). Returns the victim ("author" or "revoke")."""
+    summary = f"failures={failures} delta={delta} before={before} after={after}"
+    victim = "revoke" if victim_from(failures, summary) == "writer" else "author"
+    assert delta == 1, summary
+    gained = {
+        c: n - before["audits"].get(c, 0)
+        for c, n in after["audits"].items()
+        if n != before["audits"].get(c, 0)
+    }
+    rest = {c: n for c, n in gained.items() if c not in extra_audits}
+    assert all(gained.get(c) == n for c, n in extra_audits.items()), f"group audit: {summary}"
+    if victim == "author":
+        assert outcome(author_response) == INTERNAL_ERROR, summary
+        assert outcome(revoke_response) == OK_REVOKE, summary
+        assert after["gm_role_live"] is False, summary
+        assert after["dungeons"] == 0 and after["reservations"] == 0, (
+            f"the author left rows: {summary}"
+        )
+        assert rest == {"revoke_membership_role": 1}, f"audit: {summary}"
+    else:
+        assert outcome(revoke_response) == INTERNAL_ERROR, summary
+        assert outcome(author_response) == OK_AUTHORING_RESPONSE, summary
+        assert after["gm_role_live"] is True, f"the aborted revoke changed a role row: {summary}"
+        assert after["dungeons"] == 1 and after["reservations"] == 1, summary
+        assert "revoke_membership_role" not in rest, (
+            f"the aborted revoke left an audit row: {summary}"
+        )
+        assert sum(rest.values()) == 1, f"audit (the author's one row): {summary}"
+    # the loser's retry, on a fresh pool, with the authoring key reused where the author lost
+    pool.failures.clear()
+    pool.engine.dispose()
+    if victim == "author":
+        again = keyed_author(pool, w, name, key)
+        assert code(again) == 403, f"the retry executes (not a replay) and is refused: {again.text}"
+        assert dungeons_named(w, name) == 0
+    else:
+        again = post(pool, revoker, f"{w.base}/memberships/roles/{w.gm_role}/revoke", {})
+        assert outcome(again) == OK_REVOKE, again.text
+        assert t7_state(w, name=name, key=key)["gm_role_live"] is False
+        assert dungeons_named(w, name) == 1, (
+            "the revoke retry did not disturb the author's committed row"
+        )
+    assert pool.failures == [], f"the retry failed in the driver: {pool.failures}"
+    return victim
+
+
+def group_committed(w: World, route: str, label: str, archived: uuid.UUID) -> bool:
+    """The group route's own committed state, checked on its own: create left one group of that name, reactivate made the
+    archived group active."""
+    if route == "create":
+        return (
+            int(
+                rows(
+                    w.engine,
+                    "SELECT count(*) AS n FROM security.access_groups WHERE campaign_id = :c AND name = :n",
+                    c=w.campaign_id,
+                    n=label,
+                )[0]["n"]
+            )
+            == 1
+        )
+    return (
+        rows(
+            w.engine,
+            "SELECT ls.code AS code FROM security.access_groups ag JOIN core.lifecycle_statuses ls "
+            "ON ls.lifecycle_status_id = ag.lifecycle_status_id WHERE ag.access_group_id = :g",
+            g=archived,
+        )[0]["code"]
+        == "active"
+    )
 
 
 @pytest.mark.parametrize("order", ("m_row_first", "y_rows_first"))
 @pytest.mark.parametrize("route", ("create", "reactivate"))
-def test_characterized_t7_the_specified_three_party_schedule_closes_the_deferred_two_party_authoring_cycle(
+def test_characterized_t7_the_independent_authoring_revoke_cycle_is_exact_with_a_group_route_in_the_schedule(
     route: str, order: str, w: World, pool: Pool
 ) -> None:
-    """*race*, a **characterization** of the schedule T-7 specified (correction design section 5), *not* a CA-1 discriminator: M (`w.gm_user`) authors, keyed: its reservation holds the campaign `FOR KEY SHARE`, then it waits for
-    its role rows. Y (an owner) revokes **M's role** (V: it holds M's row `FOR UPDATE` when that row is the lower id, and waits for
-    Y's rows) and, in the same schedule, creates or reactivates an access group (Y is parked at its campaign lock statement, holding
-    its role rows `FOR SHARE`). With the legacy campaign `FOR UPDATE` Y would wait for the author's `KEY SHARE` while the author waits
-    for V and V waits for Y: one 40P01 (the DEF-019 family). With `FOR KEY SHARE` (CA-1) Y is unaffected: **no driver exception, the
-    deadlock counter unmoved**, Y succeeds, the revoke commits, the author is refused (its role was revoked while it waited) or,
-    when V waits for Y's rows first and holds nothing, completes. `y_rows_first` is the control: V waits at Y's rows first.
+    """*race*, a **characterization** (owner-approved T-7 amendment): the schedule T-7 specified (correction design section 5).
+    M (`w.gm_user`) authors, keyed (its reservation holds the campaign `FOR KEY SHARE`, then it waits for its role rows); Y (an
+    owner) revokes **M's role** (V) and creates or reactivates an access group (Y is parked at its campaign lock, holding its role
+    rows `FOR SHARE`).
 
-    **What the run showed (the conflict with the design, recorded as NF-5).** With Y at `FOR KEY SHARE` the schedule still ends in
-    exactly one 40P01 when M's row is the lower id (`m_row_first`): after Y commits, the revoke (W) proceeds to *its own* campaign
-    lock, and the S5-E2 role revoke takes the campaign `FOR UPDATE`, which the author's `KEY SHARE` blocks while the author waits for
-    the row W holds. That is the **two-party** DEF-019 cycle (keyed authoring against a role writer, CL-E10-1) and it closes whatever
-    Y does, so this schedule cannot tell CA-1 from the legacy mode. It is kept as the characterization of that pre-existing
-    defect (a pass means *characterized, not fixed*; it fails when the cycle disappears). CA-1 itself is shown by
-    `test_t7a_...` and `test_t7b_...` below. `y_rows_first` is clean."""
+    It is **not** a CA-1 discriminator and **not** expected clean. When M's role row has the lower id (`m_row_first`) the S5-E2
+    role revoke, after Y commits, takes the campaign `FOR UPDATE`, which the author's `KEY SHARE` blocks while the author waits
+    for the row the revoke holds: the **two-party** DEF-019 cycle (keyed authoring against a role writer, CL-E10-1), pre-existing,
+    **deferred and not fixed**. CA-1 is shown by `test_t7a_...` (create / reactivate never wait for the author). The cycle must be
+    exactly: one 40P01 on a cycle-edge statement (the revoke's campaign `FOR UPDATE`, or the author's role / membership wait;
+    **either may be PostgreSQL's victim, the choice is not pinned**), the victim a 500 `internal_error`, the winner's state
+    committed, the loser's business / audit / reservation changes absent, the group route's own change committed, the loser's retry
+    succeeding (the author's, with its key reused, is refused 403 when the revoke won). `y_rows_first` is the control (V waits at
+    Y's rows first and holds nothing): clean, no driver exception, deadlock counter unmoved."""
     m_first = order == "m_row_first"
     cast = cast_two(
         w,
@@ -197,6 +338,8 @@ def test_characterized_t7_the_specified_three_party_schedule_closes_the_deferred
     assert (w.gm_role < cast.ids["r_y"]) == m_first, (
         "premise: the role-row id order of the schedule"
     )
+    group_name = f"T7 {uuid.uuid4().hex[:6]}"
+    author_name, author_key = f"T7 dungeon {uuid.uuid4().hex[:8]}", str(uuid.uuid4())
     with w.engine.begin() as c:
         archived = make_access_group(
             c,
@@ -207,14 +350,13 @@ def test_characterized_t7_the_specified_three_party_schedule_closes_the_deferred
 
     def y_call() -> Any:
         if route == "create":
-            return post(
-                pool, y_user, f"{w.base}/access-groups", {"name": f"T7 {uuid.uuid4().hex[:6]}"}
-            )
+            return post(pool, y_user, f"{w.base}/access-groups", {"name": group_name})
         return post(pool, y_user, f"{w.base}/access-groups/{archived}/reactivate", {})
 
     admin = w.engine
+    before_state = t7_state(w, name=author_name, key=author_key)
     before = deadlocks_now(admin)
-    statuses: dict[str, int] = {}
+    results: dict[str, Any] = {}
     # both gates are registered before any request starts: a plan refuses a change of the engine's listeners while it is open
     with (
         NthGate(pool.engine, CAMPAIGN_LOCK) as ygate,
@@ -224,7 +366,7 @@ def test_characterized_t7_the_specified_three_party_schedule_closes_the_deferred
         assert ygate.reached.wait(WAIT_SECONDS), "SETUP: Y never reached its campaign lock"
         assert ygate.pid is not None
         y_pid = ygate.pid
-        a = run_in_thread("a", lambda: author_request(pool, w))
+        a = run_in_thread("a", lambda: keyed_author(pool, w, author_name, author_key))
         assert agate.reached.wait(WAIT_SECONDS), "SETUP: the author never reached its world lock"
         assert agate.pid is not None
         a_pid = agate.pid
@@ -248,23 +390,44 @@ def test_characterized_t7_the_specified_three_party_schedule_closes_the_deferred
                 what="the author waiting for its role row behind V",
             )
         else:
-            statuses["a"] = code(finish(a, "the author finishes while Y is parked"))
+            results["a"] = finish(a, "the author finishes while Y is parked")
         ygate.release()
-        results = {"y": finish(y, "y finishes"), "w": finish(wreq, "w finishes")}
-        if "a" not in statuses:
+        results["y"] = finish(y, "y finishes")
+        results["w"] = finish(wreq, "w finishes")
+        if "a" not in results:
             results["a"] = finish(a, "a finishes")
     delta = settled_deadlock_delta(admin, pool, before)
-    statuses |= {k: code(v) for k, v in results.items()}
-    assert statuses["y"] == (201 if route == "create" else 200), statuses
-    assert statuses["w"] == 200, statuses
+    # the evidence is captured here, before any cleanup or retry
+    failures = list(pool.failures)
+    after_state = t7_state(w, name=author_name, key=author_key)
+    y_expected = (201 if route == "create" else 200, None)
+    assert outcome(results["y"]) == y_expected, (results["y"].text, failures)
+    assert group_committed(w, route, group_name, archived), (
+        "the group route's own change is committed"
+    )
+    group_audit = {"create_access_group" if route == "create" else "reactivate_access_group": 1}
     if m_first:
-        # the deferred two-party cycle: exactly one 40P01, at the author's role statement or the revoke's campaign lock
-        assert len(pool.failures) == 1 and pool.failures[0][0] == "40P01", (statuses, pool.failures)
-        assert delta == 1, (statuses, pool.failures, delta)
-        assert 500 in statuses.values(), statuses
+        assert_authoring_revoke_cycle(
+            w,
+            pool,
+            name=author_name,
+            key=author_key,
+            revoker=y_user,
+            before=before_state,
+            after=after_state,
+            failures=failures,
+            delta=delta,
+            author_response=results["a"],
+            revoke_response=results["w"],
+            extra_audits=group_audit,
+        )
+        assert group_committed(w, route, group_name, archived), "the retries left the group alone"
     else:
-        assert pool.failures == [] and delta == 0, (statuses, pool.failures, delta)
-        assert statuses["a"] == 201, statuses
+        assert failures == [] and delta == 0, (failures, delta)
+        assert outcome(results["w"]) == OK_REVOKE
+        assert outcome(results["a"]) == OK_AUTHORING_RESPONSE
+        assert after_state["gm_role_live"] is False
+        assert after_state["dungeons"] == 1 and after_state["reservations"] == 1, after_state
 
 
 @pytest.mark.parametrize("route", ("create", "reactivate"))
@@ -319,11 +482,15 @@ def test_t7b_the_two_party_authoring_cycle_with_a_role_revoke_exists_without_any
     """*race*, a **characterization** (T-7b, the control of the characterization above): keyed authoring parked after its
     reservation, and the revoke of the author's role by an owner. The revoke locks the author's row and its own, then wants the
     campaign `FOR UPDATE`, which the author's `KEY SHARE` blocks; released, the author wants the row the revoke holds. Exactly one
-    40P01, **with no S5-E5 route in the schedule**: the deferred DEF-019 cycle (plan 6.29, CL-E10-1), pre-existing at `0edb94d`."""
+    40P01 **with no S5-E5 route in the schedule**, on a cycle-edge statement, either request possibly the victim (not pinned): the
+    deferred DEF-019 cycle (plan 6.29, CL-E10-1), pre-existing at `0edb94d`, not fixed. The same exact contract as T-7: the
+    victim's 500, the winner's committed state, the loser's absent business / audit / reservation changes, the loser's retry."""
+    author_name, author_key = f"T7b dungeon {uuid.uuid4().hex[:8]}", str(uuid.uuid4())
     admin = w.engine
+    before_state = t7_state(w, name=author_name, key=author_key)
     before = deadlocks_now(admin)
     with NthGate(pool.engine, AUTHORING_WORLD) as agate:
-        a = run_in_thread("a", lambda: author_request(pool, w))
+        a = run_in_thread("a", lambda: keyed_author(pool, w, author_name, author_key))
         assert agate.reached.wait(WAIT_SECONDS), "SETUP: the author never reached its world lock"
         assert agate.pid is not None
         wreq = run_in_thread(
@@ -337,10 +504,25 @@ def test_t7b_the_two_party_authoring_cycle_with_a_role_revoke_exists_without_any
             what="the revoke waiting for the campaign behind the author",
         )
         agate.release()
-        results = {"a": finish(a, "a finishes"), "w": finish(wreq, "w finishes")}
+        author_response = finish(a, "a finishes")
+        revoke_response = finish(wreq, "w finishes")
     delta = settled_deadlock_delta(admin, pool, before)
-    assert len(pool.failures) == 1 and pool.failures[0][0] == "40P01", pool.failures
-    assert delta == 1 and sorted(code(r) for r in results.values()).count(500) == 1
+    failures = list(pool.failures)
+    after_state = t7_state(w, name=author_name, key=author_key)
+    assert_authoring_revoke_cycle(
+        w,
+        pool,
+        name=author_name,
+        key=author_key,
+        revoker=w.owner,
+        before=before_state,
+        after=after_state,
+        failures=failures,
+        delta=delta,
+        author_response=author_response,
+        revoke_response=revoke_response,
+        extra_audits={},
+    )
 
 
 # =====================================================================================================
