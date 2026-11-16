@@ -34,8 +34,6 @@ from tests.database.test_r01_s3_authoring_routes import (  # noqa: F401 - fixtur
 )
 from tests.database.test_r01_s5e2_authoring_transfer_cycles import (
     AUTHORING_WORLD,
-    dungeons_named,
-    reservations_for,
     victim_from,
 )
 from tests.database.test_r01_s5e2_lock_order import (  # noqa: F401 - fixture by name
@@ -176,10 +174,37 @@ def test_t5_the_three_party_schedule_is_clean_with_each_group_route_as_the_group
 # clean" expectation is replaced by (1) group create / reactivate introduce no cycle (T-7a) and (2) the independent DEF-019
 # authoring/revoke cycle stays *precisely characterized* (T-7, T-7b), not fixed. This does not approve a new cycle, close
 # DEF-019 or lift its before-A6 / R01-closure requirement.
+#
+# Every snapshot below is scoped to this test's own actor, idempotency key, role row, entity name and group; none counts a table
+# or the audit log globally.
 
 OK_REVOKE = (200, None)
 OK_AUTHORING_RESPONSE = (201, None)
 INTERNAL_ERROR = (500, "internal_error")
+#: The current-authority refusal of the author's retry once the revoke committed (its `gm` role is gone; 403 `forbidden`).
+AUTHOR_REFUSED = (403, "forbidden")
+#: The audit rows a successful keyed `create_dungeon` writes: one, created, naming the entity, `name` the only initial field
+#: (summary, danger level and parent are null and so omitted; the name is a redacted content field).
+CREATE_COMMAND = "create_dungeon"
+REVOKE_COMMAND = "revoke_membership_role"
+GROUP_COMMANDS = {
+    "create": "create_access_group",
+    "reactivate": "reactivate_access_group",
+}
+ALL_GROUP_COMMANDS = (
+    "create_access_group",
+    "update_access_group",
+    "deactivate_access_group",
+    "reactivate_access_group",
+    "add_access_group_member",
+    "remove_access_group_member",
+)
+
+_AUDIT_COLUMNS = (
+    "SELECT cl.command_name, ca.code AS action, cl.schema_name, cl.table_name, cl.record_id, cl.entity_id, "
+    "cl.world_id, cl.actor_user_id, cl.source_id, cl.reason, cl.changed_fields "
+    "FROM audit.change_log cl JOIN audit.change_actions ca ON ca.change_action_id = cl.change_action_id "
+)
 
 
 def outcome(response: Any) -> tuple[int, str | None]:
@@ -197,25 +222,254 @@ def keyed_author(pool: Pool, w: World, name: str, key: str) -> Any:
     )
 
 
-def t7_state(w: World, *, name: str, key: str) -> dict[str, Any]:
-    """The committed state the cycle's requests can change, read on the admin engine (nothing is cleaned before it is read)."""
-    audits = rows(
-        w.engine,
-        "SELECT command_name, count(*) AS n FROM audit.change_log WHERE world_id = :w GROUP BY command_name",
+def author_rows(w: World, *, name: str, key: str) -> dict[str, Any]:
+    """Every row the keyed `create_dungeon` request owns, scoped to this author (`w.gm_user`), this key and this name: the entity
+    and its dungeon-specific rows, its provenance source, its revision, its audit rows and its reservation/receipt."""
+    e = w.engine
+    entities = rows(
+        e,
+        "SELECT e.entity_id, et.code AS entity_type, cs.code AS canon_status, ls.code AS lifecycle_status, "
+        "e.created_by_user_id, e.source_id, e.row_version, e.summary, e.canonical_name FROM core.entities e "
+        "JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id "
+        "JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id "
+        "JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = e.lifecycle_status_id "
+        "WHERE e.world_id = :w AND e.canonical_name = :n ORDER BY e.entity_id",
         w=w.world_id,
+        n=name,
+    )
+    ids = [r["entity_id"] for r in entities]
+    return {
+        "entities": entities,
+        "locations": rows(
+            e,
+            "SELECT location_id, parent_location_id FROM world.locations WHERE location_id = ANY(:i) ORDER BY 1",
+            i=ids,
+        ),
+        "dungeons": rows(
+            e,
+            "SELECT dungeon_id, danger_level FROM world.dungeons WHERE dungeon_id = ANY(:i) ORDER BY 1",
+            i=ids,
+        ),
+        "revisions": rows(
+            e,
+            "SELECT entity_id, world_id, row_version, revision_kind, created_by_user_id FROM core.entity_revisions "
+            "WHERE entity_id = ANY(:i) ORDER BY entity_id, row_version",
+            i=ids,
+        ),
+        "sources": rows(
+            e,
+            "SELECT s.source_id, st.code AS source_type, s.title, s.world_id FROM core.sources s "
+            "JOIN core.source_types st ON st.source_type_id = s.source_type_id "
+            "WHERE s.world_id = :w AND s.created_by_user_id = :u ORDER BY s.source_id",
+            w=w.world_id,
+            u=w.gm_user,
+        ),
+        "audits": rows(
+            e,
+            _AUDIT_COLUMNS
+            + "WHERE cl.world_id = :w AND cl.actor_user_id = :u AND cl.command_name = :c "
+            "ORDER BY cl.change_log_id",
+            w=w.world_id,
+            u=w.gm_user,
+            c=CREATE_COMMAND,
+        ),
+        "receipts": rows(
+            e,
+            "SELECT idempotency_key, response_status_code, response_body, completed_at IS NOT NULL AS completed, "
+            "request_fingerprint IS NOT NULL AS fingerprinted FROM security.idempotent_requests "
+            "WHERE actor_user_id = :u AND campaign_id = :c AND idempotency_key = :k",
+            u=w.gm_user,
+            c=w.campaign_id,
+            k=key,
+        ),
+    }
+
+
+def revoke_rows(w: World, *, revoker: uuid.UUID) -> dict[str, Any]:
+    """Every row the revoke of `w.gm_role` owns: the whole role row, the delegations that role anchors, and the revoke audit rows
+    naming it."""
+    e = w.engine
+    return {
+        "role_row": rows(
+            e,
+            "SELECT to_jsonb(mr) AS r FROM security.membership_roles mr WHERE mr.membership_role_id = :r",
+            r=w.gm_role,
+        )[0]["r"],
+        "delegations": rows(
+            e,
+            "SELECT to_jsonb(d) AS r FROM security.character_reveal_delegations d "
+            "WHERE d.gm_membership_role_id = :r ORDER BY d.character_reveal_delegation_id",
+            r=w.gm_role,
+        ),
+        "audits": rows(
+            e,
+            _AUDIT_COLUMNS
+            + "WHERE cl.world_id = :w AND cl.record_id = :r AND cl.command_name = :c "
+            "ORDER BY cl.change_log_id",
+            w=w.world_id,
+            r=w.gm_role,
+            c=REVOKE_COMMAND,
+        ),
+        "revoker": revoker,
+    }
+
+
+def group_rows(
+    w: World, *, actor: uuid.UUID, name: str | None, archived: uuid.UUID | None
+) -> dict[str, Any]:
+    """The group operation's own rows, scoped to the actor and the group (by `name` for a create, by id for a reactivate) and
+    every access-group audit row of that actor in the world. With neither a name nor an id (the no-group control) the groups are
+    every group of this test's campaign."""
+    e = w.engine
+    groups = rows(
+        e,
+        "SELECT ag.access_group_id, ag.name, ls.code AS lifecycle_status FROM security.access_groups ag "
+        "JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = ag.lifecycle_status_id "
+        "WHERE ag.campaign_id = :c AND (CAST(:n AS text) IS NULL AND CAST(:g AS uuid) IS NULL "
+        "OR ag.name = :n OR ag.access_group_id = :g) ORDER BY ag.access_group_id",
+        c=w.campaign_id,
+        n=name,
+        g=archived,
     )
     return {
-        "gm_role_live": bool(
-            rows(
-                w.engine,
-                "SELECT revoked_at IS NULL AS live FROM security.membership_roles WHERE membership_role_id = :r",
-                r=w.gm_role,
-            )[0]["live"]
+        "groups": groups,
+        "audits": rows(
+            e,
+            _AUDIT_COLUMNS
+            + "WHERE cl.world_id = :w AND cl.actor_user_id = :u AND cl.command_name = ANY(:c) "
+            "ORDER BY cl.change_log_id",
+            w=w.world_id,
+            u=actor,
+            c=list(ALL_GROUP_COMMANDS),
         ),
-        "dungeons": dungeons_named(w, name),
-        "reservations": reservations_for(w, key),
-        "audits": {r["command_name"]: int(r["n"]) for r in audits},
     }
+
+
+def assert_author_won(
+    w: World, *, name: str, key: str, state: dict[str, Any], summary: str
+) -> uuid.UUID:
+    """The complete committed result of one successful `create_dungeon`: entity, dungeon rows, source, revision, the single
+    `create_dungeon` audit row and the completed reservation. Returns the entity id."""
+    assert len(state["entities"]) == 1, f"one entity: {summary}"
+    ent = state["entities"][0]
+    eid = ent["entity_id"]
+    assert {k: ent[k] for k in ent if k != "entity_id"} == {
+        "entity_type": "dungeon",
+        "canon_status": "draft",
+        "lifecycle_status": "active",
+        "created_by_user_id": w.gm_user,
+        "source_id": ent["source_id"],
+        "row_version": ent["row_version"],
+        "summary": None,
+        "canonical_name": name,
+    }, f"entity: {summary}"
+    assert state["locations"] == [{"location_id": eid, "parent_location_id": None}], summary
+    assert state["dungeons"] == [{"dungeon_id": eid, "danger_level": None}], summary
+    assert state["revisions"] == [
+        {
+            "entity_id": eid,
+            "world_id": w.world_id,
+            "row_version": ent["row_version"],
+            "revision_kind": "created",
+            "created_by_user_id": w.gm_user,
+        }
+    ], f"revision: {summary}"
+    assert [
+        (s["source_id"], s["source_type"], s["title"], s["world_id"]) for s in state["sources"]
+    ] == [(ent["source_id"], "gm_entry", "GM entry", w.world_id)], f"source: {summary}"
+    assert len(state["audits"]) == 1, f"exactly one create_dungeon audit row: {summary}"
+    audit = state["audits"][0]
+    assert {k: audit[k] for k in audit if k != "changed_fields"} == {
+        "command_name": CREATE_COMMAND,
+        "action": "created",
+        "schema_name": "core",
+        "table_name": "entities",
+        "record_id": eid,
+        "entity_id": eid,
+        "world_id": w.world_id,
+        "actor_user_id": w.gm_user,
+        "source_id": ent["source_id"],
+        "reason": None,
+    }, f"audit: {summary}"
+    assert set(audit["changed_fields"]) == {"name"}, f"audit payload fields: {summary}"
+    assert len(state["receipts"]) == 1, f"one reservation: {summary}"
+    receipt = state["receipts"][0]
+    assert (
+        receipt["idempotency_key"],
+        receipt["response_status_code"],
+        receipt["completed"],
+        receipt["fingerprinted"],
+    ) == (key, 201, True, True), f"receipt: {summary}"
+    assert str(eid) in {str(v) for v in receipt["response_body"].values()}, (
+        f"receipt body: {summary}"
+    )
+    return eid  # type: ignore[no-any-return]
+
+
+def assert_author_absent(state: dict[str, Any], before: dict[str, Any], summary: str) -> None:
+    """The author's transaction left nothing: no entity or dungeon-specific row, no revision, no source beyond the pre-existing
+    ones, no `create_dungeon` audit row, no reservation or receipt."""
+    for table in ("entities", "locations", "dungeons", "revisions", "audits", "receipts"):
+        assert state[table] == [], f"author {table} should be absent: {summary}"
+    assert state["sources"] == before["sources"], f"author source rows changed: {summary}"
+
+
+def assert_revoke_won(
+    w: World, *, revoker: uuid.UUID, before: dict[str, Any], state: dict[str, Any], summary: str
+) -> None:
+    """The committed revoke: only the role's `revoked_at` changed (null before, set now), the delegations anchored on it are as
+    before, and there is exactly one `revoke_membership_role` audit row naming it, by the revoker."""
+    role, was = state["role_row"], before["role_row"]
+    assert was["revoked_at"] is None and role["revoked_at"] is not None, f"revoked_at: {summary}"
+    assert {k: v for k, v in role.items() if k != "revoked_at"} == {
+        k: v for k, v in was.items() if k != "revoked_at"
+    }, f"the revoke changed more than revoked_at: {summary}"
+    assert state["delegations"] == before["delegations"], f"delegations: {summary}"
+    assert len(state["audits"]) == 1, f"exactly one revoke audit row: {summary}"
+    audit = state["audits"][0]
+    assert {k: audit[k] for k in audit if k != "changed_fields"} == {
+        "command_name": REVOKE_COMMAND,
+        "action": audit["action"],
+        "schema_name": "security",
+        "table_name": "membership_roles",
+        "record_id": w.gm_role,
+        "entity_id": None,
+        "world_id": w.world_id,
+        "actor_user_id": revoker,
+        "source_id": None,
+        "reason": None,
+    }, f"revoke audit: {summary}"
+
+
+def assert_revoke_absent(before: dict[str, Any], state: dict[str, Any], summary: str) -> None:
+    """The aborted revoke left nothing: the role row byte-for-byte as before, no delegation touched, no revoke audit row."""
+    assert state["role_row"] == before["role_row"], (
+        f"the aborted revoke changed the role row: {summary}"
+    )
+    assert state["delegations"] == before["delegations"], f"delegations: {summary}"
+    assert state["audits"] == [], f"the aborted revoke left an audit row: {summary}"
+
+
+def assert_group_effects(
+    state: dict[str, Any], before: dict[str, Any], expect: dict[str, Any] | None, summary: str
+) -> None:
+    """`expect` is None for the no-group control: nothing group-shaped changed. Otherwise exactly one group row in the expected
+    lifecycle status and exactly one audit row of the expected command naming it, by the actor."""
+    if expect is None:
+        assert state == before, f"a group effect in a schedule without a group route: {summary}"
+        assert state["audits"] == [], summary
+        return
+    assert [g["lifecycle_status"] for g in state["groups"]] == [expect["status"]], (
+        f"group: {summary}"
+    )
+    gid = state["groups"][0]["access_group_id"]
+    assert len(state["audits"]) == 1, f"one group audit row: {summary}"
+    audit = state["audits"][0]
+    assert (audit["command_name"], audit["record_id"], audit["actor_user_id"]) == (
+        expect["command"],
+        gid,
+        expect["actor"],
+    ), f"group audit: {summary}"
 
 
 def assert_authoring_revoke_cycle(
@@ -225,88 +479,68 @@ def assert_authoring_revoke_cycle(
     name: str,
     key: str,
     revoker: uuid.UUID,
-    before: dict[str, Any],
-    after: dict[str, Any],
+    author_before: dict[str, Any],
+    revoke_before: dict[str, Any],
+    group_before: dict[str, Any],
+    group_expect: dict[str, Any] | None,
+    group_probe: Callable[[], dict[str, Any]],
     failures: list[tuple[str | None, str]],
     delta: int,
     author_response: Any,
     revoke_response: Any,
-    extra_audits: dict[str, int],
 ) -> str:
     """The exact contract of the deferred authoring/revoke cycle. PostgreSQL may pick either request as the victim (the choice
     is *not* pinned); whichever it picks: one 40P01 on a cycle-edge statement (the deadlock counter corroborates, it is not the
-    evidence), the victim a 500 `internal_error`, the winner's committed state exact, the loser's business, audit and reservation
-    changes absent, and the loser's retry as stated. `extra_audits`: audit rows other requests of the schedule legitimately added
-    (the group route). Returns the victim ("author" or "revoke")."""
-    summary = f"failures={failures} delta={delta} before={before} after={after}"
+    evidence), the victim a 500 `internal_error`, the winner's complete committed rows exact, the loser's rows (business, audit,
+    reservation/receipt) entirely absent, the group operation's rows exact (or absent for the control) and the loser's retry as
+    stated, re-reading every row afterwards. Returns the victim ("author" or "revoke")."""
+    author_state = author_rows(w, name=name, key=key)
+    revoke_state = revoke_rows(w, revoker=revoker)
+    group_state = group_probe()
+    summary = f"failures={failures} delta={delta}"
     victim = "revoke" if victim_from(failures, summary) == "writer" else "author"
     assert delta == 1, summary
-    gained = {
-        c: n - before["audits"].get(c, 0)
-        for c, n in after["audits"].items()
-        if n != before["audits"].get(c, 0)
-    }
-    rest = {c: n for c, n in gained.items() if c not in extra_audits}
-    assert all(gained.get(c) == n for c, n in extra_audits.items()), f"group audit: {summary}"
+    assert_group_effects(group_state, group_before, group_expect, summary)
     if victim == "author":
         assert outcome(author_response) == INTERNAL_ERROR, summary
         assert outcome(revoke_response) == OK_REVOKE, summary
-        assert after["gm_role_live"] is False, summary
-        assert after["dungeons"] == 0 and after["reservations"] == 0, (
-            f"the author left rows: {summary}"
+        assert_revoke_won(
+            w, revoker=revoker, before=revoke_before, state=revoke_state, summary=summary
         )
-        assert rest == {"revoke_membership_role": 1}, f"audit: {summary}"
+        assert_author_absent(author_state, author_before, summary)
     else:
         assert outcome(revoke_response) == INTERNAL_ERROR, summary
         assert outcome(author_response) == OK_AUTHORING_RESPONSE, summary
-        assert after["gm_role_live"] is True, f"the aborted revoke changed a role row: {summary}"
-        assert after["dungeons"] == 1 and after["reservations"] == 1, summary
-        assert "revoke_membership_role" not in rest, (
-            f"the aborted revoke left an audit row: {summary}"
-        )
-        assert sum(rest.values()) == 1, f"audit (the author's one row): {summary}"
+        assert_author_won(w, name=name, key=key, state=author_state, summary=summary)
+        assert_revoke_absent(revoke_before, revoke_state, summary)
     # the loser's retry, on a fresh pool, with the authoring key reused where the author lost
     pool.failures.clear()
     pool.engine.dispose()
     if victim == "author":
         again = keyed_author(pool, w, name, key)
-        assert code(again) == 403, f"the retry executes (not a replay) and is refused: {again.text}"
-        assert dungeons_named(w, name) == 0
+        assert outcome(again) == AUTHOR_REFUSED, (
+            f"the retry executes (not a replay) and is refused: {again.text}"
+        )
+        assert pool.failures == [], f"the retry failed in the driver: {pool.failures}"
+        # re-read after the retry: still nothing of the author's (no reservation, no entity, no create_dungeon audit), and
+        # the winning revoke's role and audit state is exactly as it was
+        assert_author_absent(author_rows(w, name=name, key=key), author_before, "after the retry")
+        assert revoke_rows(w, revoker=revoker) == revoke_state, "the winning revoke's rows changed"
     else:
         again = post(pool, revoker, f"{w.base}/memberships/roles/{w.gm_role}/revoke", {})
         assert outcome(again) == OK_REVOKE, again.text
-        assert t7_state(w, name=name, key=key)["gm_role_live"] is False
-        assert dungeons_named(w, name) == 1, (
-            "the revoke retry did not disturb the author's committed row"
+        assert pool.failures == [], f"the retry failed in the driver: {pool.failures}"
+        after_revoke = revoke_rows(w, revoker=revoker)
+        assert_revoke_won(
+            w, revoker=revoker, before=revoke_before, state=after_revoke, summary="after the retry"
         )
-    assert pool.failures == [], f"the retry failed in the driver: {pool.failures}"
+        # the winning author's rows are unchanged by the retry
+        assert author_rows(w, name=name, key=key) == author_state, (
+            "the revoke retry disturbed the author's rows"
+        )
+    assert_group_effects(group_probe(), group_before, group_expect, "after the retry")
+    assert group_probe() == group_state, "the retry changed the group operation's rows"
     return victim
-
-
-def group_committed(w: World, route: str, label: str, archived: uuid.UUID) -> bool:
-    """The group route's own committed state, checked on its own: create left one group of that name, reactivate made the
-    archived group active."""
-    if route == "create":
-        return (
-            int(
-                rows(
-                    w.engine,
-                    "SELECT count(*) AS n FROM security.access_groups WHERE campaign_id = :c AND name = :n",
-                    c=w.campaign_id,
-                    n=label,
-                )[0]["n"]
-            )
-            == 1
-        )
-    return (
-        rows(
-            w.engine,
-            "SELECT ls.code AS code FROM security.access_groups ag JOIN core.lifecycle_statuses ls "
-            "ON ls.lifecycle_status_id = ag.lifecycle_status_id WHERE ag.access_group_id = :g",
-            g=archived,
-        )[0]["code"]
-        == "active"
-    )
 
 
 @pytest.mark.parametrize("order", ("m_row_first", "y_rows_first"))
@@ -324,10 +558,13 @@ def test_characterized_t7_the_independent_authoring_revoke_cycle_is_exact_with_a
     for the row the revoke holds: the **two-party** DEF-019 cycle (keyed authoring against a role writer, CL-E10-1), pre-existing,
     **deferred and not fixed**. CA-1 is shown by `test_t7a_...` (create / reactivate never wait for the author). The cycle must be
     exactly: one 40P01 on a cycle-edge statement (the revoke's campaign `FOR UPDATE`, or the author's role / membership wait;
-    **either may be PostgreSQL's victim, the choice is not pinned**), the victim a 500 `internal_error`, the winner's state
-    committed, the loser's business / audit / reservation changes absent, the group route's own change committed, the loser's retry
-    succeeding (the author's, with its key reused, is refused 403 when the revoke won). `y_rows_first` is the control (V waits at
-    Y's rows first and holds nothing): clean, no driver exception, deadlock counter unmoved."""
+    **either may be PostgreSQL's victim, the choice is not pinned**), the victim a 500 `internal_error`, the winner's complete rows
+    committed (the author's entity, dungeon rows, source, revision, `create_dungeon` audit and completed reservation; or the
+    revoke's closed role row and audit row), the loser's rows entirely absent, the group route's own rows committed and unchanged
+    by the retry, and the loser's retry: the revoke's succeeds (200), the author's, with its key reused, is refused with the exact
+    current-authority error (403 `forbidden`) and creates nothing. `y_rows_first` is the control (V waits at Y's rows first and
+    holds nothing): clean, no driver exception, deadlock counter unmoved, every row of the author, the revoke and the group
+    committed."""
     m_first = order == "m_row_first"
     cast = cast_two(
         w,
@@ -353,8 +590,23 @@ def test_characterized_t7_the_independent_authoring_revoke_cycle_is_exact_with_a
             return post(pool, y_user, f"{w.base}/access-groups", {"name": group_name})
         return post(pool, y_user, f"{w.base}/access-groups/{archived}/reactivate", {})
 
+    def group_probe() -> dict[str, Any]:
+        return group_rows(
+            w,
+            actor=y_user,
+            name=group_name if route == "create" else None,
+            archived=archived if route == "reactivate" else None,
+        )
+
+    group_expect = {
+        "status": "active",
+        "command": GROUP_COMMANDS[route],
+        "actor": y_user,
+    }
     admin = w.engine
-    before_state = t7_state(w, name=author_name, key=author_key)
+    author_before = author_rows(w, name=author_name, key=author_key)
+    revoke_before = revoke_rows(w, revoker=y_user)
+    group_before = group_probe()
     before = deadlocks_now(admin)
     results: dict[str, Any] = {}
     # both gates are registered before any request starts: a plan refuses a change of the engine's listeners while it is open
@@ -399,13 +651,8 @@ def test_characterized_t7_the_independent_authoring_revoke_cycle_is_exact_with_a
     delta = settled_deadlock_delta(admin, pool, before)
     # the evidence is captured here, before any cleanup or retry
     failures = list(pool.failures)
-    after_state = t7_state(w, name=author_name, key=author_key)
     y_expected = (201 if route == "create" else 200, None)
     assert outcome(results["y"]) == y_expected, (results["y"].text, failures)
-    assert group_committed(w, route, group_name, archived), (
-        "the group route's own change is committed"
-    )
-    group_audit = {"create_access_group" if route == "create" else "reactivate_access_group": 1}
     if m_first:
         assert_authoring_revoke_cycle(
             w,
@@ -413,21 +660,36 @@ def test_characterized_t7_the_independent_authoring_revoke_cycle_is_exact_with_a
             name=author_name,
             key=author_key,
             revoker=y_user,
-            before=before_state,
-            after=after_state,
+            author_before=author_before,
+            revoke_before=revoke_before,
+            group_before=group_before,
+            group_expect=group_expect,
+            group_probe=group_probe,
             failures=failures,
             delta=delta,
             author_response=results["a"],
             revoke_response=results["w"],
-            extra_audits=group_audit,
         )
-        assert group_committed(w, route, group_name, archived), "the retries left the group alone"
     else:
-        assert failures == [] and delta == 0, (failures, delta)
+        summary = f"failures={failures} delta={delta}"
+        assert failures == [] and delta == 0, summary
         assert outcome(results["w"]) == OK_REVOKE
         assert outcome(results["a"]) == OK_AUTHORING_RESPONSE
-        assert after_state["gm_role_live"] is False
-        assert after_state["dungeons"] == 1 and after_state["reservations"] == 1, after_state
+        assert_author_won(
+            w,
+            name=author_name,
+            key=author_key,
+            state=author_rows(w, name=author_name, key=author_key),
+            summary=summary,
+        )
+        assert_revoke_won(
+            w,
+            revoker=y_user,
+            before=revoke_before,
+            state=revoke_rows(w, revoker=y_user),
+            summary=summary,
+        )
+        assert_group_effects(group_probe(), group_before, group_expect, summary)
 
 
 @pytest.mark.parametrize("route", ("create", "reactivate"))
@@ -484,10 +746,17 @@ def test_t7b_the_two_party_authoring_cycle_with_a_role_revoke_exists_without_any
     campaign `FOR UPDATE`, which the author's `KEY SHARE` blocks; released, the author wants the row the revoke holds. Exactly one
     40P01 **with no S5-E5 route in the schedule**, on a cycle-edge statement, either request possibly the victim (not pinned): the
     deferred DEF-019 cycle (plan 6.29, CL-E10-1), pre-existing at `0edb94d`, not fixed. The same exact contract as T-7: the
-    victim's 500, the winner's committed state, the loser's absent business / audit / reservation changes, the loser's retry."""
+    victim's 500, the winner's complete rows, the loser's absent rows, the loser's retry (with the exact refusal for the author);
+    and no group operation effect at all (no access-group row change, no access-group audit row of the actor)."""
     author_name, author_key = f"T7b dungeon {uuid.uuid4().hex[:8]}", str(uuid.uuid4())
     admin = w.engine
-    before_state = t7_state(w, name=author_name, key=author_key)
+
+    def group_probe() -> dict[str, Any]:
+        return group_rows(w, actor=w.owner, name=None, archived=None)
+
+    author_before = author_rows(w, name=author_name, key=author_key)
+    revoke_before = revoke_rows(w, revoker=w.owner)
+    group_before = group_probe()
     before = deadlocks_now(admin)
     with NthGate(pool.engine, AUTHORING_WORLD) as agate:
         a = run_in_thread("a", lambda: keyed_author(pool, w, author_name, author_key))
@@ -508,20 +777,21 @@ def test_t7b_the_two_party_authoring_cycle_with_a_role_revoke_exists_without_any
         revoke_response = finish(wreq, "w finishes")
     delta = settled_deadlock_delta(admin, pool, before)
     failures = list(pool.failures)
-    after_state = t7_state(w, name=author_name, key=author_key)
     assert_authoring_revoke_cycle(
         w,
         pool,
         name=author_name,
         key=author_key,
         revoker=w.owner,
-        before=before_state,
-        after=after_state,
+        author_before=author_before,
+        revoke_before=revoke_before,
+        group_before=group_before,
+        group_expect=None,
+        group_probe=group_probe,
         failures=failures,
         delta=delta,
         author_response=author_response,
         revoke_response=revoke_response,
-        extra_audits={},
     )
 
 
