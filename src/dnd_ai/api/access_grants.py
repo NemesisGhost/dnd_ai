@@ -75,23 +75,31 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import Connection
 
-from dnd_ai.commands.access_grants import (
-    change_character_relationship,
-    create_resource_grant,
-    grant_character_relationship,
-    revoke_character_relationship,
-    revoke_resource_grant,
+from dnd_ai.commands._pre_write_steps import receipt_params
+from dnd_ai.commands.access_grant_plans import (
+    GRANT_RECEIPT,
+    prepare_change_relationship,
+    prepare_create_grant,
+    prepare_grant_relationship,
+    prepare_revoke_grant,
+    prepare_revoke_relationship,
+    write_change_relationship,
+    write_create_grant,
+    write_grant_relationship,
+    write_revoke_grant,
+    write_revoke_relationship,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 
-from ._shared import timeline_world_id
 from .access import require_campaign_capability
-from .audit import record_change_log
+from .campaigns import _begin_lifecycle_request
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
-from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["access-grants"])
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 # Access administration is distinct from canon mutation — see this
 # module's docstring for why every route here requires it instead of
@@ -104,8 +112,20 @@ _REVOKE_RELATIONSHIP_COMMAND_NAME = "revoke_character_relationship"
 _CREATE_RESOURCE_GRANT_COMMAND_NAME = "create_resource_grant"
 _REVOKE_RESOURCE_GRANT_COMMAND_NAME = "revoke_resource_grant"
 
-_CREATED_CHANGE_ACTION = "created"
-_UPDATED_CHANGE_ACTION = "updated"
+
+def _complete_receipt_with(
+    connection: Connection,
+    plan: AuthorizationPlan,
+    reservation_id: uuid.UUID | None,
+    status: int,
+    response: BaseModel,
+) -> None:
+    if reservation_id is not None:
+        plan.execute(
+            connection,
+            GRANT_RECEIPT,
+            receipt_params(reservation_id, status, response.model_dump(mode="json")),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -196,68 +216,53 @@ def grant_character_relationship_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> CharacterRelationshipResponse:
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {
-            "campaign_membership_id": str(campaign_membership_id),
-            **body.model_dump(mode="json"),
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_GRANT_RELATIONSHIP_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return CharacterRelationshipResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = grant_character_relationship(
-        connection,
-        campaign_membership_id=campaign_membership_id,
-        character_id=body.character_id,
-        relationship_type_code=body.relationship_type_code,
-        campaign_id=campaign_id,
-        expected_world_id=timeline_world_id(connection, access.timeline_id),
-        granted_by_membership_id=access.campaign_membership_id,
-        timeline_id=body.timeline_id,
-        effective_from_world_time_id=body.effective_from_world_time_id,
-        effective_to_world_time_id=body.effective_to_world_time_id,
-    )
-
-    record_change_log(
-        connection,
-        change_action_code=_CREATED_CHANGE_ACTION,
-        schema_name="security",
-        table_name="membership_character_relationships",
-        record_id=result.membership_character_relationship_id,
-        entity_id=None,
-        world_id=timeline_world_id(connection, access.timeline_id),
-        actor_user_id=access.user_id,
+) -> Any:
+    """A keyed-optional pre-write route (R01 S5-E4, `dnd_ai.commands.access_grant_plans`). The eligibility rules
+    and their errors are the command's own; authority is judged at `finalize`, before the insert (a self-grant is
+    judged on the pre-command authority)."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
+        connection=connection,
+        access=access,
+        idempotency_key=idempotency_key,
         correlation_id=correlation_id,
         command_name=_GRANT_RELATIONSHIP_COMMAND_NAME,
-        event_id=None,
+        payload={
+            "campaign_membership_id": str(campaign_membership_id),
+            **body.model_dump(mode="json"),
+        },
     )
-
-    response = CharacterRelationshipResponse(
-        membership_character_relationship_id=result.membership_character_relationship_id
+    if replay is not None:
+        return replay
+    prepared = prepare_grant_relationship(
+        connection,
+        plan,
+        campaign_id=campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        target_membership_id=campaign_membership_id,
+        character_id=body.character_id,
+        relationship_type_code=body.relationship_type_code,
+        timeline_id=body.timeline_id,
+        time_from_id=body.effective_from_world_time_id,
+        time_to_id=body.effective_to_world_time_id,
+        reservation_id=reservation_id,
     )
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=201,
-            response_body=response.model_dump(mode="json"),
-        )
-
+    plan.finalize(connection)
+    new_id = write_grant_relationship(
+        connection,
+        plan,
+        prepared,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        correlation_id=correlation_id,
+    )
+    response = CharacterRelationshipResponse(membership_character_relationship_id=new_id)
+    _complete_receipt_with(connection, plan, reservation_id, 201, response)
     return response
 
 
@@ -273,88 +278,54 @@ def change_character_relationship_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> CharacterRelationshipResponse:
-    """Changes one existing, currently-active character-relationship
-    assignment to a different relationship type — the portal Access page's
-    "change relationship type" action. Self-change is permitted (no
-    special-case check here or in the command): a character relationship
-    never carries `access.manage`, so there is no retention invariant for
-    this route to protect, unlike `change_membership_role_endpoint`. 201,
-    not 200: this both revokes the old assignment and creates a new
-    `security.membership_character_relationships` row, matching `grant_
-    character_relationship_endpoint`'s own status code for "a new row now
-    exists," even though an existing row also changed.
-
-    `expected_world_id` (checkpoint-4 review correction) is resolved
-    server-side from the caller's own already-authorized campaign timeline
-    (`timeline_world_id(connection, access.timeline_id)`), exactly like
-    `grant_character_relationship_endpoint`'s identical argument — never
-    accepted from the request body, so a caller can never widen the world
-    the command checks the relationship's character against."""
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {
-            "membership_character_relationship_id": str(membership_character_relationship_id),
-            **body.model_dump(mode="json"),
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_CHANGE_RELATIONSHIP_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return CharacterRelationshipResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = change_character_relationship(
-        connection,
-        membership_character_relationship_id=membership_character_relationship_id,
-        campaign_id=campaign_id,
-        expected_world_id=timeline_world_id(connection, access.timeline_id),
-        new_relationship_type_id=body.new_relationship_type_id,
-        granted_by_membership_id=access.campaign_membership_id,
-    )
-
-    record_change_log(
-        connection,
-        change_action_code=_UPDATED_CHANGE_ACTION,
-        schema_name="security",
-        table_name="membership_character_relationships",
-        record_id=result.membership_character_relationship_id,
-        entity_id=None,
-        world_id=timeline_world_id(connection, access.timeline_id),
-        actor_user_id=access.user_id,
+) -> Any:
+    """Changes one existing, currently-active character-relationship assignment to a different relationship type —
+    the portal Access page's "change relationship type" action; a keyed-optional pre-write route (R01 S5-E4,
+    `dnd_ai.commands.access_grant_plans`). Self-change is permitted (a character relationship never carries
+    `access.manage`, so there is no retention invariant to protect). 201, not 200: this both revokes the old
+    assignment and creates a new row. The world the character is checked against is the campaign's own, resolved
+    server-side, never accepted from the request body. The owning membership is locked **before** the relationship
+    row (the order every end of a membership takes), which is what removes the change-versus-end deadlock."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
+        connection=connection,
+        access=access,
+        idempotency_key=idempotency_key,
         correlation_id=correlation_id,
         command_name=_CHANGE_RELATIONSHIP_COMMAND_NAME,
-        event_id=None,
-        previous_status=result.previous_relationship_type_code,
-        new_status=result.new_relationship_type_code,
-        changed_fields={
-            "previous_membership_character_relationship_id": (
-                str(result.previous_membership_character_relationship_id)
-            ),
+        payload={
+            "membership_character_relationship_id": str(membership_character_relationship_id),
+            **body.model_dump(mode="json"),
         },
     )
-
-    response = CharacterRelationshipResponse(
-        membership_character_relationship_id=result.membership_character_relationship_id
+    if replay is not None:
+        return replay
+    prepared = prepare_change_relationship(
+        connection,
+        plan,
+        campaign_id=campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        relationship_id=membership_character_relationship_id,
+        new_type_id=body.new_relationship_type_id,
+        reservation_id=reservation_id,
     )
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=201,
-            response_body=response.model_dump(mode="json"),
-        )
-
+    plan.finalize(connection)
+    new_id = write_change_relationship(
+        connection,
+        plan,
+        prepared,
+        relationship_id=membership_character_relationship_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        correlation_id=correlation_id,
+    )
+    response = CharacterRelationshipResponse(membership_character_relationship_id=new_id)
+    _complete_receipt_with(connection, plan, reservation_id, 201, response)
     return response
 
 
@@ -369,83 +340,48 @@ def revoke_character_relationship_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> CharacterRelationshipResponse:
-    """Revokes one existing, currently-active character-relationship
-    assignment — the portal Access page's "revoke character relationship"
-    action.
-
-    Response contract: `200`, not the pre-hardening bare `204 No Content` —
-    matching the identical correction `dnd_ai.api.memberships.
-    revoke_membership_role_endpoint` already made (Phase 13E-B checkpoint 2
-    correction). A bare `204`/no-`Idempotency-Key` route relied on `revoke_
-    character_relationship`'s own state-idempotency (a retry against an
-    already-revoked row is a harmless no-op) to cover *state*, but every
-    call — including a plain retry with no key at all — wrote its own
-    `audit.change_log` row unconditionally, so an ordinary network retry
-    could durably record two revocation events for one real revocation.
-    Fixed the same two ways: (1) an `Idempotency-Key` replay returns the
-    original cached response verbatim, never re-running the command at
-    all; (2) even *without* a matching key, the audit write below is now
-    conditioned on `RevokeCharacterRelationshipResult.revoked`, so a second
-    call that lands on an already-revoked row writes no second row. A
-    `CharacterRelationshipResponse` echoing `membership_character_
-    relationship_id` back (reusing the existing grant-relationship response
-    shape) gives `begin_idempotent_request`/`complete_idempotent_request`
-    something to cache, which a bodyless `204` could not."""
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {
-            "membership_character_relationship_id": str(membership_character_relationship_id)
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_REVOKE_RELATIONSHIP_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return CharacterRelationshipResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = revoke_character_relationship(
-        connection,
-        membership_character_relationship_id=membership_character_relationship_id,
-        campaign_id=campaign_id,
+) -> Any:
+    """Revokes one existing, currently-active character-relationship assignment — the portal Access page's
+    "revoke character relationship" action; a keyed-optional pre-write route (R01 S5-E4,
+    `dnd_ai.commands.access_grant_plans`). `200` and the relationship id. An already-revoked assignment is the
+    documented no-op: no write and no audit row (a fresh keyed request still completes its receipt)."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
+        connection=connection,
+        access=access,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        command_name=_REVOKE_RELATIONSHIP_COMMAND_NAME,
+        payload={"membership_character_relationship_id": str(membership_character_relationship_id)},
     )
-
-    if result.revoked:
-        record_change_log(
-            connection,
-            change_action_code=_UPDATED_CHANGE_ACTION,
-            schema_name="security",
-            table_name="membership_character_relationships",
-            record_id=membership_character_relationship_id,
-            entity_id=None,
-            world_id=timeline_world_id(connection, access.timeline_id),
-            actor_user_id=access.user_id,
-            correlation_id=correlation_id,
-            command_name=_REVOKE_RELATIONSHIP_COMMAND_NAME,
-            event_id=None,
-        )
-
+    if replay is not None:
+        return replay
+    prepared = prepare_revoke_relationship(
+        connection,
+        plan,
+        campaign_id=campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        relationship_id=membership_character_relationship_id,
+        reservation_id=reservation_id,
+    )
+    plan.finalize(connection)
+    write_revoke_relationship(
+        connection,
+        plan,
+        prepared,
+        relationship_id=membership_character_relationship_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+    )
     response = CharacterRelationshipResponse(
         membership_character_relationship_id=membership_character_relationship_id
     )
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=200,
-            response_body=response.model_dump(mode="json"),
-        )
-
+    _complete_receipt_with(connection, plan, reservation_id, 200, response)
     return response
 
 
@@ -460,61 +396,64 @@ def create_resource_grant_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> ResourceGrantResponse:
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {
-            "campaign_id": str(campaign_id),
-            **body.model_dump(mode="json"),
-        }
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_CREATE_RESOURCE_GRANT_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return ResourceGrantResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = create_resource_grant(
+) -> Any:
+    """Creates one resource grant (an allow or a deny) for a membership or an access group, on one of the six
+    target kinds; a keyed-optional pre-write route (R01 S5-E4, `dnd_ai.commands.access_grant_plans`). A group
+    grantee's row is the first row the request locks (see that module). The audit row carries the grant's bounded,
+    non-free-form `changed_fields` (never `reason`)."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
+        connection=connection,
+        access=access,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        command_name=_CREATE_RESOURCE_GRANT_COMMAND_NAME,
+        payload={"campaign_id": str(campaign_id), **body.model_dump(mode="json")},
+    )
+    if replay is not None:
+        return replay
+    prepared = prepare_create_grant(
         connection,
+        plan,
         campaign_id=campaign_id,
-        grantee_campaign_membership_id=body.grantee_campaign_membership_id,
-        grantee_access_group_id=body.grantee_access_group_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        grantee_membership_id=body.grantee_campaign_membership_id,
+        grantee_group_id=body.grantee_access_group_id,
+        capability_code=body.capability_code,
+        effect=body.effect,
         character_id=body.character_id,
         entity_id=body.entity_id,
         knowledge_item_id=body.knowledge_item_id,
         quest_id=body.quest_id,
         session_id=body.session_id,
         event_id=body.event_id,
-        capability_code=body.capability_code,
-        effect=body.effect,
-        expected_world_id=timeline_world_id(connection, access.timeline_id),
-        granted_by_membership_id=access.campaign_membership_id,
-        reason=body.reason,
+        reservation_id=reservation_id,
     )
-
+    plan.finalize(connection)
     target_kind, target_id = _resource_grant_target_kind_and_id(body)
-    record_change_log(
+    new_id = write_create_grant(
         connection,
-        change_action_code=_CREATED_CHANGE_ACTION,
-        schema_name="security",
-        table_name="resource_grants",
-        record_id=result.resource_grant_id,
-        entity_id=None,
-        world_id=timeline_world_id(connection, access.timeline_id),
+        plan,
+        prepared,
+        campaign_id=campaign_id,
         actor_user_id=access.user_id,
-        correlation_id=correlation_id,
-        command_name=_CREATE_RESOURCE_GRANT_COMMAND_NAME,
-        event_id=None,
-        changed_fields={
+        actor_membership_id=access.campaign_membership_id,
+        grantee_membership_id=body.grantee_campaign_membership_id,
+        grantee_group_id=body.grantee_access_group_id,
+        effect=body.effect,
+        character_id=body.character_id,
+        entity_id=body.entity_id,
+        knowledge_item_id=body.knowledge_item_id,
+        quest_id=body.quest_id,
+        session_id=body.session_id,
+        event_id=body.event_id,
+        reason=body.reason,
+        changed={
             "grantee_campaign_membership_id": (
                 str(body.grantee_campaign_membership_id)
                 if body.grantee_campaign_membership_id is not None
@@ -530,18 +469,10 @@ def create_resource_grant_endpoint(
             "capability_code": body.capability_code,
             "effect": body.effect,
         },
+        correlation_id=correlation_id,
     )
-
-    response = ResourceGrantResponse(resource_grant_id=result.resource_grant_id)
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=201,
-            response_body=response.model_dump(mode="json"),
-        )
-
+    response = ResourceGrantResponse(resource_grant_id=new_id)
+    _complete_receipt_with(connection, plan, reservation_id, 201, response)
     return response
 
 
@@ -556,88 +487,44 @@ def revoke_resource_grant_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
-) -> ResourceGrantResponse:
-    """Revokes one existing, currently-active resource grant — the portal
-    Access page's "Revoke direct resource access" action.
-
-    Response contract (checkpoint 5): `200`/`ResourceGrantResponse`
-    (`{resource_grant_id: UUID}`, reusing the existing create-grant response
-    shape), not the pre-hardening bare `204 No Content` — the identical
-    correction `revoke_character_relationship_endpoint`/`dnd_ai.api.
-    memberships.revoke_membership_role_endpoint` already made. A bare
-    `204`/no-`Idempotency-Key` route relied on `revoke_resource_grant`'s own
-    state-idempotency (a retry against an already-revoked row is a harmless
-    no-op) to cover *state*, but every call — including a plain retry with
-    no key at all — wrote its own `audit.change_log` row unconditionally,
-    so an ordinary network retry could durably record two revocation events
-    for one real revocation. Fixed the same two ways: (1) an
-    `Idempotency-Key` replay returns the original cached response verbatim,
-    never re-running the command at all; (2) even *without* a matching key,
-    the audit write below is now conditioned on `RevokeResourceGrantResult.
-    revoked`, so a second call that lands on an already-revoked row writes
-    no second row."""
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        fingerprint_payload: dict[str, Any] = {"resource_grant_id": str(resource_grant_id)}
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=_REVOKE_RESOURCE_GRANT_COMMAND_NAME,
-            payload=fingerprint_payload,
-            correlation_id=correlation_id,
-        )
-        if isinstance(outcome, IdempotentReplay):
-            return ResourceGrantResponse.model_validate(outcome.response_body)
-        reservation_id = outcome.idempotent_request_id
-
-    result = revoke_resource_grant(
-        connection, resource_grant_id=resource_grant_id, campaign_id=campaign_id
+) -> Any:
+    """Revokes one existing, currently-active resource grant — the portal Access page's "Revoke direct resource
+    access" action; a keyed-optional pre-write route (R01 S5-E4, `dnd_ai.commands.access_grant_plans`). `200` and
+    the grant id. An already-revoked grant is the documented no-op: no write and no audit row (a fresh keyed
+    request still completes its receipt)."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
+        connection=connection,
+        access=access,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+        command_name=_REVOKE_RESOURCE_GRANT_COMMAND_NAME,
+        payload={"resource_grant_id": str(resource_grant_id)},
     )
-
-    if result.revoked:
-        record_change_log(
-            connection,
-            change_action_code=_UPDATED_CHANGE_ACTION,
-            schema_name="security",
-            table_name="resource_grants",
-            record_id=resource_grant_id,
-            entity_id=None,
-            world_id=timeline_world_id(connection, access.timeline_id),
-            actor_user_id=access.user_id,
-            correlation_id=correlation_id,
-            command_name=_REVOKE_RESOURCE_GRANT_COMMAND_NAME,
-            event_id=None,
-            changed_fields={
-                "grantee_campaign_membership_id": (
-                    str(result.grantee_campaign_membership_id)
-                    if result.grantee_campaign_membership_id is not None
-                    else None
-                ),
-                "grantee_access_group_id": (
-                    str(result.grantee_access_group_id)
-                    if result.grantee_access_group_id is not None
-                    else None
-                ),
-                "target_kind": result.target_field_name,
-                "target_id": (str(result.target_id) if result.target_id is not None else None),
-                "capability_code": result.capability_code,
-                "effect": result.effect,
-            },
-        )
-
+    if replay is not None:
+        return replay
+    prepared = prepare_revoke_grant(
+        connection,
+        plan,
+        campaign_id=campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        resource_grant_id=resource_grant_id,
+        reservation_id=reservation_id,
+    )
+    plan.finalize(connection)
+    write_revoke_grant(
+        connection,
+        plan,
+        prepared,
+        resource_grant_id=resource_grant_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+    )
     response = ResourceGrantResponse(resource_grant_id=resource_grant_id)
-
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=200,
-            response_body=response.model_dump(mode="json"),
-        )
-
+    _complete_receipt_with(connection, plan, reservation_id, 200, response)
     return response

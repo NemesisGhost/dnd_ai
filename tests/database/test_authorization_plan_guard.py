@@ -569,7 +569,7 @@ def test_a_pending_route_gets_a_pending_plan_the_guard_admits(
         plan = begin_route_plan(
             connection,
             method="POST",
-            route_path="/campaigns/{campaign_id}/resource-grants",  # still pending (S5-E4)
+            route_path="/campaigns/{campaign_id}/access-groups",  # still pending (S5-E5)
             actor_user_id=g.o1_user_id,
             campaign_id=g.campaign_id,
         )

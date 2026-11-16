@@ -4942,18 +4942,22 @@
   ]
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_grants.change_character_relationship": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_grant_plans.prepare_change_relationship": [],
+   "dnd_ai.commands.access_grant_plans.write_change_relationship": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_grants.change_character_relationship": [
-    "security.membership_character_relationships"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_grant_plans.prepare_change_relationship": [],
+   "dnd_ai.commands.access_grant_plans.write_change_relationship": []
   },
   "commands": [
-   "dnd_ai.commands.access_grants.change_character_relationship"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_grant_plans.prepare_change_relationship",
+   "dnd_ai.commands.access_grant_plans.write_change_relationship"
   ],
   "dependencies": [
    {
@@ -4975,7 +4979,6 @@
   "path": "/campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/change",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -4984,18 +4987,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_grants.revoke_character_relationship": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_grant_plans.prepare_revoke_relationship": [],
+   "dnd_ai.commands.access_grant_plans.write_revoke_relationship": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_grants.revoke_character_relationship": [
-    "security.membership_character_relationships"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_grant_plans.prepare_revoke_relationship": [],
+   "dnd_ai.commands.access_grant_plans.write_revoke_relationship": []
   },
   "commands": [
-   "dnd_ai.commands.access_grants.revoke_character_relationship"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_grant_plans.prepare_revoke_relationship",
+   "dnd_ai.commands.access_grant_plans.write_revoke_relationship"
   ],
   "dependencies": [
    {
@@ -5017,7 +5024,6 @@
   "path": "/campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/revoke",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -8645,18 +8651,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_grants.grant_character_relationship": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_grant_plans.prepare_grant_relationship": [],
+   "dnd_ai.commands.access_grant_plans.write_grant_relationship": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_grants.grant_character_relationship": [
-    "security.membership_character_relationships"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_grant_plans.prepare_grant_relationship": [],
+   "dnd_ai.commands.access_grant_plans.write_grant_relationship": []
   },
   "commands": [
-   "dnd_ai.commands.access_grants.grant_character_relationship"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_grant_plans.prepare_grant_relationship",
+   "dnd_ai.commands.access_grant_plans.write_grant_relationship"
   ],
   "dependencies": [
    {
@@ -8678,7 +8688,6 @@
   "path": "/campaigns/{campaign_id}/memberships/{campaign_membership_id}/character-relationships",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -9952,18 +9961,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_grants.create_resource_grant": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_grant_plans.prepare_create_grant": [],
+   "dnd_ai.commands.access_grant_plans.write_create_grant": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_grants.create_resource_grant": [
-    "security.resource_grants"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_grant_plans.prepare_create_grant": [],
+   "dnd_ai.commands.access_grant_plans.write_create_grant": []
   },
   "commands": [
-   "dnd_ai.commands.access_grants.create_resource_grant"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_grant_plans.prepare_create_grant",
+   "dnd_ai.commands.access_grant_plans.write_create_grant"
   ],
   "dependencies": [
    {
@@ -9985,7 +9998,6 @@
   "path": "/campaigns/{campaign_id}/resource-grants",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",
@@ -9994,18 +10006,22 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.access_grants.revoke_resource_grant": []
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_grant_plans.prepare_revoke_grant": [],
+   "dnd_ai.commands.access_grant_plans.write_revoke_grant": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.access_grants.revoke_resource_grant": [
-    "security.resource_grants"
-   ]
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.access_grant_plans.prepare_revoke_grant": [],
+   "dnd_ai.commands.access_grant_plans.write_revoke_grant": []
   },
   "commands": [
-   "dnd_ai.commands.access_grants.revoke_resource_grant"
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.access_grant_plans.prepare_revoke_grant",
+   "dnd_ai.commands.access_grant_plans.write_revoke_grant"
   ],
   "dependencies": [
    {
@@ -10027,7 +10043,6 @@
   "path": "/campaigns/{campaign_id}/resource-grants/{resource_grant_id}/revoke",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "idempotency:campaign",
    "reader:access_context",
    "reader:world_authority",

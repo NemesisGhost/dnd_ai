@@ -86,7 +86,11 @@ ROLE_REVOKE = r"UPDATE security\.membership_roles SET revoked_at"
 CAMPAIGN_LOCK = (
     r"FROM campaign\.campaigns WHERE (campaign\.campaigns\.)?campaign_id = .* FOR UPDATE"
 )
-GRANT_CAMPAIGN_LOCK = r"SELECT ls\.code FROM campaign\.campaigns c .* FOR UPDATE OF c"
+# the create-grant route (S5-E4) takes the campaign `FOR UPDATE` as a Core `select` after the membership class (the legacy command
+# took it as a joined text statement)
+GRANT_CAMPAIGN_LOCK = (
+    r"FROM campaign\.campaigns WHERE campaign\.campaigns\.campaign_id = .* FOR UPDATE"
+)
 GRANT_INSERT = r"INSERT INTO security\.resource_grants"
 ENTITY_UPDATE = r"UPDATE core\.entities"
 

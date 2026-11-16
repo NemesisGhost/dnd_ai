@@ -6,7 +6,7 @@ outcome (`ReservationDeclarations`). Every lock of the request is taken before `
 is a declared `plan.execute` step after it, and the reservation's campaign foreign key is deferred.
 
 The set grows only with a reviewed slice (S5-D: the two invitation routes; S5-E1: the three campaign
-lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4 onward: the rest).
+lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4: resource grants and character relationships; S5-E5 onward: the rest).
 
 `R01_UNKEYED_PRE_WRITE_ROUTES` (S5-E2 ownership-transfer amendment, T4) is the registry of routes that open a
 pre-write plan with **one** declaration and no reservation: they are not idempotent, an `Idempotency-Key`
@@ -18,6 +18,13 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
+from dnd_ai.commands.access_grant_plans import (
+    CHANGE_RELATIONSHIP_DECLARATIONS,
+    CREATE_GRANT_DECLARATIONS,
+    GRANT_RELATIONSHIP_DECLARATIONS,
+    REVOKE_GRANT_DECLARATIONS,
+    REVOKE_RELATIONSHIP_DECLARATIONS,
+)
 from dnd_ai.commands.campaign_invitation_plans import CREATE_DECLARATIONS, REVOKE_DECLARATIONS
 from dnd_ai.commands.campaign_lifecycle_plans import (
     ARCHIVE_DECLARATIONS,
@@ -65,6 +72,23 @@ R01_KEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], ReservationDeclaratio
                 "POST",
                 "/campaigns/{campaign_id}/memberships/{campaign_membership_id}/end",
             ): END_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/memberships/{campaign_membership_id}/character-relationships",
+            ): GRANT_RELATIONSHIP_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/change",
+            ): CHANGE_RELATIONSHIP_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/revoke",
+            ): REVOKE_RELATIONSHIP_DECLARATIONS,
+            ("POST", "/campaigns/{campaign_id}/resource-grants"): CREATE_GRANT_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/resource-grants/{resource_grant_id}/revoke",
+            ): REVOKE_GRANT_DECLARATIONS,
         }
     )
 )

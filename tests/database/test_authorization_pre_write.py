@@ -1741,6 +1741,6 @@ def test_pending_inventory_helpers_are_untouched() -> None:
     from dnd_ai.api.r01_pending_routes import R01_PENDING_ROUTES
 
     assert (
-        len(R01_PENDING_ROUTES) == 26
-    )  # 192 at S1, less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5, S5-E1's 3, S5-E2's 5 and S5-E3's 1 migrated routes
+        len(R01_PENDING_ROUTES) == 21
+    )  # 192 at S1, less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5, S5-E1's 3, S5-E2's 5, S5-E3's 1 and S5-E4's 5 migrated routes
     assert authorization.R01_PENDING is authorization.R01_PENDING

@@ -604,6 +604,24 @@ _S5E3_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {("POST", _CAMPAIGN + "/memberships/{campaign_membership_id}/end")}
 )
 
+#: S5-E4 migrates the two resource-grant routes and the three character-relationship routes, keyed-optional
+#: pre-write plans (`dnd_ai.commands.access_grant_plans`).
+_S5E4_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/memberships/{campaign_membership_id}/character-relationships"),
+        (
+            "POST",
+            _CAMPAIGN + "/character-relationships/{membership_character_relationship_id}/change",
+        ),
+        (
+            "POST",
+            _CAMPAIGN + "/character-relationships/{membership_character_relationship_id}/revoke",
+        ),
+        ("POST", _CAMPAIGN + "/resource-grants"),
+        ("POST", _CAMPAIGN + "/resource-grants/{resource_grant_id}/revoke"),
+    }
+)
+
 MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     frozenset(
         {
@@ -623,6 +641,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S5E2_ROUTES
     | _S5E2_TRANSFER_ROUTES
     | _S5E3_ROUTES
+    | _S5E4_ROUTES
 )
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline

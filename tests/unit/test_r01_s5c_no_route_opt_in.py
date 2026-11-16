@@ -42,6 +42,7 @@ _S5D_ADOPTERS = {
     r"\.bind_unkeyed\(": {"api/campaign_invitations.py", "api/campaigns.py"},
     r"\bby_outcome\s*=": {"api/r01_route_plans.py"},
     r"\bReservationDeclarations\(": {
+        "commands/access_grant_plans.py",
         "commands/campaign_invitation_plans.py",
         "commands/campaign_lifecycle_plans.py",
         "commands/membership_end_plans.py",

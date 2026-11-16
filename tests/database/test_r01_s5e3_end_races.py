@@ -10,8 +10,8 @@ Two kinds of test live here and must not be confused (the S5-E2 E10 distinction)
 
 1. **New-cycle regressions** (`test_*` without `characterized`): clean at HEAD, ordinary passing tests.
 2. **Characterizations** (`test_characterized_*`): cycles that exist at the untouched baseline too (the legacy end
-   command shows the same 40P01) and belong to writers still pending in S5-E4/E5 or to the deferred authoring opt-in
-   (DEF-019, plan 6.21.7). A pass means the pre-existing defect is *characterized, not fixed*; it fails when the cycle
+   command shows the same 40P01) and belong to the deferred authoring opt-in (DEF-019, plan 6.21.7); the one that belonged
+   to the still-pending relationship change was retired by S5-E4 (see the note below). A pass means the pre-existing defect is *characterized, not fixed*; it fails when the cycle
    disappears, forcing reclassification. They are never presented as a clean result.
 """
 
@@ -343,53 +343,12 @@ def other_type_for(s: Scene) -> uuid.UUID:
         ).scalar_one()
 
 
-@pytest.mark.parametrize("subject", ("new_end", "legacy_end"))
-def test_characterized_changing_a_relationship_and_ending_its_member_wait_in_a_cycle_at_the_baseline_too(
-    subject: str, s: Scene, e: Member, pool: Pool
-) -> None:
-    """**Characterization (a pre-existing cycle, not a fix)**: `POST .../character-relationships/{id}/change` locks the
-    relationship row and then the member's membership (`FOR UPDATE OF mcr, cm` in one statement); every end locks the
-    membership and then the member's relationship rows. Interleaved (the end holds the membership and wants the
-    relationship row, the change holds the row and wants the membership) they deadlock: one request is aborted
-    (SQLSTATE 40P01 on a cycle-edge statement, the 500 on the request whose statement failed, the deadlock counter
-    +1), the other commits. **The untouched end command has the same cycle** (`legacy_end`, parked at the statement
-    where it updates the relationships): this is `subject=legacy_end`, so S5-E3 introduced no new cycle. PostgreSQL
-    chooses the victim, so which request loses is not asserted. The fix is the order of the *change* route, which is a
-    pending route (S5-E4/E5): it must lock the membership before the relationship row. When it is fixed this test
-    fails on "exactly one 40P01", which forces the reclassification."""
-    other_type = other_type_for(s)
-    path = f"{s.w.base}/character-relationships/{e.relationship}/change"
-    body = {"new_relationship_type_id": str(other_type)}
-
-    def change() -> Any:
-        return post(pool, s.w.owner, path, body)
-
-    if subject == "new_end":
-        o = race(
-            s.w,
-            pool,
-            gate_pattern=RELATIONSHIPS_U,
-            parked=lambda: end_request(s, pool, e.membership),
-            second=change,
-        )
-    else:
-        actor = owner_membership(s)
-        o = race(
-            s.w,
-            pool,
-            gate_pattern=r"^UPDATE security\.membership_character_relationships",
-            parked=lambda: legacy_end(s, pool, e.membership, actor),
-            second=change,
-        )
-    assert len(o.failures) == 1 and o.failures[0][0] == "40P01", o.summary()
-    assert o.deadlock_delta == 1, o.summary()
-    codes = sorted(code(o.results[name]) for name in ("parked", "second"))
-    survivors = [c for c in codes if c != 500]
-    assert len(survivors) == 1 and survivors[0] in (200, 201) and len(codes) == 2, o.summary()
-    # the victim rolled back whole; a retry of the end completes when it was the end that lost
-    if state(s, e.membership).membership[0] is False:
-        assert code(end_request(s, pool, e.membership)) == 200
-    assert open_dependents(s, e.membership) == NONE_OPEN
+# The characterization that stood here (`test_characterized_changing_a_relationship_and_ending_its_member_wait_in_a_cycle_at_the_
+# baseline_too`: the unmigrated `change` of a relationship deadlocked with every end, the untouched end command included, SQLSTATE
+# 40P01) was **retired by S5-E4**, which migrated the change route to lock the owning membership before the relationship row. Its
+# replacement, `test_changing_a_relationship_and_ending_its_member_no_longer_wait_in_a_cycle` in
+# `test_r01_s5e4_access_races.py`, shows the pair clean in both orderings against the new end and the baseline end command.
+# The helpers below (`legacy_end`, `FakeResponse`, `owner_membership`, `other_type_for`) are shared with it.
 
 
 # --- the held modes ------------------------------------------------------------------------------------------------------

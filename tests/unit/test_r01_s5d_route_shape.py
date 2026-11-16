@@ -44,6 +44,7 @@ from tests.r01_manifest import (
     _S5E1_ROUTES,
     _S5E2_ROUTES,
     _S5E3_ROUTES,
+    _S5E4_ROUTES,
     _iter_api_routes,
 )
 
@@ -209,7 +210,9 @@ def test_a_pre_write_handler_orders_deferral_reservation_binding_finalize_and_de
 
 
 def test_the_registry_names_the_two_invitation_routes_and_s5e1s_three() -> None:
-    assert set(R01_KEYED_PRE_WRITE_ROUTES) == PRE_WRITE | _S5E1_ROUTES | _S5E2_ROUTES | _S5E3_ROUTES
+    assert set(R01_KEYED_PRE_WRITE_ROUTES) == (
+        PRE_WRITE | _S5E1_ROUTES | _S5E2_ROUTES | _S5E3_ROUTES | _S5E4_ROUTES
+    )
     assert set(R01_KEYED_PRE_WRITE_ROUTES) <= set(R01_FINALIZED_ROUTES)
     assert R01_KEYED_PRE_WRITE_ROUTES[("POST", CAMPAIGN + "/invitations")] is CREATE_DECLARATIONS
     assert (
