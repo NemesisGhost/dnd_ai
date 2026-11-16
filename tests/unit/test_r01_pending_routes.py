@@ -54,6 +54,9 @@ from tests.r01_manifest import (
     _S5E5_ROUTES as S5E5_ROUTES,
 )
 from tests.r01_manifest import (
+    _S5E6_ROUTES as S5E6_ROUTES,
+)
+from tests.r01_manifest import (
     MANIFEST_PATH,
     MIGRATED_ROUTES,
     OUTSIDE_R01,
@@ -89,7 +92,7 @@ def test_every_route_inside_r01s_bound_is_pending_or_finalized_exactly_once() ->
     assert finalized == set(MIGRATED_ROUTES)
 
 
-def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s5e2s_5_s5e3s_1_s5e4s_5_and_s5e5s_6() -> (
+def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s5e2s_5_s5e3s_1_s5e4s_5_s5e5s_6_and_s5e6s_2() -> (
     None
 ):
     """S2 migrated the public-profile save, legacy copy, player-profile copy and release, and the
@@ -102,10 +105,10 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
     ownership transfer: unkeyed pre-write, plan 6.27.4). S5-E3 migrates end campaign membership (keyed-optional
     pre-write, plan 6.30). S5-E4 migrates the two resource-grant and three character-relationship routes
     (keyed-optional pre-write, plan 6.31). S5-E5 migrates the six access-group routes (keyed-optional pre-write,
-    plan 6.34). 177 are finalized; the other 15 (7 access-management, of which five are the planned-exclusion world
-    routes and two the reveal-delegation routes, and 8 engine) stay pending."""
-    assert len(R01_FINALIZED_ROUTES) == 177
-    assert len(R01_PENDING_ROUTES) == 15
+    plan 6.34). S5-E6 migrates the two reveal-delegation routes (unkeyed pre-write, plan 6.36). 179 are finalized;
+    the other 13 (5 access-management, the planned-exclusion world routes, and 8 engine) stay pending."""
+    assert len(R01_FINALIZED_ROUTES) == 179
+    assert len(R01_PENDING_ROUTES) == 13
     s2 = {
         route
         for route in R01_FINALIZED_ROUTES
@@ -120,6 +123,7 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
         | S5E3_ROUTES
         | S5E4_ROUTES
         | S5E5_ROUTES
+        | S5E6_ROUTES
     }
     assert {
         path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1] for _, path in s2
@@ -147,6 +151,17 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
     assert not S5E3_ROUTES & (S5E2_ROUTES | S5E2_TRANSFER_ROUTES | S5E1_ROUTES | S5D_ROUTES)
     assert len(S5E4_ROUTES) == 5
     assert set(R01_FINALIZED_ROUTES) >= S5E4_ROUTES
+    assert len(S5E6_ROUTES) == 2
+    assert set(R01_FINALIZED_ROUTES) >= S5E6_ROUTES
+    assert not S5E6_ROUTES & (
+        S5E5_ROUTES
+        | S5E4_ROUTES
+        | S5E3_ROUTES
+        | S5E2_ROUTES
+        | S5E2_TRANSFER_ROUTES
+        | S5E1_ROUTES
+        | S5D_ROUTES
+    )
     assert len(S5E5_ROUTES) == 6
     assert set(R01_FINALIZED_ROUTES) >= S5E5_ROUTES
     assert not S5E5_ROUTES & (
@@ -173,11 +188,11 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
 
 
 def test_the_pending_counts_by_family_are_pinned() -> None:
-    """15 distinct pending routes (192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5, S5-E1's 3, S5-E2's 5, S5-E3's 1, S5-E4's 5 and S5-E5's 6). The manifest
+    """13 distinct pending routes (192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5, S5-E1's 3, S5-E2's 5, S5-E3's 1, S5-E4's 5, S5-E5's 6 and S5-E6's 2). The manifest
     has 192 inside records: S5-E5 removed the duplicated `@router.post` of the members route (B-4), so no
     (method, path) is registered twice any more. No route-capability-only route is pending any more."""
     assert dict(Counter(R01_PENDING_ROUTES.values())) == {
-        "access_management": 7,
+        "access_management": 5,
         "engine_early_commit": 8,
     }
     records = Counter(str(r["family"]) for r in _inside())
@@ -214,16 +229,19 @@ def test_pending_routes_are_not_presented_as_protected() -> None:
     resource_grants = "/campaigns/{campaign_id}/resource-grants"  # S5-E4: migrated
     assert route_is_pending("POST", resource_grants) is False
     groups = "/campaigns/{campaign_id}/access-groups"  # S5-E5: migrated
-    delegations = "/campaigns/{campaign_id}/reveal-delegations"  # still pending (S5-E6)
+    delegations = "/campaigns/{campaign_id}/reveal-delegations"  # S5-E6: migrated
+    synthesis = "/campaigns/{campaign_id}/ai/synthesis"  # still pending (an engine route)
     assert route_is_pending("POST", groups) is False
-    assert route_is_pending("POST", delegations) is True
-    assert route_is_pending("post", delegations) is True
+    assert route_is_pending("POST", delegations) is False
+    assert route_is_pending("POST", synthesis) is True
+    assert route_is_pending("post", synthesis) is True
     assert route_is_pending("POST", "/campaigns/{campaign_id}/events") is False  # S4b
     assert route_is_pending("POST", "/admin/accounts") is False  # outside R01's bound
     assert ("POST", end) in R01_FINALIZED_ROUTES
     assert ("POST", resource_grants) in R01_FINALIZED_ROUTES
     assert ("POST", groups) in R01_FINALIZED_ROUTES
-    assert ("POST", delegations) not in R01_FINALIZED_ROUTES
+    assert ("POST", delegations) in R01_FINALIZED_ROUTES
+    assert ("POST", synthesis) not in R01_FINALIZED_ROUTES
     assert route_is_pending("POST", "/campaigns/{campaign_id}/ownership-transfer") is False  # S5-E2
 
 

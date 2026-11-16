@@ -10024,18 +10024,19 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.character_reveal.grant_character_reveal_delegation": []
+   "dnd_ai.commands.reveal_delegation_plans.prepare_grant": [],
+   "dnd_ai.commands.reveal_delegation_plans.write_grant": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.character_reveal.grant_character_reveal_delegation": [
-    "security.character_reveal_delegations"
-   ]
+   "dnd_ai.commands.reveal_delegation_plans.prepare_grant": [],
+   "dnd_ai.commands.reveal_delegation_plans.write_grant": []
   },
   "commands": [
-   "dnd_ai.commands.character_reveal.grant_character_reveal_delegation"
+   "dnd_ai.commands.reveal_delegation_plans.prepare_grant",
+   "dnd_ai.commands.reveal_delegation_plans.write_grant"
   ],
   "dependencies": [
    {
@@ -10055,7 +10056,6 @@
   "path": "/campaigns/{campaign_id}/reveal-delegations",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"
@@ -10063,18 +10063,19 @@
   "unresolved": []
  },
  {
-  "audit": true,
+  "audit": false,
   "command_markers": {
-   "dnd_ai.commands.character_reveal.revoke_character_reveal_delegation": []
+   "dnd_ai.commands.reveal_delegation_plans.prepare_revoke": [],
+   "dnd_ai.commands.reveal_delegation_plans.write_revoke": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.character_reveal.revoke_character_reveal_delegation": [
-    "security.character_reveal_delegations"
-   ]
+   "dnd_ai.commands.reveal_delegation_plans.prepare_revoke": [],
+   "dnd_ai.commands.reveal_delegation_plans.write_revoke": []
   },
   "commands": [
-   "dnd_ai.commands.character_reveal.revoke_character_reveal_delegation"
+   "dnd_ai.commands.reveal_delegation_plans.prepare_revoke",
+   "dnd_ai.commands.reveal_delegation_plans.write_revoke"
   ],
   "dependencies": [
    {
@@ -10094,7 +10095,6 @@
   "path": "/campaigns/{campaign_id}/reveal-delegations/{grantee_campaign_membership_id}/revoke",
   "precheck_markers": [],
   "route_markers": [
-   "audit:change_log",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"

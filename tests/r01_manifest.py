@@ -638,6 +638,15 @@ _S5E5_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: S5-E6 migrates the two reveal-delegation routes, **unkeyed** pre-write plans
+#: (`dnd_ai.commands.reveal_delegation_plans`, `R01_UNKEYED_PRE_WRITE_ROUTES`).
+_S5E6_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/reveal-delegations"),
+        ("POST", _CAMPAIGN + "/reveal-delegations/{grantee_campaign_membership_id}/revoke"),
+    }
+)
+
 MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     frozenset(
         {
@@ -659,6 +668,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S5E3_ROUTES
     | _S5E4_ROUTES
     | _S5E5_ROUTES
+    | _S5E6_ROUTES
 )
 
 #: The one family outside R01's bound: account, authentication, Foundry pairing, world and timeline

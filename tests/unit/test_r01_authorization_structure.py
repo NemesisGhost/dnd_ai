@@ -141,9 +141,9 @@ def test_the_access_management_family_is_not_in_the_post_write_check() -> None:
         for w in writes
     }
     # S5-E2, S5-E3, S5-E4 and S5-E5 migrated the role, membership-end, resource-grant, character-relationship and
-    # access-group routes, whose manifest records no longer trace a legacy command; the routes still pending (the two
-    # reveal-delegation routes) write the readers' tables
-    assert {"security.character_reveal_delegations"} <= written
+    # access-group and (S5-E6) reveal-delegation routes, whose manifest records no longer trace a legacy command; the
+    # routes still pending (the planned-exclusion world routes) write the readers' tables
+    assert {"security.world_memberships", "security.world_use_grants"} <= written
     assert (written & AUTHORITY_READER_TABLES) - REVIEWED_POST_WRITE_TABLES
 
 

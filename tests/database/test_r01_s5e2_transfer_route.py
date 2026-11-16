@@ -978,9 +978,10 @@ def test_the_legacy_reveal_delegation_grant_and_a_transfer_never_wait_in_a_cycle
                 ),
                 {"r": row, "m": membership, "role": role},
             )
+    # the grant route (R01 S5-E6 pre-write plan) locks the discovered gm row `FOR UPDATE`, bound by id
     gm_lock = (
-        r"FROM security\.membership_roles mr JOIN security\.roles r ON r\.role_id = mr\.role_id "
-        r"WHERE .* FOR UPDATE OF mr$"
+        r"FROM security\.membership_roles WHERE security\.membership_roles\.membership_role_id = "
+        r"%\(row\)s::UUID AND .* FOR UPDATE$"
     )
     deadlocks = deadlock_count(t.w.engine)
 

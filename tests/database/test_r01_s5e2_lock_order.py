@@ -61,16 +61,17 @@ LOW = "00000000-0000-4000-8000-0000"
 HIGH = "ffffffff-ffff-4fff-bfff-ffff"
 
 # -- statement patterns (SQLAlchemy Core text, whitespace-normalised) ------------------------------------------
-#: A role-class lock of the reveal-delegation grant: the owner row (`FOR SHARE OF mr`) or the gm rows (`FOR UPDATE OF mr`).
+#: A role-class lock of the reveal-delegation grant: the owner row (`FOR SHARE`) or the gm row (`FOR UPDATE`), each
+#: bound to the row id the discovery found (R01 S5-E6: the route is a pre-write plan; before it the statements were the
+#: legacy command's `... JOIN security.roles ... FOR (SHARE|UPDATE) OF mr`). The order of the two is unchanged.
 GRANT_ROLE_LOCK = (
-    r"FROM security\.membership_roles mr JOIN security\.roles r ON r\.role_id = mr\.role_id "
-    r".*FOR (SHARE|UPDATE) OF mr$"
+    r"FROM security\.membership_roles WHERE security\.membership_roles\.membership_role_id = "
+    r"%\(row\)s::UUID AND .* FOR (SHARE|UPDATE)$"
 )
-GRANT_GRANTEE_NKU = (
-    r"FROM security\.campaign_memberships WHERE campaign_membership_id = \S+ FOR NO KEY UPDATE$"
-)
+GRANT_GRANTEE_NKU = r"FROM security\.campaign_memberships WHERE .* FOR NO KEY UPDATE$"
 GRANT_DELEGATIONS = (
-    r"FROM security\.character_reveal_delegations WHERE grantee_campaign_membership_id"
+    r"FROM security\.character_reveal_delegations WHERE "
+    r"security\.character_reveal_delegations\.grantee_campaign_membership_id"
 )
 #: The role routes' delegation lock: the statement after their role-class statement.
 ROUTE_DELEGATIONS = (
@@ -1601,9 +1602,11 @@ def test_e7_deactivating_the_recipients_account_before_the_transfers_account_che
 # K. Ascending-order probes (TA-1: the lower id is locked first, in each class) and BA-1
 # ======================================================================================================================
 
+#: The grant route's membership pass (R01 S5-E6: declared `PreLock`s, a Core `select` of the membership id; before it the
+#: legacy command's `SELECT 1 ... WHERE campaign_membership_id = ... FOR (KEY SHARE|NO KEY UPDATE)`).
 GRANT_MEMBERSHIP = (
-    r"^SELECT 1 FROM security\.campaign_memberships WHERE campaign_membership_id = \S+ "
-    r"FOR (KEY SHARE|NO KEY UPDATE)$"
+    r"^SELECT security\.campaign_memberships\.campaign_membership_id FROM security\.campaign_memberships "
+    r"WHERE .* FOR (KEY SHARE|NO KEY UPDATE)$"
 )
 
 

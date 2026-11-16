@@ -6,7 +6,7 @@ outcome (`ReservationDeclarations`). Every lock of the request is taken before `
 is a declared `plan.execute` step after it, and the reservation's campaign foreign key is deferred.
 
 The set grows only with a reviewed slice (S5-D: the two invitation routes; S5-E1: the three campaign
-lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4: resource grants and character relationships; S5-E5: the six access-group routes; S5-E6 onward: the rest).
+lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4: resource grants and character relationships; S5-E5: the six access-group routes; S5-E6: the two reveal-delegation routes, unkeyed; S5-F onward: the rest).
 
 `R01_UNKEYED_PRE_WRITE_ROUTES` (S5-E2 ownership-transfer amendment, T4) is the registry of routes that open a
 pre-write plan with **one** declaration and no reservation: they are not idempotent, an `Idempotency-Key`
@@ -58,6 +58,12 @@ from dnd_ai.commands.membership_role_plans import (
 )
 from dnd_ai.commands.membership_role_plans import (
     REVOKE_DECLARATIONS as REVOKE_ROLE_DECLARATIONS,
+)
+from dnd_ai.commands.reveal_delegation_plans import (
+    GRANT_DECLARATION as GRANT_REVEAL_DELEGATION_DECLARATION,
+)
+from dnd_ai.commands.reveal_delegation_plans import (
+    REVOKE_DECLARATION as REVOKE_REVEAL_DELEGATION_DECLARATION,
 )
 from dnd_ai.domain.authorization import ReservationDeclarations
 from dnd_ai.domain.authorization_steps import PreWriteDeclaration
@@ -134,6 +140,16 @@ R01_KEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], ReservationDeclaratio
 
 R01_UNKEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], PreWriteDeclaration]] = (
     MappingProxyType(
-        {("POST", "/campaigns/{campaign_id}/ownership-transfer"): TRANSFER_DECLARATION}
+        {
+            ("POST", "/campaigns/{campaign_id}/ownership-transfer"): TRANSFER_DECLARATION,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/reveal-delegations",
+            ): GRANT_REVEAL_DELEGATION_DECLARATION,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/reveal-delegations/{grantee_campaign_membership_id}/revoke",
+            ): REVOKE_REVEAL_DELEGATION_DECLARATION,
+        }
     )
 )
