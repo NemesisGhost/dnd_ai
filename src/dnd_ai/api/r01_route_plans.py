@@ -12,7 +12,9 @@ every non-GET route through `open_request_plan` (rule 1b) and a migrated handler
   declarations its handler chooses from by the reservation's server outcome.
 - A route in `R01_UNKEYED_PRE_WRITE_ROUTES` (S5-E2 ownership transfer) opens a pre-write plan with its one
   declaration and no reservation. The two registries are disjoint and a pre-write route is finalized.
-- A route in neither set is unclassified: opening its plan fails closed, so a new campaign write
+- A route in `R01_EXCLUDED_WORLD_ROUTES` (the five world routes, a planned exclusion, neither finalized nor pending)
+  opens no campaign plan: the lookup raises `ExcludedRouteError`, the fixed 5xx. They are not migrated or accepted.
+- A route in none of the sets is unclassified: opening its plan fails closed, so a new campaign write
   route cannot be added without being migrated or listed.
 """
 
@@ -23,7 +25,11 @@ from sqlalchemy import Connection
 
 from dnd_ai.domain.authorization import AuthorizationPlan, PlanMode
 
-from .r01_pending_routes import R01_FINALIZED_ROUTES, R01_PENDING_ROUTES
+from .r01_pending_routes import (
+    R01_EXCLUDED_WORLD_ROUTES,
+    R01_FINALIZED_ROUTES,
+    R01_PENDING_ROUTES,
+)
 from .r01_pre_write_routes import R01_KEYED_PRE_WRITE_ROUTES, R01_UNKEYED_PRE_WRITE_ROUTES
 
 
@@ -33,6 +39,13 @@ class UnclassifiedRouteError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("a write route has no R01 classification")
+
+
+class ExcludedRouteError(UnclassifiedRouteError):
+    """A planned-exclusion route (a world route) asked for a campaign plan. It has none, by decision; fail closed."""
+
+    def __init__(self) -> None:
+        RuntimeError.__init__(self, "a planned-exclusion route has no R01 plan")
 
 
 def route_is_pending(method: str, route_path: str) -> bool:
@@ -51,6 +64,8 @@ def begin_route_plan(
     """Open the request's plan for the route. Pending routes get a pending plan; finalized routes an
     ordinary one; an unclassified route raises `UnclassifiedRouteError`."""
     key = (method.upper(), route_path)
+    if key in R01_EXCLUDED_WORLD_ROUTES:
+        raise ExcludedRouteError()
     if key in R01_PENDING_ROUTES:
         pending = True
     elif key in R01_FINALIZED_ROUTES:

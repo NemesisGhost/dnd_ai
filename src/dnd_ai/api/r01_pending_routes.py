@@ -7,8 +7,10 @@ is stale. Do not edit by hand.
 A **pending** route is in R01's bound (`campaign_id` in its path and a family) but its handler
 has not been migrated to a final `AuthorizationPlan`: it is **not protected** by the R01 final
 check, and the commit guard admits its unfinalized plan. The set only shrinks, as slices S2-S5
-and E1-E4 migrate routes into `R01_FINALIZED_ROUTES`. Routes outside R01's bound (account,
-authentication, Foundry pairing, world and timeline routes) are in neither set."""
+and E1-E4 migrate routes into `R01_FINALIZED_ROUTES`. The five world routes are the **planned
+exclusions** (`R01_EXCLUDED_WORLD_ROUTES`): neither pending nor finalized, never migrated or accepted
+by R01, and their plan lookup fails closed. Routes outside R01's bound (account, authentication,
+Foundry pairing, timeline routes) are in no set."""
 
 from types import MappingProxyType
 from typing import Final
@@ -25,11 +27,6 @@ R01_PENDING_ROUTES: Final = MappingProxyType(
         ("POST", "/campaigns/{campaign_id}/reference-corpus/query"): "engine_early_commit",
         ("POST", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/grant"): "engine_early_commit",
         ("POST", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/passages"): "engine_early_commit",
-        ("POST", "/worlds/{world_id}/ownership-transfer"): "access_management",
-        ("POST", "/worlds/{world_id}/roles"): "access_management",
-        ("POST", "/worlds/{world_id}/roles/{world_membership_id}/end"): "access_management",
-        ("POST", "/worlds/{world_id}/use-grants"): "access_management",
-        ("POST", "/worlds/{world_id}/use-grants/{world_use_grant_id}/revoke"): "access_management",
     }
 )
 # fmt: on
@@ -217,6 +214,20 @@ R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("POST", "/campaigns/{campaign_id}/travel"),
         ("POST", "/campaigns/{campaign_id}/update"),
         ("POST", "/campaigns/{campaign_id}/world-times"),
+    }
+)
+# fmt: on
+
+#: (method, route path template) of every planned exclusion: the five world routes (owner decision 4).
+#: Not finalized, not pending; an attempt to open a campaign plan for one fails closed.
+# fmt: off
+R01_EXCLUDED_WORLD_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
+    {
+        ("POST", "/worlds/{world_id}/ownership-transfer"),
+        ("POST", "/worlds/{world_id}/roles"),
+        ("POST", "/worlds/{world_id}/roles/{world_membership_id}/end"),
+        ("POST", "/worlds/{world_id}/use-grants"),
+        ("POST", "/worlds/{world_id}/use-grants/{world_use_grant_id}/revoke"),
     }
 )
 # fmt: on

@@ -23,7 +23,11 @@ import pytest
 from fastapi.routing import APIRoute
 
 from dnd_ai.api.app import create_app
-from dnd_ai.api.r01_pending_routes import R01_FINALIZED_ROUTES, R01_PENDING_ROUTES
+from dnd_ai.api.r01_pending_routes import (
+    R01_EXCLUDED_WORLD_ROUTES,
+    R01_FINALIZED_ROUTES,
+    R01_PENDING_ROUTES,
+)
 from dnd_ai.api.r01_pre_write_routes import R01_KEYED_PRE_WRITE_ROUTES
 from dnd_ai.commands import campaign_lifecycle_plans as plans
 from dnd_ai.domain.authorization_steps import (
@@ -120,7 +124,8 @@ def test_the_world_routes_and_the_other_access_management_routes_are_untouched()
         ("POST", "/worlds/{world_id}/use-grants"),
         ("POST", "/worlds/{world_id}/use-grants/{world_use_grant_id}/revoke"),
     }
-    assert set(R01_PENDING_ROUTES) >= world
+    assert set(R01_EXCLUDED_WORLD_ROUTES) == world
+    assert not world & set(R01_PENDING_ROUTES)
     assert (
         set(R01_KEYED_PRE_WRITE_ROUTES)
         - _S5E1_ROUTES

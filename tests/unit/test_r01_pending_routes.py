@@ -21,7 +21,11 @@ from collections import Counter
 import pytest
 
 from dnd_ai.api.app import create_app
-from dnd_ai.api.r01_pending_routes import R01_FINALIZED_ROUTES, R01_PENDING_ROUTES
+from dnd_ai.api.r01_pending_routes import (
+    R01_EXCLUDED_WORLD_ROUTES,
+    R01_FINALIZED_ROUTES,
+    R01_PENDING_ROUTES,
+)
 from dnd_ai.api.r01_route_plans import UnclassifiedRouteError, route_is_pending
 from tests.r01_manifest import (
     _S3_ROUTES as S3_ROUTES,
@@ -83,13 +87,16 @@ def test_the_committed_pending_module_is_the_regenerated_one() -> None:
     assert actual == expected, "regenerate with: uv run python -m tests.r01_manifest"
 
 
-def test_every_route_inside_r01s_bound_is_pending_or_finalized_exactly_once() -> None:
+def test_every_route_inside_r01s_bound_is_pending_finalized_or_excluded_exactly_once() -> None:
     keys = {(str(r["method"]), str(r["path"])) for r in _inside()}
     pending = set(R01_PENDING_ROUTES)
     finalized = set(R01_FINALIZED_ROUTES)
+    excluded = set(R01_EXCLUDED_WORLD_ROUTES)
     assert pending & finalized == set()
-    assert pending | finalized == keys
+    assert excluded & (pending | finalized) == set()
+    assert pending | finalized | excluded == keys
     assert finalized == set(MIGRATED_ROUTES)
+    assert len(excluded) == 5 and all(path.startswith("/worlds/") for _, path in excluded)
 
 
 def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s5e2s_5_s5e3s_1_s5e4s_5_s5e5s_6_and_s5e6s_2() -> (
@@ -106,9 +113,9 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
     pre-write, plan 6.30). S5-E4 migrates the two resource-grant and three character-relationship routes
     (keyed-optional pre-write, plan 6.31). S5-E5 migrates the six access-group routes (keyed-optional pre-write,
     plan 6.34). S5-E6 migrates the two reveal-delegation routes (unkeyed pre-write, plan 6.36). 179 are finalized;
-    the other 13 (5 access-management, the planned-exclusion world routes, and 8 engine) stay pending."""
+    the 5 world routes are the explicit planned exclusions (neither finalized nor pending) and the 8 engine routes stay pending."""
     assert len(R01_FINALIZED_ROUTES) == 179
-    assert len(R01_PENDING_ROUTES) == 13
+    assert len(R01_PENDING_ROUTES) == 8 and len(R01_EXCLUDED_WORLD_ROUTES) == 5
     s2 = {
         route
         for route in R01_FINALIZED_ROUTES
@@ -188,13 +195,10 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
 
 
 def test_the_pending_counts_by_family_are_pinned() -> None:
-    """13 distinct pending routes (192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5, S5-E1's 3, S5-E2's 5, S5-E3's 1, S5-E4's 5, S5-E5's 6 and S5-E6's 2). The manifest
+    """8 distinct pending routes, the engine routes (S5-F: the five world routes moved to the explicit exclusion set; was 13: 192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5, S5-E1's 3, S5-E2's 5, S5-E3's 1, S5-E4's 5, S5-E5's 6 and S5-E6's 2). The manifest
     has 192 inside records: S5-E5 removed the duplicated `@router.post` of the members route (B-4), so no
     (method, path) is registered twice any more. No route-capability-only route is pending any more."""
-    assert dict(Counter(R01_PENDING_ROUTES.values())) == {
-        "access_management": 5,
-        "engine_early_commit": 8,
-    }
+    assert dict(Counter(R01_PENDING_ROUTES.values())) == {"engine_early_commit": 8}
     records = Counter(str(r["family"]) for r in _inside())
     assert records["access_management"] == 32, (
         "S5-E5 removed the duplicated members decorator (B-4)"
@@ -258,3 +262,32 @@ def test_every_campaign_scoped_write_route_is_inside_r01s_bound() -> None:
 def test_an_unclassified_route_fails_closed() -> None:
     """A new write route that is neither listed nor finalized cannot open a plan."""
     assert UnclassifiedRouteError.__mro__[1] is RuntimeError
+
+
+def test_a_planned_exclusion_route_fails_closed_in_plan_lookup_and_is_not_pending() -> None:
+    """S5-F bookkeeping: a world route opens no campaign plan (the lookup raises before it touches the connection),
+    is not reported pending, and is neither pending nor finalized. It is not migrated or accepted."""
+    import uuid
+    from typing import Any, cast
+
+    import pytest
+
+    from dnd_ai.api.r01_route_plans import (
+        ExcludedRouteError,
+        UnclassifiedRouteError,
+        begin_route_plan,
+    )
+
+    assert len(R01_EXCLUDED_WORLD_ROUTES) == 5
+    for method, path in R01_EXCLUDED_WORLD_ROUTES:
+        assert route_is_pending(method, path) is False
+        assert (method, path) not in R01_FINALIZED_ROUTES
+        with pytest.raises(ExcludedRouteError):
+            begin_route_plan(
+                cast(Any, None),
+                method=method,
+                route_path=path,
+                actor_user_id=uuid.uuid4(),
+                campaign_id=uuid.uuid4(),
+            )
+    assert issubclass(ExcludedRouteError, UnclassifiedRouteError)

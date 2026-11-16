@@ -86,7 +86,10 @@ included). The refusal is the same `ValueError` (400) as before; the deferred tr
 Self-revocation, self-demotion and self-assignment are judged against the **pre-command** authority: the
 route requirement is evaluated at `finalize`, before any write, and nothing newly granted exists yet. The
 owner-role gate (decision D3) and its DEF-013 recheck are plain reads made before `finalize`; they take no lock
-of their own (the owner assignment is among the actor's locked role rows).
+of their own (the owner assignment is among the actor's locked role rows). S5-F correction: for a requested
+built-in `campaign_owner` role (add, assign, change) and for every branch of the ownership transfer, `finalize` also
+judges `final_owner_requirement` at its own fresh instant, so an owner assignment that lapses after the early reads
+refuses the route though another role still supplies `access.manage`.
 """
 
 import uuid
@@ -97,8 +100,13 @@ from typing import Any
 
 from sqlalchemy import Connection, and_, bindparam, func, insert, or_, select, text, update
 
-from dnd_ai.domain.access import find_live_builtin_owner_assignment, is_builtin_campaign_owner_role
-from dnd_ai.domain.authorization import AuthorizationPlan, ReservationDeclarations
+from dnd_ai.domain.access import (
+    AuthoritySnapshot,
+    find_live_builtin_owner_assignment,
+    is_builtin_campaign_owner_role,
+)
+from dnd_ai.domain.authorization import AuthorizationPlan, Requirement, ReservationDeclarations
+from dnd_ai.domain.authorization_requirements import judged_requirement
 from dnd_ai.domain.authorization_steps import (
     AnyConfirmed,
     EachLockedRow,
@@ -808,6 +816,23 @@ def _require_owner_gate(
             )
 
 
+def final_owner_requirement(campaign_id: uuid.UUID, actor_membership_id: uuid.UUID) -> Requirement:
+    """The owner-role gate (D3) as a final requirement (S5-F correction): judged by `finalize` from its own snapshot, at
+    its one fresh authorization instant, by the predicate of `find_live_builtin_owner_assignment` (the snapshot's reveal
+    source `owner`). `access.manage` through another role is not this. It reads the database again; no boolean from
+    the early reads is passed in, and the early gate and recheck keep their refusal precedence."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        if snapshot.reveal_authority == "owner":
+            return None
+        return CampaignOwnerRequiredError(
+            f"membership {actor_membership_id} no longer holds a live campaign_owner assignment "
+            f"in campaign {campaign_id} at the final authorization instant"
+        )
+
+    return judged_requirement("membership_role.owner", decide, reveal=True)
+
+
 def _recheck_owner(
     connection: Connection, *, campaign_id: uuid.UUID, actor_membership_id: uuid.UUID
 ) -> None:
@@ -975,6 +1000,7 @@ def prepare_add_member(
     role_campaign, role_code = _usable_role(connection, role_id=role_id, campaign_id=campaign_id)
     if is_builtin_campaign_owner_role(role_campaign_id=role_campaign, role_code=role_code):
         _recheck_owner(connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id)
+        plan.require(connection, final_owner_requirement(campaign_id, actor_membership_id))
     return Prepared(
         world_id=_scope_world(connection, campaign_id),
         action_id=lookup_id(connection, "audit", "change_actions", "change_action_id", "created"),
@@ -1078,6 +1104,7 @@ def prepare_assign_role(
     role_campaign, role_code = _usable_role(connection, role_id=role_id, campaign_id=campaign_id)
     if is_builtin_campaign_owner_role(role_campaign_id=role_campaign, role_code=role_code):
         _recheck_owner(connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id)
+        plan.require(connection, final_owner_requirement(campaign_id, actor_membership_id))
     return Prepared(
         world_id=_scope_world(connection, campaign_id),
         action_id=lookup_id(connection, "audit", "change_actions", "change_action_id", "created"),
@@ -1253,6 +1280,7 @@ def prepare_change_role(
         )
     if is_builtin_campaign_owner_role(role_campaign_id=new_campaign, role_code=new_code):
         _recheck_owner(connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id)
+        plan.require(connection, final_owner_requirement(campaign_id, actor_membership_id))
     _require_manager_survives(
         connection,
         campaign_id=campaign_id,
@@ -1992,7 +2020,10 @@ def prepare_transfer(  # noqa: C901, PLR0912, PLR0915 - one linear lock and refu
     require_campaign_mode_covers_role_updates(
         role_update_owed=role_update_owed, expired=sorted(expired_keys), own=own_keys
     )
-    #   10. the world and the audit action
+    #   10. the final requirement, registered after every early check (refusal precedence is unchanged) and judged by
+    #       `finalize` at its own instant in every branch: the caller is a live built-in owner (S5-F correction)
+    plan.require(connection, final_owner_requirement(campaign_id, actor_membership_id))
+    #   11. the world and the audit action
     return TransferPrepared(
         world_id=_scope_world(connection, campaign_id),
         action_id=lookup_id(connection, "audit", "change_actions", "change_action_id", "updated"),

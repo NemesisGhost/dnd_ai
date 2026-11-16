@@ -647,6 +647,19 @@ _S5E6_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: The five world routes, an explicit **planned exclusion** from campaign-scoped R01 work (owner decision 4, plan
+#: 6.21.1; S5-F bookkeeping). Neither finalized nor pending, and not migrated or accepted: their plan lookup fails
+#: closed (`dnd_ai.api.r01_route_plans`). Their unkeyed-window follow-up is recorded in `docs/BACKLOG.md`.
+EXCLUDED_WORLD_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", "/worlds/{world_id}/ownership-transfer"),
+        ("POST", "/worlds/{world_id}/roles"),
+        ("POST", "/worlds/{world_id}/roles/{world_membership_id}/end"),
+        ("POST", "/worlds/{world_id}/use-grants"),
+        ("POST", "/worlds/{world_id}/use-grants/{world_use_grant_id}/revoke"),
+    }
+)
+
 MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     frozenset(
         {
@@ -692,9 +705,15 @@ def render_pending_routes(records: list[dict[str, Any]]) -> str:
             (str(r["method"]), str(r["path"]), str(r["family"]))
             for r in inside
             if (r["method"], r["path"]) not in MIGRATED_ROUTES
+            and (r["method"], r["path"]) not in EXCLUDED_WORLD_ROUTES
         }
     )
     migrated = sorted(MIGRATED_ROUTES)
+    inside_keys = {(str(r["method"]), str(r["path"])) for r in inside}
+    if not inside_keys >= EXCLUDED_WORLD_ROUTES or EXCLUDED_WORLD_ROUTES & MIGRATED_ROUTES:
+        raise AssertionError(
+            "the excluded world routes must be inside R01's bound and never migrated"
+        )
     lines = [
         '"""R01: which write routes are still pending, and which are finalized. GENERATED.',
         "",
@@ -705,8 +724,10 @@ def render_pending_routes(records: list[dict[str, Any]]) -> str:
         "A **pending** route is in R01's bound (`campaign_id` in its path and a family) but its handler",
         "has not been migrated to a final `AuthorizationPlan`: it is **not protected** by the R01 final",
         "check, and the commit guard admits its unfinalized plan. The set only shrinks, as slices S2-S5",
-        "and E1-E4 migrate routes into `R01_FINALIZED_ROUTES`. Routes outside R01's bound (account,",
-        'authentication, Foundry pairing, world and timeline routes) are in neither set."""',
+        "and E1-E4 migrate routes into `R01_FINALIZED_ROUTES`. The five world routes are the **planned",
+        "exclusions** (`R01_EXCLUDED_WORLD_ROUTES`): neither pending nor finalized, never migrated or accepted",
+        "by R01, and their plan lookup fails closed. Routes outside R01's bound (account, authentication,",
+        'Foundry pairing, timeline routes) are in no set."""',
         "",
         "from types import MappingProxyType",
         "from typing import Final",
@@ -736,6 +757,17 @@ def render_pending_routes(records: list[dict[str, Any]]) -> str:
         for method, path in migrated:
             lines.append(f'        ("{method}", "{path}"),')
         lines += ["    }", ")", "# fmt: on"]
+    lines += [
+        "",
+        "#: (method, route path template) of every planned exclusion: the five world routes (owner decision 4).",
+        "#: Not finalized, not pending; an attempt to open a campaign plan for one fails closed.",
+        "# fmt: off",
+        "R01_EXCLUDED_WORLD_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(",
+        "    {",
+    ]
+    for method, path in sorted(EXCLUDED_WORLD_ROUTES):
+        lines.append(f'        ("{method}", "{path}"),')
+    lines += ["    }", ")", "# fmt: on"]
     lines.append("")
     return "\n".join(lines)
 

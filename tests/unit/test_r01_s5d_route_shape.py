@@ -25,7 +25,11 @@ import pytest
 from fastapi.routing import APIRoute
 
 from dnd_ai.api.app import create_app
-from dnd_ai.api.r01_pending_routes import R01_FINALIZED_ROUTES, R01_PENDING_ROUTES
+from dnd_ai.api.r01_pending_routes import (
+    R01_EXCLUDED_WORLD_ROUTES,
+    R01_FINALIZED_ROUTES,
+    R01_PENDING_ROUTES,
+)
 from dnd_ai.api.r01_pre_write_routes import R01_KEYED_PRE_WRITE_ROUTES
 from dnd_ai.commands.campaign_invitation_plans import (
     CREATE_DECLARATIONS,
@@ -118,9 +122,10 @@ def test_the_five_routes_are_the_s5d_set_and_all_resolve_to_handlers() -> None:
     assert not _S5D_ROUTES & set(R01_PENDING_ROUTES)
 
 
-def test_the_world_routes_are_not_reclassified() -> None:
-    """S5-D finalizes no world route and reclassifies none: they stay pending (planned exclusions)."""
-    assert set(R01_PENDING_ROUTES) >= WORLD_ROUTES
+def test_the_world_routes_are_planned_exclusions_neither_finalized_nor_pending() -> None:
+    """S5-D finalized no world route. S5-F records them in the explicit exclusion set (bookkeeping only; not migrated)."""
+    assert set(R01_EXCLUDED_WORLD_ROUTES) == WORLD_ROUTES
+    assert not WORLD_ROUTES & set(R01_PENDING_ROUTES)
     assert not WORLD_ROUTES & set(R01_FINALIZED_ROUTES)
 
 

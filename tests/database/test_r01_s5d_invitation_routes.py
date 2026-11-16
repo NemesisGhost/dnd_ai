@@ -731,7 +731,8 @@ def _membership_ended(w: World, membership: uuid.UUID) -> bool:
 def test_an_end_of_the_inviting_manager_that_holds_the_membership_first_refuses_the_create(
     w: World, m: Managers, pooled: Engine, pooled_factory: Factory
 ) -> None:
-    """*race*, committed before authorization: the end holds the manager's membership `FOR UPDATE` and is
+    """*race* (**legacy-command evidence**: the end is `end_campaign_membership`, not the migrated route; the route is
+    raced in `test_r01_s5f_invitation_end_race.py`), committed before authorization: the end holds the manager's membership `FOR UPDATE` and is
     parked before its campaign lock. The keyed create queues at its membership lock holding only the actor's
     account `FOR KEY SHARE` (nothing the end wants), then, once the end commits, its lock finds no open
     membership and `finalize` refuses it. Nothing persists, the key is reusable, and no deadlock occurs."""
@@ -762,7 +763,8 @@ def test_an_end_of_the_inviting_manager_that_holds_the_membership_first_refuses_
 def test_a_create_that_holds_the_membership_first_makes_the_end_wait_and_both_commit(
     w: World, m: Managers, pooled: Engine, pooled_factory: Factory
 ) -> None:
-    """*race*, serialized revocation of authority: the create is parked at its final statement holding the
+    """*race* (**legacy-command evidence**: the end is `end_campaign_membership`, not the migrated route; the route is
+    raced in `test_r01_s5f_invitation_end_race.py`), serialized revocation of authority: the create is parked at its final statement holding the
     membership and the campaign `FOR KEY SHARE`. The end queues at the membership (`FOR UPDATE`), holding
     only role rows nobody else wants; the create commits (its invitation exists), then the end commits."""
     key = new_key()

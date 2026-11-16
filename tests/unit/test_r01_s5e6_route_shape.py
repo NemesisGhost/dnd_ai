@@ -23,7 +23,11 @@ import pytest
 from fastapi.routing import APIRoute
 
 from dnd_ai.api.app import create_app
-from dnd_ai.api.r01_pending_routes import R01_FINALIZED_ROUTES, R01_PENDING_ROUTES
+from dnd_ai.api.r01_pending_routes import (
+    R01_EXCLUDED_WORLD_ROUTES,
+    R01_FINALIZED_ROUTES,
+    R01_PENDING_ROUTES,
+)
 from dnd_ai.api.r01_pre_write_routes import (
     R01_KEYED_PRE_WRITE_ROUTES,
     R01_UNKEYED_PRE_WRITE_ROUTES,
@@ -84,9 +88,10 @@ def test_the_two_routes_are_the_s5e6_set_finalized_unkeyed_and_no_longer_pending
     assert not _S5E6_ROUTES & set(R01_KEYED_PRE_WRITE_ROUTES)
     assert R01_UNKEYED_PRE_WRITE_ROUTES[GRANT] is plans.GRANT_DECLARATION
     assert R01_UNKEYED_PRE_WRITE_ROUTES[REVOKE] is plans.REVOKE_DECLARATION
-    assert len(R01_FINALIZED_ROUTES) == 179 and len(R01_PENDING_ROUTES) == 13
-    # the world routes were not reclassified here: five world routes are still pending
-    assert len([r for r in R01_PENDING_ROUTES if r[1].startswith("/worlds/")]) == 5
+    assert len(R01_FINALIZED_ROUTES) == 179 and len(R01_PENDING_ROUTES) == 8
+    # S5-F bookkeeping: the five world routes are the explicit exclusions, neither finalized nor pending
+    assert len([r for r in R01_EXCLUDED_WORLD_ROUTES if r[1].startswith("/worlds/")]) == 5
+    assert not [r for r in R01_PENDING_ROUTES if r[1].startswith("/worlds/")]
     assert set(_handlers()) == _S5E6_ROUTES
 
 
