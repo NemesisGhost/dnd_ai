@@ -275,3 +275,40 @@ def test_the_write_functions_run_only_declared_steps() -> None:
         }
         assert executed == allowed
         assert "connection.execute" not in inspect.getsource(function)
+
+
+def test_the_final_requirements_are_registered_after_every_early_check_and_before_the_plan_returns() -> (
+    None
+):
+    """R01 S5-E6 correction: the owner (both routes) and the recipient (the grant) are registered with `plan.require`
+    after the last early check (the drift check; the caller's recheck) and in that order, owner first. The early checks
+    keep their precedence; the plan's `finalize` judges these at its own instant."""
+    grant = inspect.getsource(plans.prepare_grant)
+    _order(
+        grant,
+        [
+            "RevealDelegationRecipientNotGmError(",
+            "RevealDelegationRecipientChangedError(",
+            "_live_delegations(",
+            "plan.require(connection, owner_requirement(",
+            "plan.require(connection, recipient_requirement(",
+            "return GrantPrepared(",
+        ],
+    )
+    revoke = inspect.getsource(plans.prepare_revoke)
+    _order(
+        revoke,
+        [
+            "_recheck_caller_is_live_owner(",
+            "plan.require(connection, owner_requirement(",
+            "return RevokePrepared(",
+        ],
+    )
+    assert "recipient_requirement" not in revoke
+    # the requirements read the final snapshot only: no connection, no cached liveness boolean
+    for function in (plans.owner_requirement, plans.recipient_requirement):
+        source = inspect.getsource(function)
+        assert "connection" not in source and "execute(" not in source
+    assert "grantee: uuid.UUID, gm_assignment: uuid.UUID" in inspect.getsource(
+        plans.recipient_requirement
+    )

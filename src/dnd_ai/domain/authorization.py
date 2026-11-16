@@ -474,6 +474,8 @@ class Requirement:
     - `refusal`: builds the exact error the early check raises today; the plan raises it unchanged.
     - `world_id`: the world whose authority the snapshot must carry, if any.
     - `reveal`: whether the snapshot must carry the caller's reveal authority.
+    - `gm_subject`: a membership of this campaign whose live built-in `gm` assignment the snapshot must carry
+      (R01 S5-E6, the recipient of a reveal delegation), read in the same statement at the same instant.
 
     Facts captured under lock earlier (origins, restriction state, the reveal source...) are closed
     over by `predicate`; the final check never re-derives operation facts from post-write rows."""
@@ -483,6 +485,7 @@ class Requirement:
     refusal: Callable[[], BaseException]
     world_id: uuid.UUID | None = None
     reveal: bool = False
+    gm_subject: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -873,6 +876,9 @@ class AuthorizationPlan:
         declared = {r.world_id for r in self._requirements if r.world_id is not None}
         if requirement.world_id is not None and declared - {requirement.world_id}:
             raise ValueError("a plan's requirements name one world")
+        subjects = {r.gm_subject for r in self._requirements if r.gm_subject is not None}
+        if requirement.gm_subject is not None and subjects - {requirement.gm_subject}:
+            raise ValueError("a plan's requirements name one gm subject")
         self._requirements.append(requirement)
 
     def _verify_session(self, connection: Connection) -> None:
@@ -942,6 +948,7 @@ class AuthorizationPlan:
             self._finalised = True
             return None
         world_ids = {r.world_id for r in self._requirements if r.world_id is not None}
+        gm_subjects = {r.gm_subject for r in self._requirements if r.gm_subject is not None}
         self._reading = True
         try:
             snapshot = read_authority_snapshot(
@@ -950,6 +957,7 @@ class AuthorizationPlan:
                 campaign_id=self._campaign_id,
                 world_id=next(iter(world_ids)) if world_ids else None,
                 with_reveal=any(r.reveal for r in self._requirements),
+                subject_gm_membership_id=next(iter(gm_subjects)) if gm_subjects else None,
                 as_of=FRESH_INSTANT,
             )
         finally:

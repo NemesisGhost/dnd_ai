@@ -47,9 +47,10 @@ def judged_requirement(
     *,
     world_id: uuid.UUID | None = None,
     reveal: bool = False,
+    gm_subject: uuid.UUID | None = None,
 ) -> Requirement:
     """A requirement that holds when `decide(snapshot)` is `None` and otherwise refuses with the
-    exception `decide` returned. `world_id` and `reveal` declare the extra sources `decide` reads."""
+    exception `decide` returned. `world_id`, `reveal` and `gm_subject` declare the extra sources `decide` reads."""
     judgement = _Judgement(decide)
     return Requirement(
         name=name,
@@ -57,4 +58,5 @@ def judged_requirement(
         refusal=judgement.refusal,
         world_id=world_id,
         reveal=reveal,
+        gm_subject=gm_subject,
     )

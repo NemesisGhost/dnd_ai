@@ -100,6 +100,14 @@ def test_the_reader_constant_names_exactly_the_tables_the_statement_reads() -> N
     sql = _authority_snapshot_sql(instant="fresh", with_world=True, with_reveal=True)
     named = set(re.findall(r"(?:FROM|JOIN)\s+([a-z_]+\.[a-z_]+)", sql))
     assert named == AUTHORITY_READER_TABLES
+    # R01 S5-E6: the recipient's `gm` source reads no table the statement did not already read
+    with_subject = _authority_snapshot_sql(
+        instant="fresh", with_world=True, with_reveal=True, with_subject_gm=True
+    )
+    assert (
+        set(re.findall(r"(?:FROM|JOIN)\s+([a-z_]+\.[a-z_]+)", with_subject))
+        == AUTHORITY_READER_TABLES
+    )
 
 
 def test_post_write_routes_write_none_of_the_readers_tables_except_the_reviewed_classes() -> None:

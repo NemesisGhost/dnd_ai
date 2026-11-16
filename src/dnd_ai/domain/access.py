@@ -1032,6 +1032,10 @@ class AuthoritySnapshot:
     world_id: uuid.UUID | None = None
     world_authority: WorldAuthority | None = None
     reveal_authority: RevealAuthority | None = None
+    #: R01 S5-E6: the membership whose built-in `gm` assignment was declared, and that assignment's id (`None` when
+    #: that membership holds no live one at `t_auth`). Both `None` unless declared.
+    subject_membership_id: uuid.UUID | None = None
+    subject_gm_assignment: uuid.UUID | None = None
 
 
 _LIVE_REVELATIONS_IN_STATEMENT_SQL = LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL.replace(
@@ -1300,6 +1304,41 @@ _REVEAL_COLUMNS = """
         (SELECT source FROM reveal) AS reveal_source
 """
 
+# The live built-in `gm` assignment of one named membership of this campaign (R01 S5-E6: the recipient of a reveal
+# delegation), judged by the same predicate as `find_live_builtin_gm_assignment` and at the same `t_auth`: the built-in
+# template (`campaign_id IS NULL`, active), the assignment neither revoked nor expired, the membership of this campaign,
+# open and `active`, the account active; the first by id. Reads the same tables as the reveal CTEs.
+_SUBJECT_GM_CTES = f"""
+    subject_gm AS (
+        SELECT mr.membership_role_id
+        FROM security.membership_roles mr
+        JOIN security.roles r ON r.role_id = mr.role_id
+        JOIN security.campaign_memberships cm
+          ON cm.campaign_membership_id = mr.campaign_membership_id
+        JOIN security.membership_statuses ms
+          ON ms.membership_status_id = cm.membership_status_id
+        JOIN security.users u ON u.user_id = cm.user_id
+        JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+        WHERE mr.campaign_membership_id = :subject_membership_id
+          AND cm.campaign_id = :campaign_id
+          AND r.campaign_id IS NULL
+          AND r.code = '{BUILTIN_CAMPAIGN_GM_ROLE_CODE}'
+          AND r.is_active
+          AND mr.revoked_at IS NULL
+          AND (mr.expires_at IS NULL OR mr.expires_at > {_T_AUTH})
+          AND cm.ended_at IS NULL
+          AND ms.code = 'active'
+          AND ms.is_active
+          AND uls.code = 'active'
+        ORDER BY mr.membership_role_id
+        LIMIT 1
+    )
+"""
+
+_SUBJECT_GM_COLUMNS = """
+        (SELECT membership_role_id FROM subject_gm) AS subject_gm_assignment
+"""
+
 
 #: Every table the single-statement authority reader reads (the access, world-authority and
 #: reveal-authority sources). A post-write plan is valid only for a request that writes none of them,
@@ -1353,7 +1392,9 @@ REVIEWED_POST_WRITE_TABLES: Final[frozenset[str]] = frozenset(
 )
 
 
-def _authority_snapshot_sql(*, instant: str, with_world: bool, with_reveal: bool) -> str:
+def _authority_snapshot_sql(
+    *, instant: str, with_world: bool, with_reveal: bool, with_subject_gm: bool = False
+) -> str:
     ctes = [f"clock AS MATERIALIZED (SELECT {_INSTANT_SQL[instant]} AS t_auth)", _ACCESS_CTES]
     columns = [
         f"{_T_AUTH} AS t_auth",
@@ -1366,6 +1407,9 @@ def _authority_snapshot_sql(*, instant: str, with_world: bool, with_reveal: bool
     if with_reveal:
         ctes.append(_REVEAL_CTES)
         columns.append(_REVEAL_COLUMNS)
+    if with_subject_gm:
+        ctes.append(_SUBJECT_GM_CTES)
+        columns.append(_SUBJECT_GM_COLUMNS)
     return "WITH " + ",\n".join(part.strip() for part in ctes) + "\nSELECT " + ",\n".join(columns)
 
 
@@ -1377,12 +1421,14 @@ def read_authority_snapshot(
     timeline_id: uuid.UUID | None = None,
     world_id: uuid.UUID | None = None,
     with_reveal: bool = False,
+    subject_gm_membership_id: uuid.UUID | None = None,
     as_of: Instant = None,
 ) -> AuthoritySnapshot:
     """Read the declared authority sources in ONE statement and return them with the instant expiry
     was judged at (plan sections 3 and 6.1). Always declared: the caller's access to the campaign.
     Optionally: the caller's authority over `world_id`, and the caller's reveal authority
-    (`with_reveal`). No row locks are taken.
+    (`with_reveal`), and the live built-in `gm` assignment of `subject_gm_membership_id` (R01 S5-E6). No row locks
+    are taken.
 
     `as_of` selects the instant (see `Instant`): the transaction's start by default, an explicit
     `datetime`, or `FRESH_INSTANT`, the single in-statement `clock_timestamp()` that follows the
@@ -1395,13 +1441,18 @@ def read_authority_snapshot(
     else:
         instant = "explicit"
     sql = _authority_snapshot_sql(
-        instant=instant, with_world=world_id is not None, with_reveal=with_reveal
+        instant=instant,
+        with_world=world_id is not None,
+        with_reveal=with_reveal,
+        with_subject_gm=subject_gm_membership_id is not None,
     )
     parameters: dict[str, object] = {"campaign_id": campaign_id, "user_id": user_id}
     if instant == "explicit":
         parameters["as_of"] = as_of
     if world_id is not None:
         parameters["world_id"] = world_id
+    if subject_gm_membership_id is not None:
+        parameters["subject_membership_id"] = subject_gm_membership_id
     row = connection.execute(text(sql), parameters).mappings().one()
 
     isolation = _as_str(row["isolation"])
@@ -1432,6 +1483,10 @@ def read_authority_snapshot(
         world_id=world_id,
         world_authority=world_authority,
         reveal_authority=reveal_authority,
+        subject_membership_id=subject_gm_membership_id,
+        subject_gm_assignment=row["subject_gm_assignment"]
+        if subject_gm_membership_id is not None
+        else None,
     )
 
 

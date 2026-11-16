@@ -72,11 +72,13 @@ from typing import Any
 from sqlalchemy import Connection, bindparam, func, insert, select, text, update
 
 from dnd_ai.domain.access import (
+    AuthoritySnapshot,
     find_live_builtin_gm_assignment,
     find_live_builtin_owner_assignment,
 )
 from dnd_ai.domain.authoring import normalize_reason
-from dnd_ai.domain.authorization import AuthorizationPlan
+from dnd_ai.domain.authorization import AuthorizationPlan, Requirement
+from dnd_ai.domain.authorization_requirements import judged_requirement
 from dnd_ai.domain.authorization_steps import (
     AnyConfirmed,
     EachLockedRow,
@@ -115,7 +117,7 @@ from .character_reveal import (
     _require_grantee_in_campaign,
 )
 from .membership_role_plans import DELEGATION_TRIGGERS, _audit_values, _scope_world
-from .memberships import _database_clock, _recheck_caller_is_live_owner
+from .memberships import CampaignOwnerRequiredError, _database_clock, _recheck_caller_is_live_owner
 from .reveal_delegation_lifecycle import (
     END_REASON_GM_ASSIGNMENT_LAPSED,
     END_REASON_REVOKED_BY_OWNER,
@@ -350,6 +352,49 @@ REVOKE_DECLARATION = PreWriteDeclaration(
     unlocked_fk_targets=CHANGE_LOG_UNLOCKED_FK_TARGETS,
 )
 
+# -- the final authorization requirements (judged by `plan.finalize` at its own fresh instant) ----------------------
+
+
+def owner_requirement(campaign_id: uuid.UUID, actor_membership_id: uuid.UUID) -> Requirement:
+    """The operation's own authority, judged again at `finalize`'s one `t_auth`: the caller holds a live built-in
+    `campaign_owner` assignment (the reveal source `owner` of the same snapshot, the predicate of
+    `find_live_builtin_owner_assignment`: the template, the assignment, the membership and the account). `access.manage`
+    through any other role is not this, and a delegation (`delegation`) is not either. The early reads keep their
+    precedence; this is the final word and reads the database, never a boolean the early reads produced."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        if snapshot.reveal_authority == "owner":
+            return None
+        return CampaignOwnerRequiredError(
+            f"membership {actor_membership_id} no longer holds a live campaign_owner assignment "
+            f"in campaign {campaign_id} at the final authorization instant"
+        )
+
+    return judged_requirement("reveal_delegation.owner", decide, reveal=True)
+
+
+def recipient_requirement(grantee: uuid.UUID, gm_assignment: uuid.UUID) -> Requirement:
+    """The grant's recipient eligibility at the same instant: the grantee's live built-in `gm` assignment (template,
+    assignment, membership of this campaign, account, judged at `t_auth`) exists (409 not-GM otherwise) and is the very
+    row the grant locked and will bind the delegation to (`recipient_changed` otherwise)."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        if snapshot.subject_membership_id != grantee:
+            return RuntimeError("the final snapshot does not carry the grantee's gm assignment")
+        held = snapshot.subject_gm_assignment
+        if held is None:
+            return RevealDelegationRecipientNotGmError(
+                f"membership {grantee} holds no live built-in gm assignment at the final authorization instant"
+            )
+        if held != gm_assignment:
+            return RevealDelegationRecipientChangedError(
+                f"membership {grantee}'s live gm assignment {held} is not the locked {gm_assignment}"
+            )
+        return None
+
+    return judged_requirement("reveal_delegation.recipient_gm", decide, gm_subject=grantee)
+
+
 # -- prepare and write ----------------------------------------------------------------------------------
 
 
@@ -490,6 +535,10 @@ def prepare_grant(
         raise RevealDelegationRecipientChangedError(
             f"membership {grantee_campaign_membership_id}'s live delegations changed while the grant waited"
         )
+    # 8. the final requirements, registered after every early check (so refusal precedence is unchanged) and judged by
+    #    `finalize` at its own instant: the owner, then the recipient, each read from the database again
+    plan.require(connection, owner_requirement(campaign_id, actor_membership_id))
+    plan.require(connection, recipient_requirement(grantee_campaign_membership_id, gm_assignment))
     return GrantPrepared(
         world_id=_scope_world(connection, campaign_id),
         action_id=lookup_id(connection, "audit", "change_actions", "change_action_id", "created"),
@@ -600,6 +649,7 @@ def prepare_revoke(
     _recheck_caller_is_live_owner(
         connection, campaign_id=campaign_id, actor_membership_id=actor_membership_id
     )
+    plan.require(connection, owner_requirement(campaign_id, actor_membership_id))
     return RevokePrepared(
         world_id=_scope_world(connection, campaign_id),
         action_id=lookup_id(connection, "audit", "change_actions", "change_action_id", "updated"),
