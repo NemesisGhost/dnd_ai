@@ -1315,6 +1315,17 @@ A5a is **storage and GM reads only**. A character has at most one *player profil
 - **Not in A5a:** provenance on public-profile drafts and releases (added by A5b, below), the GM-selected copy (A5c), controller read or edit (P03-B), the portal (A6), previews (A7), private notebooks (Phase 16B/16C) and world-canon publication (P03-C).
 - **Tests:** `tests/database/test_player_profile_{api,races}.py`, `test_character_player_profiles_{schema,migration}.py`, `tests/unit/test_player_profiles_structure.py`; the race RA1 runs over real HTTP.
 
+## Locking of keyed authoring, operation and reveal routes (R01 O-2; plan 6.43, 6.44)
+
+A keyed request to one of the 129 opted-in authoring, operation and reveal routes (`R01_DEFERRED_RESERVATION_ROUTES`) no longer takes the campaign row `FOR KEY SHARE` through its idempotency reservation before its role and membership rows. The reservation's campaign foreign-key check is deferred to COMMIT, the plan's evidence statement takes the campaign `FOR KEY SHARE` immediately before the scope's own campaign lock, which is after the author's role rows, membership and account `KEY SHARE`, and the access-management writers (role change, revoke, transfer, membership end, grants, groups, recovery) therefore serialize with such a request instead of deadlocking with it (SQLSTATE 40P01 with a 500 for the loser, before). What this changes for clients:
+
+- **Authorization is unchanged in timing.** The early checks, the scope's re-authorization, the one final `finalize` decision after the writes and the refusals (403, 404) are as before. No new error code.
+- **Scheduling.** A writer no longer queues behind an opted-in request between its reservation and its scope. A request and an access change that used to deadlock now run one after the other, and the winner is decided by arrival. The request may then answer its existing early-check refusal (for example 403 or 404 after its own role was revoked) where it used to be a deadlock victim. That is intended (design decision D-4).
+- **Idempotency, replay, receipts and audit** are unchanged; a key stays reusable after any rollback. An unkeyed request is unchanged statement for statement.
+- **Exemptions.** The character-revelation create and revoke routes are not opted in: they take the campaign `FOR KEY SHARE` themselves before a late reservation. The 16 keyed route-capability-only (S4b) routes keep the immediate reservation foreign key; no access-row lock is reachable from them, by a source and run-time trace that is not a proof (plan 6.43.8). The engine routes (pending) and the five world routes (excluded) are not covered.
+- **Not claimed.** DEF-019 stays open until the owner decides it (the recommendation is in plan 6.44.4 and `docs/BACKLOG.md`); DEF-020 and DEF-021 are unchanged. Mechanism and rule: `docs/DATABASE_CONVENTIONS.md` §20.3.1.
+- **Tests:** `tests/database/test_r01_o2_cycle_regressions.py` (the three-party NF-4 case), `test_r01_o2_late_reservation_routes.py`, `test_r01_o2_savepoint_responses.py`, `test_r01_o2_unreached_adopters.py`, `tests/unit/test_r01_o2_structure.py`, and the reclassified serialization regressions in `test_r01_s5e2_authoring_transfer_cycles.py`, `test_r01_s5e3_end_interactions.py`, `test_r01_s5e4_access_races.py`, `test_r01_s5e5_group_interactions.py` and `test_player_profile_copy_races.py`.
+
 ## Recovery and audit
 
 Use [administrator recovery](../operations/PLATFORM_ADMINISTRATOR_RECOVERY.md) and
