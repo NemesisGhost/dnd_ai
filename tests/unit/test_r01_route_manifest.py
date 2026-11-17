@@ -13,7 +13,7 @@ import json
 import pytest
 
 from dnd_ai.api.app import create_app
-from tests.r01_manifest import E1_ROUTES, MANIFEST_PATH, build_manifest, render
+from tests.r01_manifest import E1_ROUTES, E2_ROUTES, MANIFEST_PATH, build_manifest, render
 
 pytestmark = pytest.mark.unit
 
@@ -94,6 +94,7 @@ def test_every_campaign_scoped_write_route_has_a_campaign_family() -> None:
         "route_capability_only",
         "engine_early_commit",
         "engine_request_scoped",  # R01 E1: the migrated proposal-review route
+        "engine_two_phase",  # R01 E2: the two migrated AI provider routes
     }
 
 
@@ -113,12 +114,17 @@ def test_early_commit_routes_are_exactly_the_engine_routes() -> None:
         if r["family"] == "engine_early_commit"
     }
     # R01 E1 moved the proposal-review route out of the early-commit family (plan 6.45): seven remain.
-    assert found == ENGINE_EARLY_COMMIT - E1_ROUTES
+    assert found == ENGINE_EARLY_COMMIT - E1_ROUTES - E2_ROUTES
     assert {
         (str(r["method"]), str(r["path"]))
         for r in _committed()
         if r["family"] == "engine_request_scoped"
     } == E1_ROUTES
+    assert {
+        (str(r["method"]), str(r["path"]))
+        for r in _committed()
+        if r["family"] == "engine_two_phase"
+    } == E2_ROUTES
 
 
 def test_route_capability_only_routes_have_no_unresolved_callee() -> None:

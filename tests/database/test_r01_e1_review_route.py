@@ -36,8 +36,8 @@ from typing import Any
 import pytest
 from sqlalchemy import Engine, event, text
 
-from dnd_ai.commands.ai_npc import request_npc_conversation_turn
 from dnd_ai.domain.ai_provider import FakeAiProvider
+from tests.ai_e2_support import delete_campaign_security_rows, npc_turn
 from tests.ai_review_support import delete_reviewer, make_gm_reviewer
 from tests.database.test_ai_advance_objective_proposal import Fixture as AdvanceFixture
 from tests.database.test_r01_s2_profile_routes import (  # noqa: F401 - fixtures by name
@@ -159,6 +159,7 @@ def sc(postgres_engine: Engine) -> Iterator[Scene]:
         with postgres_engine.begin() as cleanup:
             cleanup.execute(text("SET LOCAL statement_timeout = '30s'"))
             cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+            delete_campaign_security_rows(cleanup, f.campaign_id)
             cleanup_committed_ai_world(
                 cleanup, world_id=f.world_id, campaign_id=f.campaign_id, agent_id=f.agent_id
             )
@@ -172,10 +173,11 @@ def new_proposal(sc: Scene, kind: str) -> uuid.UUID:
         if kind == "advance"
         else FakeAiProvider(dialogue="Perhaps.", reveal_first_candidate=True)
     )
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         sc.engine,
+        user_id=sc.f.interactor_id,
+        campaign_id=sc.f.campaign_id,
         agent_assignment_id=sc.f.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=sc.f.pc_id,
         requesting_party_id=sc.f.party_id,
         player_message="Hello",

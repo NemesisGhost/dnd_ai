@@ -9,7 +9,6 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.commands.ai_synthesis import request_campaign_synthesis
 from dnd_ai.domain.ai_provider import FakeAiProvider
 from dnd_ai.domain.context_assembly import (
     GM_BRIEF,
@@ -17,6 +16,7 @@ from dnd_ai.domain.context_assembly import (
     PLAYER_SUMMARY,
     assemble_campaign_synthesis_context,
 )
+from tests.ai_e2_support import delete_campaign_security_rows, make_interactor, synthesis
 from tests.factories import (
     cleanup_committed_ai_world,
     make_agent,
@@ -48,6 +48,8 @@ class Fixture:
         )
         self.party_id = make_party(connection, self.world_id)
         make_campaign_party(connection, self.campaign_id, self.party_id)
+        # R01 E2: the synthesis command judges its caller in each of its two transactions.
+        self.interactor_id = make_interactor(connection, self.campaign_id)
 
         self.recorded_event_id = make_event(
             connection,
@@ -131,6 +133,7 @@ def committed(postgres_engine: Engine) -> Iterator[Fixture]:
     yield fixture
     with postgres_engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        delete_campaign_security_rows(cleanup, fixture.campaign_id)
         cleanup_committed_ai_world(
             cleanup,
             world_id=fixture.world_id,
@@ -142,12 +145,12 @@ def committed(postgres_engine: Engine) -> Iterator[Fixture]:
 def test_request_campaign_synthesis_records_output(
     postgres_engine: Engine, committed: Fixture
 ) -> None:
-    result = request_campaign_synthesis(
+    result = synthesis(
         postgres_engine,
+        user_id=committed.interactor_id,
         agent_assignment_id=committed.assignment_id,
         campaign_id=committed.campaign_id,
         audience_tier=OBSERVER_SUMMARY,
-        requesting_user_id=None,
         question_text="What happened recently?",
         provider=FakeAiProvider(dialogue="The party fought bandits."),
     )

@@ -933,7 +933,9 @@
  {
   "audit": false,
   "command_markers": {
-   "dnd_ai.commands.ai_npc.request_npc_conversation_turn": []
+   "dnd_ai.commands.ai_npc.request_npc_conversation_turn": [],
+   "dnd_ai.commands.ai_perspective.party_perspective_requirement": [],
+   "dnd_ai.commands.ai_perspective.perspective_facts_or_refuse": []
   },
   "command_scope_markers": [],
   "command_writes": {
@@ -950,10 +952,14 @@
     "narrative.event_effects",
     "narrative.event_participants",
     "narrative.events"
-   ]
+   ],
+   "dnd_ai.commands.ai_perspective.party_perspective_requirement": [],
+   "dnd_ai.commands.ai_perspective.perspective_facts_or_refuse": []
   },
   "commands": [
-   "dnd_ai.commands.ai_npc.request_npc_conversation_turn"
+   "dnd_ai.commands.ai_npc.request_npc_conversation_turn",
+   "dnd_ai.commands.ai_perspective.party_perspective_requirement",
+   "dnd_ai.commands.ai_perspective.perspective_facts_or_refuse"
   ],
   "dependencies": [
    {
@@ -966,7 +972,7 @@
    }
   ],
   "early_commit": true,
-  "family": "engine_early_commit",
+  "family": "engine_two_phase",
   "handler": "dnd_ai.api.ai_npc.request_npc_conversation_turn_endpoint",
   "idempotency": [],
   "method": "POST",
@@ -978,7 +984,9 @@
    "reader:world_authority",
    "reader:world_capability"
   ],
-  "unresolved": []
+  "unresolved": [
+   "requirements"
+  ]
  },
  {
   "audit": false,
@@ -1040,10 +1048,14 @@
  {
   "audit": false,
   "command_markers": {
+   "dnd_ai.commands.ai_perspective.party_perspective_requirement": [],
+   "dnd_ai.commands.ai_perspective.perspective_facts_or_refuse": [],
    "dnd_ai.commands.ai_synthesis.request_campaign_synthesis": []
   },
   "command_scope_markers": [],
   "command_writes": {
+   "dnd_ai.commands.ai_perspective.party_perspective_requirement": [],
+   "dnd_ai.commands.ai_perspective.perspective_facts_or_refuse": [],
    "dnd_ai.commands.ai_synthesis.request_campaign_synthesis": [
     "ai.context_requests",
     "ai.context_snapshots",
@@ -1051,6 +1063,8 @@
    ]
   },
   "commands": [
+   "dnd_ai.commands.ai_perspective.party_perspective_requirement",
+   "dnd_ai.commands.ai_perspective.perspective_facts_or_refuse",
    "dnd_ai.commands.ai_synthesis.request_campaign_synthesis"
   ],
   "dependencies": [
@@ -1064,7 +1078,7 @@
    }
   ],
   "early_commit": true,
-  "family": "engine_early_commit",
+  "family": "engine_two_phase",
   "handler": "dnd_ai.api.ai_synthesis.request_campaign_synthesis_endpoint",
   "idempotency": [],
   "method": "POST",
@@ -1076,7 +1090,9 @@
    "reader:world_authority",
    "reader:world_capability"
   ],
-  "unresolved": []
+  "unresolved": [
+   "requirements"
+  ]
  },
  {
   "audit": false,

@@ -39,6 +39,7 @@ from tests.factories import (
     make_role_capability,
     make_ruleset_version_for_world,
     make_timeline,
+    make_timeline_clock,
     make_user,
     make_world,
     make_world_time,
@@ -61,6 +62,9 @@ class Fixture:
             lifecycle_status_code="pending",
         )
 
+        make_timeline_clock(
+            connection, self.timeline_id, self.world_time_id
+        )  # membership is current at the clock
         self.pc_id = make_character(connection, self.world_id, name="Hero")
         self.npc_id = make_character(connection, self.world_id, name="Innkeeper")
         self.party_id = make_party(connection, self.world_id)
@@ -78,6 +82,7 @@ class Fixture:
             "canon.edit",
             "rules_source.manage",
             "character.interact",
+            "character.view_knowledge",  # R01 E2 (G-2): the NPC turn proves the party perspective
             "campaign.view",
         )
         capability_ids = {

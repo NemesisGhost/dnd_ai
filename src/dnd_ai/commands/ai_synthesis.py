@@ -28,10 +28,19 @@ from sqlalchemy import Connection, Engine, text
 
 from dnd_ai.domain.ai_provider import AiProvider
 from dnd_ai.domain.context_assembly import (
+    PLAYER_SUMMARY,
     CampaignSynthesisContext,
     assemble_campaign_synthesis_context,
 )
 from dnd_ai.domain.errors import DomainAuthorizationError
+
+from .ai_perspective import (
+    RequirementFactory,
+    finalize_with_fresh_perspective,
+    perspective_facts_or_refuse,
+    register_requirements,
+)
+from .authorized_transaction import authorized_transaction
 
 
 class SynthesisAgentAssignmentNotFoundError(DomainAuthorizationError):
@@ -117,17 +126,37 @@ def request_campaign_synthesis(
     agent_assignment_id: uuid.UUID,
     campaign_id: uuid.UUID,
     audience_tier: str,
-    requesting_user_id: uuid.UUID | None,
+    requesting_user_id: uuid.UUID,
     question_text: str,
     provider: AiProvider,
+    requirements: RequirementFactory,
     timeline_id: uuid.UUID | None = None,
     requesting_character_id: uuid.UUID | None = None,
     requesting_party_id: uuid.UUID | None = None,
 ) -> CampaignSynthesisResult:
-    with engine.begin() as connection:
+    """Two engine transactions around the provider call (R01 E2), each an `authorized_transaction` with its
+    own plan and its own fresh `requirements()`. For `player_summary` the party perspective's domain facts are
+    read and judged inside each transaction (T1 before the context is assembled), and T2 re-checks them before
+    the output is written. T1 commits before the provider is called; nothing is held across the call."""
+    judges_perspective = (
+        audience_tier == PLAYER_SUMMARY
+        and requesting_character_id is not None
+        and requesting_party_id is not None
+        and timeline_id is not None
+    )
+    with authorized_transaction(engine, requesting_user_id, campaign_id) as (connection, plan):
+        register_requirements(connection, plan, requirements)
         _lock_campaign_agent_assignment(
             connection, agent_assignment_id=agent_assignment_id, campaign_id=campaign_id
         )
+        if judges_perspective:
+            perspective_facts_or_refuse(
+                connection,
+                campaign_id=campaign_id,
+                timeline_id=timeline_id,  # type: ignore[arg-type]
+                character_id=requesting_character_id,  # type: ignore[arg-type]
+                party_id=requesting_party_id,  # type: ignore[arg-type]
+            )
         context_request_id, context = _record_synthesis_request(
             connection,
             agent_assignment_id=agent_assignment_id,
@@ -139,6 +168,16 @@ def request_campaign_synthesis(
             timeline_id=timeline_id,
             requesting_party_id=requesting_party_id,
         )
+        if judges_perspective:
+            finalize_with_fresh_perspective(
+                connection,
+                plan,
+                name="synthesis.player_summary.perspective",
+                campaign_id=campaign_id,
+                timeline_id=timeline_id,  # type: ignore[arg-type]
+                character_id=requesting_character_id,  # type: ignore[arg-type]
+                party_id=requesting_party_id,  # type: ignore[arg-type]
+            )
 
     provider_result = provider.generate_synthesis(
         context=context.as_prompt_payload(),
@@ -146,7 +185,16 @@ def request_campaign_synthesis(
         question_text=question_text,
     )
 
-    with engine.begin() as connection:
+    with authorized_transaction(engine, requesting_user_id, campaign_id) as (connection, plan):
+        register_requirements(connection, plan, requirements)
+        if judges_perspective:
+            perspective_facts_or_refuse(
+                connection,
+                campaign_id=campaign_id,
+                timeline_id=timeline_id,  # type: ignore[arg-type]
+                character_id=requesting_character_id,  # type: ignore[arg-type]
+                party_id=requesting_party_id,  # type: ignore[arg-type]
+            )
         agent_row = connection.execute(
             text("""
                 SELECT a.provider, a.model_identifier
@@ -182,14 +230,24 @@ def request_campaign_synthesis(
             },
         ).scalar()
         assert isinstance(generated_output_id, uuid.UUID)
+        if judges_perspective:
+            finalize_with_fresh_perspective(
+                connection,
+                plan,
+                name="synthesis.player_summary.perspective",
+                campaign_id=campaign_id,
+                timeline_id=timeline_id,  # type: ignore[arg-type]
+                character_id=requesting_character_id,  # type: ignore[arg-type]
+                party_id=requesting_party_id,  # type: ignore[arg-type]
+            )
 
-        return CampaignSynthesisResult(
-            context_request_id=context_request_id,
-            generated_output_id=generated_output_id,
-            answer=(
-                provider_result.structured_output.answer
-                if provider_result.structured_output is not None
-                else None
-            ),
-            error_message=provider_result.error_message,
-        )
+    return CampaignSynthesisResult(
+        context_request_id=context_request_id,
+        generated_output_id=generated_output_id,
+        answer=(
+            provider_result.structured_output.answer
+            if provider_result.structured_output is not None
+            else None
+        ),
+        error_message=provider_result.error_message,
+    )

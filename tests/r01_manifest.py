@@ -347,12 +347,15 @@ def _record(route: APIRoute, method: str) -> dict[str, Any]:
 
 
 ENGINE_REQUEST_SCOPED = "engine_request_scoped"
+ENGINE_TWO_PHASE = "engine_two_phase"
 
 
 def classify(record: dict[str, Any]) -> str:
     """The R01 family of a manifest record (plan section 7.1 / 8 / 10), or `unclassified`."""
     if (str(record.get("method")), str(record.get("path"))) in E1_ROUTES:
         return ENGINE_REQUEST_SCOPED
+    if (str(record.get("method")), str(record.get("path"))) in E2_ROUTES:
+        return ENGINE_TWO_PHASE
     if record["early_commit"]:
         return "engine_early_commit"
     scope = set(record["command_scope_markers"]) | set(record["precheck_markers"])
@@ -661,6 +664,17 @@ E1_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {("POST", _CAMPAIGN + "/ai/proposed-changes/{ai_proposed_change_id}/review")}
 )
 
+#: R01 E2 migrates the two AI engine routes that call a provider: the request transaction is finalized and ended
+#: (the early check), and the command runs two further `authorized_transaction`s (T1 before the provider call, T2
+#: after it), each with its own post-write plan. Neither has a reservation, so both stay out of
+#: `R01_DEFERRED_RESERVATION_ROUTES` (129). `classify()` returns `engine_two_phase` before the `early_commit` marker.
+E2_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/ai/npc-conversation"),
+        ("POST", _CAMPAIGN + "/ai/synthesis"),
+    }
+)
+
 #: The five world routes, an explicit **planned exclusion** from campaign-scoped R01 work (owner decision 4, plan
 #: 6.21.1; S5-F bookkeeping). Neither finalized nor pending, and not migrated or accepted: their plan lookup fails
 #: closed (`dnd_ai.api.r01_route_plans`). Their unkeyed-window follow-up is recorded in `docs/BACKLOG.md`.
@@ -697,6 +711,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S5E5_ROUTES
     | _S5E6_ROUTES
     | E1_ROUTES
+    | E2_ROUTES
 )
 
 #: R01 O-2 (design 1.3): the two revelation routes reserve **after** their own campaign `KEY SHARE`

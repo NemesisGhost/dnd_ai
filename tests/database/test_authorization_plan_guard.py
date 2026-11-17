@@ -569,7 +569,7 @@ def test_a_pending_route_gets_a_pending_plan_the_guard_admits(
         plan = begin_route_plan(
             connection,
             method="POST",
-            route_path="/campaigns/{campaign_id}/ai/synthesis",  # still pending (an engine route)
+            route_path="/campaigns/{campaign_id}/integration/foundry/combat-sync",  # still pending (an engine route)
             actor_user_id=g.o1_user_id,
             campaign_id=g.campaign_id,
         )

@@ -19,10 +19,10 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Connection, Engine, text
 
-from dnd_ai.commands.ai_npc import request_npc_conversation_turn
 from dnd_ai.commands.ai_proposals import ProposedChangeNotFoundError
 from dnd_ai.domain.ai_provider import FakeAiProvider
 from dnd_ai.domain.context_assembly import assemble_npc_conversation_context
+from tests.ai_e2_support import delete_campaign_security_rows, make_interactor, npc_turn
 from tests.ai_review_support import (
     delete_reviewer,
     make_active_campaign,
@@ -45,6 +45,7 @@ from tests.factories import (
     make_quest_participant,
     make_quest_state,
     make_timeline,
+    make_timeline_clock,
     make_world,
     make_world_time,
 )
@@ -65,6 +66,10 @@ class Fixture:
         # (DATABASE_MODEL.md §22 rule 19), so `make_active_campaign` creates it pending, gives it an
         # owner and activates it.
         self.campaign_id = make_active_campaign(connection, self.timeline_id)
+        # R01 E2: the NPC turn authorizes the party perspective at the campaign clock, for a member who
+        # holds `character.interact` and `character.view_knowledge` (decision G-2).
+        make_timeline_clock(connection, self.timeline_id, self.world_time_id)
+        self.interactor_id = make_interactor(connection, self.campaign_id)
         self.npc_id = make_character(connection, self.world_id, name="Old Innkeeper")
         self.pc_id = make_character(connection, self.world_id, name="Hero")
         self.party_id = make_party(connection, self.world_id)
@@ -194,6 +199,7 @@ def committed(postgres_engine: Engine) -> Iterator[Fixture]:
     yield fixture
     with postgres_engine.begin() as cleanup:
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        delete_campaign_security_rows(cleanup, fixture.campaign_id)
         cleanup_committed_ai_world(
             cleanup,
             world_id=fixture.world_id,
@@ -205,10 +211,11 @@ def committed(postgres_engine: Engine) -> Iterator[Fixture]:
 def test_public_reveal_is_auto_approved_and_applied(
     postgres_engine: Engine, committed: Fixture
 ) -> None:
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="Tell me something about yourself.",
@@ -258,10 +265,11 @@ def test_review_rejects_a_proposal_from_a_different_campaign(
             connection, other_campaign_id, "Cross-Campaign Reviewer"
         )
 
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="Tell me a secret.",
@@ -309,10 +317,11 @@ def test_secret_reveal_requires_approval_and_review_applies_it(
         )
         reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="Tell me a secret.",
@@ -372,10 +381,11 @@ def test_rejecting_a_proposal_leaves_canonical_state_unchanged(
         )
         reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="Tell me a secret.",

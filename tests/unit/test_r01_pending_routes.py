@@ -62,6 +62,7 @@ from tests.r01_manifest import (
 )
 from tests.r01_manifest import (
     E1_ROUTES,
+    E2_ROUTES,
     MANIFEST_PATH,
     MIGRATED_ROUTES,
     OUTSIDE_R01,
@@ -116,9 +117,11 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
     plan 6.34). S5-E6 migrates the two reveal-delegation routes (unkeyed pre-write, plan 6.36). 179 are finalized;
     the 5 world routes are the explicit planned exclusions (neither finalized nor pending) and the 8 engine routes stay pending."""
     # R01 E1 (plan 6.45): the proposal-review route moved from pending to finalized: 180 / 7 / 5.
-    assert len(R01_FINALIZED_ROUTES) == 180
-    assert len(R01_PENDING_ROUTES) == 7 and len(R01_EXCLUDED_WORLD_ROUTES) == 5
+    # R01 E2 (plan 6.48): the two AI provider routes moved the same way: 182 / 5 / 5.
+    assert len(R01_FINALIZED_ROUTES) == 182
+    assert len(R01_PENDING_ROUTES) == 5 and len(R01_EXCLUDED_WORLD_ROUTES) == 5
     assert set(R01_FINALIZED_ROUTES) >= E1_ROUTES and len(E1_ROUTES) == 1
+    assert set(R01_FINALIZED_ROUTES) >= E2_ROUTES and len(E2_ROUTES) == 2
     s2 = {
         route
         for route in R01_FINALIZED_ROUTES
@@ -135,6 +138,7 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
         | S5E5_ROUTES
         | S5E6_ROUTES
         | E1_ROUTES
+        | E2_ROUTES
     }
     assert {
         path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1] for _, path in s2
@@ -202,7 +206,7 @@ def test_the_pending_counts_by_family_are_pinned() -> None:
     """8 distinct pending routes, the engine routes (S5-F: the five world routes moved to the explicit exclusion set; was 13: 192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5, S5-E1's 3, S5-E2's 5, S5-E3's 1, S5-E4's 5, S5-E5's 6 and S5-E6's 2). The manifest
     has 192 inside records: S5-E5 removed the duplicated `@router.post` of the members route (B-4), so no
     (method, path) is registered twice any more. No route-capability-only route is pending any more."""
-    assert dict(Counter(R01_PENDING_ROUTES.values())) == {"engine_early_commit": 7}
+    assert dict(Counter(R01_PENDING_ROUTES.values())) == {"engine_early_commit": 5}
     records = Counter(str(r["family"]) for r in _inside())
     assert records["access_management"] == 32, (
         "S5-E5 removed the duplicated members decorator (B-4)"
@@ -224,9 +228,9 @@ def test_routes_without_a_scope_helper_are_pinned_by_route() -> None:
         assert route not in R01_PENDING_ROUTES, route
         assert route in R01_FINALIZED_ROUTES, route
     assert ROUTE_CAPABILITY_ONLY == S4B_ROUTES
-    for route in ENGINE_EARLY_COMMIT - E1_ROUTES:
+    for route in ENGINE_EARLY_COMMIT - E1_ROUTES - E2_ROUTES:
         assert R01_PENDING_ROUTES[route] == "engine_early_commit", route
-    for route in E1_ROUTES:  # R01 E1: migrated, no longer pending
+    for route in E1_ROUTES | E2_ROUTES:  # R01 E1 and E2: migrated, no longer pending
         assert route not in R01_PENDING_ROUTES and route in R01_FINALIZED_ROUTES, route
     assert len(ROUTE_CAPABILITY_ONLY) == 21
     assert len(ENGINE_EARLY_COMMIT) == 8
@@ -240,7 +244,7 @@ def test_pending_routes_are_not_presented_as_protected() -> None:
     assert route_is_pending("POST", resource_grants) is False
     groups = "/campaigns/{campaign_id}/access-groups"  # S5-E5: migrated
     delegations = "/campaigns/{campaign_id}/reveal-delegations"  # S5-E6: migrated
-    synthesis = "/campaigns/{campaign_id}/ai/synthesis"  # still pending (an engine route)
+    synthesis = "/campaigns/{campaign_id}/integration/foundry/combat-sync"  # still pending (an engine route)
     assert route_is_pending("POST", groups) is False
     assert route_is_pending("POST", delegations) is False
     assert route_is_pending("POST", synthesis) is True

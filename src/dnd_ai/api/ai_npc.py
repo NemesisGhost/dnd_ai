@@ -42,14 +42,21 @@ from pydantic import BaseModel
 from sqlalchemy import Connection, Engine
 
 from dnd_ai.commands.ai_npc import request_npc_conversation_turn
+from dnd_ai.commands.ai_perspective import (
+    PERSPECTIVE_CAPABILITY,
+    PartyPerspectiveRefusedError,
+    RequirementFactory,
+    party_perspective_requirement,
+    perspective_facts_or_refuse,
+)
 from dnd_ai.commands.ai_proposals import review_proposed_change
 from dnd_ai.config import settings
-from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.access import AccessContext, AuthoritySnapshot
 from dnd_ai.domain.ai_provider import AiProvider, OpenAiCompatibleProvider
-from dnd_ai.domain.authorization import AuthorizationPlan
+from dnd_ai.domain.authorization import AuthorizationPlan, Requirement
+from dnd_ai.domain.authorization_requirements import judged_requirement
 
-from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import require_campaign_capability, route_capability_requirement
 from .deps import end_request_transaction, get_connection, get_engine
 from .errors import ApiError, ForbiddenError
 from .r01_route_plans import get_authorization_plan
@@ -93,6 +100,38 @@ def _resolve_provider() -> AiProvider:
     )
 
 
+def npc_turn_requirements(
+    *, actor_user_id: uuid.UUID, character_id: uuid.UUID
+) -> RequirementFactory:
+    """The NPC turn's authority requirements, as a factory (R01 E2, design 5.1): each call returns **fresh**
+    `Requirement` objects, so the request transaction, T1 and T2 each judge their own (no verdict and no
+    `AccessContext` boolean crosses a transaction). They refuse exactly as the early checks do: the route's
+    404 / 403, then the targeted `character.interact` 403. The party perspective (requirement 3) is built by
+    the command from facts it reads in the transaction that judges it."""
+
+    def factory() -> list[Requirement]:
+        def decide_interact(snapshot: AuthoritySnapshot) -> BaseException | None:
+            access = snapshot.access
+            if access is None or not access.has_capability(
+                _INTERACT_CAPABILITY, character_id=character_id
+            ):
+                return ForbiddenError()
+            return None
+
+        return [
+            route_capability_requirement(
+                capability_code=_INTERACT_CAPABILITY,
+                allow_archived_campaign=False,
+                world_capability=None,
+                world_id=None,
+                actor_user_id=actor_user_id,
+            ),
+            judged_requirement("npc_turn.character.interact", decide_interact),
+        ]
+
+    return factory
+
+
 class NpcConversationTurnRequest(BaseModel):
     agent_assignment_id: uuid.UUID
     requesting_character_id: uuid.UUID
@@ -128,28 +167,61 @@ class ReviewProposedChangeResponse(BaseModel):
 )
 def request_npc_conversation_turn_endpoint(
     request: Request,
-    campaign_id: uuid.UUID,  # noqa: ARG001
+    campaign_id: uuid.UUID,
     body: NpcConversationTurnRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_INTERACT_CAPABILITY))],
+    plan: Annotated[AuthorizationPlan, Depends(get_authorization_plan)],
+    connection: Annotated[Connection, Depends(get_connection)],
     engine: Annotated[Engine, Depends(get_engine)],
     provider: Annotated[AiProvider, Depends(_resolve_provider)],
 ) -> NpcConversationTurnResponse:
+    # R01 E2: the request transaction is the early check, now finalized before it ends. The command then
+    # judges its own two engine transactions (T1 before the provider is called, T2 before anything is kept).
+    requirements = npc_turn_requirements(
+        actor_user_id=access.user_id, character_id=body.requesting_character_id
+    )
     if not access.has_capability(_INTERACT_CAPABILITY, character_id=body.requesting_character_id):
         raise ForbiddenError()
+    # Decision G-2: every caller, `canon.edit` included, proves the established party perspective
+    # (`character.view_knowledge` for the character, the party in this campaign, the character a current
+    # member at the campaign clock). One non-disclosing 404.
+    if not access.has_capability(PERSPECTIVE_CAPABILITY, character_id=body.requesting_character_id):
+        raise PartyPerspectiveRefusedError("party perspective not authorized")
+    facts = perspective_facts_or_refuse(
+        connection,
+        campaign_id=campaign_id,
+        timeline_id=access.timeline_id,
+        character_id=body.requesting_character_id,
+        party_id=body.requesting_party_id,
+    )
+    for requirement in requirements():
+        if requirement.name.startswith("route."):
+            continue  # the dependency registered the route requirement on this plan already
+        plan.require(connection, requirement)
+    plan.require(
+        connection,
+        party_perspective_requirement(
+            name="npc_turn.party_perspective",
+            character_id=body.requesting_character_id,
+            facts=facts,
+        ),
+    )
+    plan.finalize(connection)
     # Authorization is decided; end the request transaction before any engine-side effect.
     end_request_transaction(request)
 
     result = request_npc_conversation_turn(
         engine,
         agent_assignment_id=body.agent_assignment_id,
+        campaign_id=campaign_id,
         requesting_user_id=access.user_id,
         requesting_character_id=body.requesting_character_id,
         requesting_party_id=body.requesting_party_id,
         player_message=body.player_message,
         provider=provider,
         timeline_id=access.timeline_id,
-        expected_world_id=_world_id(engine, access.timeline_id),
         world_time_id=body.world_time_id,
+        requirements=requirements,
     )
     return NpcConversationTurnResponse(
         context_request_id=result.context_request_id,
@@ -159,11 +231,6 @@ def request_npc_conversation_turn_endpoint(
         proposal_status=result.proposal_status,
         error_message=result.error_message,
     )
-
-
-def _world_id(engine: Engine, timeline_id: uuid.UUID) -> uuid.UUID:
-    with engine.connect() as connection:
-        return timeline_world_id(connection, timeline_id)
 
 
 @router.post(

@@ -22,7 +22,6 @@ import pytest
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError
 
-from dnd_ai.commands.ai_npc import request_npc_conversation_turn
 from dnd_ai.commands.ai_proposals import (
     ProposedChangeNotFoundError,
     ProposedChangeNotPendingError,
@@ -32,6 +31,7 @@ from dnd_ai.commands.ai_proposals import (
 from dnd_ai.commands.quests import advance_objective
 from dnd_ai.domain.ai_provider import FakeAiProvider, NpcTurnOutput, ProviderResult
 from dnd_ai.domain.context_assembly import NpcConversationContext, assemble_npc_conversation_context
+from tests.ai_e2_support import delete_campaign_security_rows, make_interactor, npc_turn
 from tests.ai_review_support import (
     delete_reviewer,
     make_active_campaign,
@@ -56,6 +56,7 @@ from tests.factories import (
     make_quest_stage,
     make_quest_state,
     make_timeline,
+    make_timeline_clock,
     make_world,
     make_world_time,
 )
@@ -72,6 +73,10 @@ class Fixture:
         self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
         self.world_time_id = make_world_time(connection, self.world_id, 100)
         self.campaign_id = make_active_campaign(connection, self.timeline_id)
+        # R01 E2: the NPC turn authorizes the party perspective at the campaign clock, for a member who
+        # holds `character.interact` and `character.view_knowledge` (decision G-2).
+        make_timeline_clock(connection, self.timeline_id, self.world_time_id)
+        self.interactor_id = make_interactor(connection, self.campaign_id)
         self.npc_id = make_character(connection, self.world_id, name="Old Innkeeper")
         self.pc_id = make_character(connection, self.world_id, name="Hero")
         self.party_id = make_party(connection, self.world_id)
@@ -194,6 +199,7 @@ def committed(postgres_engine: Engine) -> Iterator[Fixture]:
         # forever.
         cleanup.execute(text("SET LOCAL statement_timeout = '30s'"))
         cleanup.execute(text("SET LOCAL session_replication_role = replica"))
+        delete_campaign_security_rows(cleanup, fixture.campaign_id)
         cleanup_committed_ai_world(
             cleanup,
             world_id=fixture.world_id,
@@ -219,10 +225,11 @@ def _objective_status(
 def test_dialogue_only_turn_creates_no_proposal(
     postgres_engine: Engine, committed: Fixture
 ) -> None:
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="Just saying hello.",
@@ -242,10 +249,11 @@ def test_advance_proposal_is_pending_and_never_auto_applied(
 ) -> None:
     """Unlike reveal_knowledge, advance_quest_objective is always
     requires_approval — see classify_advance_quest_objective_risk."""
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="We found the amulet!",
@@ -286,10 +294,11 @@ def test_approving_advance_objective_invokes_the_quest_command_and_records_event
     with postgres_engine.begin() as connection:
         reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="We found the amulet!",
@@ -349,10 +358,11 @@ def test_rejecting_advance_objective_leaves_canonical_state_unchanged(
     with postgres_engine.begin() as connection:
         reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="We found the amulet!",
@@ -440,10 +450,11 @@ class _NamedObjectiveProvider:
 def _assert_named_objective_produces_no_proposal(
     postgres_engine: Engine, committed: Fixture, objective_id: uuid.UUID
 ) -> None:
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="We found the amulet!",
@@ -686,10 +697,11 @@ def test_already_terminal_at_apply_time_rolls_back_the_whole_review(
     with postgres_engine.begin() as connection:
         reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="We found the amulet!",
@@ -771,10 +783,11 @@ def test_already_terminal_at_apply_time_rolls_back_the_whole_review(
 
 
 def _pending_advance_proposal_id(postgres_engine: Engine, committed: Fixture) -> uuid.UUID:
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="We found the amulet!",
@@ -1441,10 +1454,11 @@ def test_campaign_pinned_timeline_is_immutable_so_no_concurrent_change_race_exis
 
 
 def _pending_advance_proposal(postgres_engine: Engine, committed: Fixture) -> uuid.UUID:
-    result = request_npc_conversation_turn(
+    result = npc_turn(
         postgres_engine,
+        user_id=committed.interactor_id,
+        campaign_id=committed.campaign_id,
         agent_assignment_id=committed.assignment_id,
-        requesting_user_id=None,
         requesting_character_id=committed.pc_id,
         requesting_party_id=committed.party_id,
         player_message="We found the amulet!",

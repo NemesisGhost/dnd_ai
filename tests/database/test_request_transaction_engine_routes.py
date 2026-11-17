@@ -46,7 +46,7 @@ from tests.database.test_api_integration import (
 from tests.database.test_api_integration import (
     f as integration_f,  # noqa: F401 - fixture used by name
 )
-from tests.factories import make_timeline_clock, oidc_principal
+from tests.factories import oidc_principal
 
 pytestmark = pytest.mark.database
 
@@ -256,23 +256,8 @@ def test_t12d_a_player_summary_reads_the_party_perspective_before_the_transactio
     cookie_session: tuple[dict[str, str], uuid.UUID],
 ) -> None:
     headers, session_id = cookie_session
-    with postgres_engine.begin() as connection:
-        # Let the GM view the player character's knowledge, and give the campaign a clock the party
-        # membership is current on.
-        make_timeline_clock(connection, f.timeline_id, f.world_time_id)
-        connection.execute(
-            text("""
-                INSERT INTO security.role_capabilities (role_id, capability_id)
-                SELECT mr.role_id,
-                       (SELECT capability_id FROM security.capabilities
-                        WHERE code = 'character.view_knowledge')
-                FROM security.membership_roles mr
-                JOIN security.campaign_memberships cm
-                    ON cm.campaign_membership_id = mr.campaign_membership_id
-                WHERE cm.campaign_id = :c AND cm.user_id = :u
-            """),
-            {"c": f.campaign_id, "u": f.gm_user_id},
-        )
+    # The shared fixture gives the GM `character.view_knowledge` and the campaign a clock the party membership is
+    # current on (R01 E2, decision G-2).
     provider = _Observing(postgres_engine, small_engine, session_id)
     with _app_with(small_engine, provider) as client:
         response = client.post(

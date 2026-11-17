@@ -22,7 +22,7 @@ keep their own requested time and do not use this module.
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from dnd_ai.domain.relationship_authoring import relationship_period_status
 
@@ -65,3 +65,55 @@ def membership_period_status(start_key: int, end_key: int | None, clock: Members
     relationship vocabulary and half-open rule. `end_key` is `upper(effective_period)`, NULL for an
     open end. The lower bound is never NULL, so `undated` cannot occur."""
     return relationship_period_status(start_key, end_key, clock.sort_key)
+
+
+@dataclass(frozen=True)
+class PerspectiveFacts:
+    """The two domain facts of a party perspective, read in one transaction at its own instant (R01 E2):
+    whether `party_id` is associated with the campaign, and whether `character_id` is a member of the party
+    at the timeline's effective campaign clock (`member_now` is false when the clock is unset)."""
+
+    party_in_campaign: bool
+    member_now: bool
+
+
+def read_perspective_facts(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    timeline_id: uuid.UUID,
+    character_id: uuid.UUID,
+    party_id: uuid.UUID,
+) -> PerspectiveFacts:
+    """Read the perspective's domain facts without a lock (R-E2-6). The clock is resolved here, on this
+    connection, so each caller sees the clock of its own transaction; nothing is cached or carried."""
+    party_in_campaign = (
+        connection.execute(
+            text(
+                "SELECT 1 FROM campaign.campaign_parties "
+                "WHERE campaign_id = :campaign AND party_id = :party"
+            ),
+            {"campaign": campaign_id, "party": party_id},
+        ).scalar()
+        is not None
+    )
+    clock = resolve_membership_clock(connection, timeline_id=timeline_id)
+    member_now = (
+        connection.execute(
+            text(f"""
+                SELECT 1 FROM campaign.party_memberships pm
+                WHERE pm.timeline_id = :timeline
+                  AND pm.party_id = :party
+                  AND pm.member_entity_id = :character
+                  AND {CURRENT_PARTY_MEMBERSHIP_SQL}
+            """),
+            {
+                "timeline": timeline_id,
+                "party": party_id,
+                "character": character_id,
+                **membership_clock_params(clock),
+            },
+        ).scalar()
+        is not None
+    )
+    return PerspectiveFacts(party_in_campaign=party_in_campaign, member_now=member_now)

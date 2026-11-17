@@ -32,15 +32,25 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import Connection, Engine
 
+from dnd_ai.commands.ai_perspective import (
+    PERSPECTIVE_CAPABILITY,
+    PartyPerspectiveRefusedError,
+    RequirementFactory,
+    party_perspective_requirement,
+    perspective_facts_or_refuse,
+)
 from dnd_ai.commands.ai_synthesis import request_campaign_synthesis
-from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.access import AccessContext, AuthoritySnapshot
 from dnd_ai.domain.ai_provider import AiProvider
+from dnd_ai.domain.authorization import AuthorizationPlan, Requirement
+from dnd_ai.domain.authorization_requirements import judged_requirement
 from dnd_ai.domain.context_assembly import GM_BRIEF, OBSERVER_SUMMARY, PLAYER_SUMMARY
 
-from .access import require_campaign_capability, resolve_party_perspective
+from .access import require_campaign_capability, route_capability_requirement
 from .ai_npc import _resolve_provider
 from .deps import end_request_transaction, get_connection, get_engine
 from .errors import ApiError, ForbiddenError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["ai-synthesis"])
 
@@ -50,6 +60,38 @@ router = APIRouter(tags=["ai-synthesis"])
 # observer_summary.
 _BASELINE_CAPABILITY = "campaign.view"
 _GM_BRIEF_CAPABILITY = "canon.edit"
+
+
+def synthesis_requirements(*, actor_user_id: uuid.UUID, audience_tier: str) -> RequirementFactory:
+    """The synthesis requirements for a tier, as a factory (R01 E2, design 5.2): fresh `Requirement` objects
+    per call, so every transaction judges its own. `gm_brief` adds `canon.edit` (403); the other tiers add
+    nothing here. The `player_summary` perspective is built by the command from facts it reads in the
+    transaction that judges it."""
+
+    def factory() -> list[Requirement]:
+        requirements = [
+            route_capability_requirement(
+                capability_code=_BASELINE_CAPABILITY,
+                allow_archived_campaign=False,
+                world_capability=None,
+                world_id=None,
+                actor_user_id=actor_user_id,
+            )
+        ]
+        if audience_tier == GM_BRIEF:
+
+            def decide_gm_brief(snapshot: AuthoritySnapshot) -> BaseException | None:
+                access = snapshot.access
+                if access is None or not access.has_capability(_GM_BRIEF_CAPABILITY):
+                    return ForbiddenError()
+                return None
+
+            requirements.append(
+                judged_requirement("synthesis.gm_brief.canon.edit", decide_gm_brief)
+            )
+        return requirements
+
+    return factory
 
 
 class InvalidAudienceTierError(ApiError):
@@ -83,6 +125,7 @@ def request_campaign_synthesis_endpoint(
     campaign_id: uuid.UUID,
     body: CampaignSynthesisRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_BASELINE_CAPABILITY))],
+    plan: Annotated[AuthorizationPlan, Depends(get_authorization_plan)],
     connection: Annotated[Connection, Depends(get_connection)],
     engine: Annotated[Engine, Depends(get_engine)],
     provider: Annotated[AiProvider, Depends(_resolve_provider)],
@@ -92,27 +135,47 @@ def request_campaign_synthesis_endpoint(
 
     authorized_character_id: uuid.UUID | None = None
     authorized_party_id: uuid.UUID | None = None
+    requirements = synthesis_requirements(
+        actor_user_id=access.user_id, audience_tier=body.audience_tier
+    )
 
     if body.audience_tier == GM_BRIEF:
         if not access.has_capability(_GM_BRIEF_CAPABILITY):
             raise ForbiddenError()
+        for requirement in requirements():
+            if not requirement.name.startswith("route."):
+                plan.require(connection, requirement)
     elif body.audience_tier == PLAYER_SUMMARY:
-        authorized_party_id = resolve_party_perspective(
+        if body.requesting_character_id is None or body.requesting_party_id is None:
+            raise ForbiddenError()
+        if not access.has_capability(
+            PERSPECTIVE_CAPABILITY, character_id=body.requesting_character_id
+        ):
+            raise PartyPerspectiveRefusedError("party perspective not authorized")
+        facts = perspective_facts_or_refuse(
             connection,
-            access=access,
             campaign_id=campaign_id,
+            timeline_id=access.timeline_id,
             character_id=body.requesting_character_id,
             party_id=body.requesting_party_id,
         )
+        plan.require(
+            connection,
+            party_perspective_requirement(
+                name="synthesis.player_summary.perspective",
+                character_id=body.requesting_character_id,
+                facts=facts,
+            ),
+        )
+        authorized_party_id = body.requesting_party_id
         authorized_character_id = body.requesting_character_id
-        if authorized_party_id is None:
-            raise ForbiddenError()
     # observer_summary: baseline campaign.view already checked; no further
     # authorization, and the request's own character_id/party_id are never
     # forwarded — see this module's own docstring.
 
-    # Authorization (including the party-perspective read above) is decided; end the request
-    # transaction before the provider is called.
+    # Authorization (including the party-perspective read above) is decided: judge it in one final
+    # statement, then end the request transaction before the provider is called.
+    plan.finalize(connection)
     end_request_transaction(request)
 
     result = request_campaign_synthesis(
@@ -123,6 +186,7 @@ def request_campaign_synthesis_endpoint(
         requesting_user_id=access.user_id,
         question_text=body.question_text,
         provider=provider,
+        requirements=requirements,
         timeline_id=access.timeline_id,
         requesting_character_id=authorized_character_id,
         requesting_party_id=authorized_party_id,

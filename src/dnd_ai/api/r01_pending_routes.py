@@ -20,8 +20,6 @@ from typing import Final
 R01_PENDING_ROUTES: Final = MappingProxyType(
     {
         ("DELETE", "/campaigns/{campaign_id}/reference-corpus/grants/{reference_source_campaign_id}"): "engine_early_commit",
-        ("POST", "/campaigns/{campaign_id}/ai/npc-conversation"): "engine_early_commit",
-        ("POST", "/campaigns/{campaign_id}/ai/synthesis"): "engine_early_commit",
         ("POST", "/campaigns/{campaign_id}/integration/foundry/combat-sync"): "engine_early_commit",
         ("POST", "/campaigns/{campaign_id}/reference-corpus/query"): "engine_early_commit",
         ("POST", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/grant"): "engine_early_commit",
@@ -43,7 +41,9 @@ R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("POST", "/campaigns/{campaign_id}/access-groups/{access_group_id}/members"),
         ("POST", "/campaigns/{campaign_id}/access-groups/{access_group_id}/reactivate"),
         ("POST", "/campaigns/{campaign_id}/access-groups/{access_group_id}/update"),
+        ("POST", "/campaigns/{campaign_id}/ai/npc-conversation"),
         ("POST", "/campaigns/{campaign_id}/ai/proposed-changes/{ai_proposed_change_id}/review"),
+        ("POST", "/campaigns/{campaign_id}/ai/synthesis"),
         ("POST", "/campaigns/{campaign_id}/archive"),
         ("POST", "/campaigns/{campaign_id}/authoring/characters/{character_id}/builds"),
         ("POST", "/campaigns/{campaign_id}/authoring/characters/{character_id}/builds/{build_id}/activate"),
