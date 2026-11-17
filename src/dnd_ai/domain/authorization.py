@@ -96,8 +96,8 @@ declares nothing and has no pre-write steps; every rule below is the S5-C rule, 
 - `defer_reservation_campaign_fk` and `bind_reservation` are admitted, with the same identity, sequence and
   transaction checks; `bind_reservation` only after a deferral, and it installs no declaration. `bind_unkeyed` is
   refused. `REPLAY` owes nothing; `RESERVED` owes campaign evidence.
-- `lock_campaign_evidence(connection)` takes `CAMPAIGN_EVIDENCE_LOCK` (this plan's own campaign row,
-  `FOR KEY SHARE`) on the lock path and records evidence only on success. Callers test `owes_campaign_evidence`;
+- `lock_campaign_evidence(connection)` first verifies the session assumptions (as `lock` does), then takes
+  `CAMPAIGN_EVIDENCE_LOCK` (this plan's own campaign row, `FOR KEY SHARE`) on the lock path and records evidence only on success. Callers test `owes_campaign_evidence`;
   a call in any other state latches `SEQUENCE`. During that one flight the plan is *controlled*: statement
   identity, rendering, parameter snapshot, one cursor event, completion, and the listener topology **of that flight**
   (not a lifetime baseline: a post-write plan's guarantee does not rest on statement admission, so registering a
@@ -210,6 +210,7 @@ from .authorization_steps import (
     RowExpectation,
     WriteStep,
     freeze_value,
+    kind_and_pg_type,
     kind_of,
     matches_driver,
     matches_extracted,
@@ -1328,11 +1329,45 @@ class AuthorizationPlan:
         finally:
             self._flight = None
 
+    def _verify_evidence_session(self, connection: Connection) -> None:
+        """The session assumptions `lock` enforces before it takes a lock, for the evidence lock: the
+        replication role, `search_path` and operator resolution (`_verify_session`), and the actual type
+        of every column the statement compares. A post-write plan has no declaration to carry the type
+        checks, so they are derived from `CAMPAIGN_EVIDENCE_LOCK` itself. Run before the evidence flight;
+        a failure latches `SESSION`. (R01 O-1 correction: Luna's session-validation finding.)"""
+        self._verify_session(connection)
+        preparer = connection.dialect.identifier_preparer
+        checks = sorted(
+            {
+                (
+                    preparer.format_table(column.table),
+                    column.name,
+                    kind_and_pg_type(column)[2],
+                )
+                for column in CAMPAIGN_EVIDENCE_LOCK.compared
+            }
+        )
+        try:
+            mismatches = connection.execute(
+                _TYPE_SQL,
+                {
+                    "rels": [c[0] for c in checks],
+                    "cols": [c[1] for c in checks],
+                    "types": [c[2] for c in checks],
+                },
+            ).scalar_one()
+        except BaseException:
+            self._latch(ViolationReason.SESSION)
+            raise
+        if mismatches != 0:
+            self._refuse(ViolationReason.SESSION)
+
     def lock_campaign_evidence(self, connection: Connection) -> None:
         """Take this request's campaign row `FOR KEY SHARE` as the evidence a deferred reservation owes
         (R01 O-1, AM-1.4). Keyed post-write plans only, once deferred and bound `RESERVED`, before
         `finalize`. The statement is `CAMPAIGN_EVIDENCE_LOCK` and the campaign id is the plan's own; the
-        caller supplies nothing. It runs on the lock path (statement identity, rendering, parameter
+        caller supplies nothing. The session assumptions are verified first (replication role, `search_path`,
+        operator resolution, the compared column's actual type; failure latches `SESSION`). It runs on the lock path (statement identity, rendering, parameter
         snapshot, one cursor event, completion, validated keys) and records evidence only on success.
         A failure latches `LOCK_FAILED`; a call in any other state latches `SEQUENCE` and is refused,
         never skipped (callers test `owes_campaign_evidence`)."""
@@ -1352,6 +1387,7 @@ class AuthorizationPlan:
         if not dispatch or dispatch[0] is not _on_do_execute:
             self._refuse(ViolationReason.LISTENER_ORDER)
         prelock = CAMPAIGN_EVIDENCE_LOCK
+        self._verify_evidence_session(connection)
         frozen, call_params = self._build_snapshot(prelock.specs, {"campaign": self._campaign_id})
         flight = self._issue(connection, "lock", prelock, frozen, call_params)
         kinds = tuple(kind_of(column)[0] for column in prelock.key)

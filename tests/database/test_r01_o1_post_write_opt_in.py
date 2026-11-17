@@ -30,6 +30,7 @@ from dnd_ai.api.idempotency import (
     complete_idempotent_request,
 )
 from dnd_ai.commands._content import canon_edit_requirement
+from dnd_ai.domain import authorization
 from dnd_ai.domain.authorization import (
     CAMPAIGN_EVIDENCE_LOCK,
     AuthorizationPlan,
@@ -442,8 +443,8 @@ def test_evidence_is_refused_out_of_sequence(scratch: World, one: Engine) -> Non
 def test_the_evidence_statement_is_the_declared_one_and_runs_once(
     scratch: World, one: Engine
 ) -> None:
-    """plan: during the flight exactly one cursor event runs, and it is the constant's statement with the
-    plan's parameter."""
+    """plan: the session validation runs first (its statements precede the lock), then exactly one
+    cursor event carries the constant's statement with the plan's parameter, and it is the last."""
     seen: list[tuple[str, Any]] = []
 
     def record(
@@ -454,10 +455,12 @@ def test_the_evidence_statement_is_the_declared_one_and_runs_once(
     connection, plan, reservation = fresh_post(one, scratch, new_key(), evidence=False)
     with listening(one, "before_cursor_execute", record):
         plan.lock_campaign_evidence(connection)
-    assert len(seen) == 1
-    statement, parameters = seen[0]
-    assert "FOR KEY SHARE" in statement and "campaign.campaigns" in statement
+    locks = [i for i, (statement, _) in enumerate(seen) if "FOR KEY SHARE" in statement]
+    assert locks == [len(seen) - 1]  # one evidence statement, issued last
+    statement, parameters = seen[-1]
+    assert "campaign.campaigns" in statement
     assert parameters == {"campaign": scratch.campaign_id}
+    assert any("session_replication_role" in s for s, _ in seen[:-1])  # validated before the lock
     connection.close()
 
 
@@ -466,8 +469,8 @@ def test_a_side_execution_inside_the_flight_is_refused(scratch: World, one: Engi
     connection, plan, reservation = fresh_post(one, scratch, new_key(), evidence=False)
     armed = [True]
 
-    def side(conn: Connection, *_: Any) -> None:
-        if armed[0]:
+    def side(conn: Connection, element: Any, *_: Any) -> None:
+        if armed[0] and element is CAMPAIGN_EVIDENCE_LOCK.statement:
             armed[0] = False
             conn.execute(text("SELECT 1")).all()
 
@@ -497,6 +500,8 @@ def test_a_rewritten_statement_or_parameter_is_refused_at_the_driver_hop(
             many: bool,
             mode: str = mode,
         ) -> tuple[str, Any]:
+            if "FOR KEY SHARE" not in statement:  # only the evidence statement is rewritten
+                return statement, parameters
             if mode == "render":
                 return statement + " ", parameters
             return statement, {"campaign": uuid.uuid4()}
@@ -520,8 +525,8 @@ def test_a_listener_registered_during_the_flight_is_refused(scratch: World, one:
 
     armed = [True]
 
-    def register(conn: Connection, *_: Any) -> None:
-        if armed[0]:
+    def register(conn: Connection, element: Any, *_: Any) -> None:
+        if armed[0] and element is CAMPAIGN_EVIDENCE_LOCK.statement:
             armed[0] = False
             event.listen(one, "before_cursor_execute", noop)
 
@@ -583,6 +588,175 @@ def test_a_failed_evidence_statement_latches_and_a_caught_failure_stays_latched(
     commit_refused(connection)  # the aborted transaction never reaches the database's COMMIT
     connection.close()
     assert reservations(scratch.engine, key) == 0
+    assert_next_transaction_is_immediate(one, scratch)
+
+
+# =====================================================================================================
+# 3b. Session validation before the evidence lock (Luna's O-1 finding)
+# =====================================================================================================
+
+#: transaction-scoped, so a refusal cannot leave the pooled backend changed (the plan, not the rollback,
+#: is what is being tested: the setting is in force when the plan looks)
+_BAD_SESSIONS = {
+    "explicit_pg_catalog": "SET LOCAL search_path = pg_catalog, public",
+    "replica_role": "SET LOCAL session_replication_role = replica",
+}
+
+
+def _campaign_lock_statements(seen: list[str]) -> list[str]:
+    return [s for s in seen if "FOR KEY SHARE" in s and "campaigns" in s]
+
+
+def _recording(one: Engine) -> tuple[list[str], Any]:
+    seen: list[str] = []
+
+    def record(
+        conn: Connection, cursor: Any, statement: str, parameters: Any, context: Any, many: bool
+    ) -> None:
+        seen.append(statement)
+
+    return seen, record
+
+
+def _assert_refused_before_the_lock(
+    scratch: World,
+    one: Engine,
+    connection: Connection,
+    plan: AuthorizationPlan,
+    key: str,
+    seen: list[str],
+) -> None:
+    """The refusal is `SESSION`, no campaign lock statement reached the driver, no evidence exists, the
+    caught refusal stays latched (a second call, `finalize` and COMMIT all refuse) and nothing persists."""
+    assert plan.violation is R.SESSION
+    assert _campaign_lock_statements(seen) == []
+    assert not plan.evidence(CAMPAIGN_EVIDENCE_LOCK)
+    with pytest.raises(AuthorizationPlanViolationError):
+        plan.lock_campaign_evidence(connection)  # a latched plan refuses again
+    with pytest.raises(AuthorizationPlanViolationError):
+        finalize(connection, plan, scratch)
+    assert not plan.finalised
+    commit_refused(connection)
+    connection.close()
+    assert reservations(scratch.engine, key) == 0
+    assert markers(scratch.engine) == 0
+    assert_next_transaction_is_immediate(one, scratch)
+
+
+@pytest.mark.parametrize("setting", list(_BAD_SESSIONS.values()), ids=list(_BAD_SESSIONS))
+def test_an_invalid_session_is_refused_before_the_evidence_lock_executes(
+    scratch: World, one: Engine, setting: str
+) -> None:
+    """plan + session guard: `search_path` naming `pg_catalog` and a non-`origin` replication role are refused
+    by the plan on the bound connection, before the campaign lock statement is sent; the caught refusal
+    stays latched and cannot commit."""
+    key = new_key()
+    connection, plan, reservation = fresh_post(one, scratch, key, evidence=False)
+    seen, record = _recording(one)
+    connection.execute(text(setting))
+    write_all(connection, reservation)
+    with listening(one, "before_cursor_execute", record):
+        with pytest.raises(AuthorizationPlanViolationError):
+            plan.lock_campaign_evidence(connection)
+    _assert_refused_before_the_lock(scratch, one, connection, plan, key, seen)
+
+
+def test_a_lookalike_comparison_operator_refuses_the_session_before_the_evidence_lock(
+    scratch: World, one: Engine
+) -> None:
+    """plan + session guard: a user-defined `=` for `uuid` (here in the scratch schema, visible to the
+    guard's catalogue check wherever it lives) is refused before the evidence lock; once dropped, the same
+    flow produces evidence."""
+    with scratch.engine.begin() as ddl:
+        ddl.execute(
+            text(
+                f"CREATE FUNCTION {SCHEMA}.eq_uuid(uuid, uuid) RETURNS boolean "
+                "LANGUAGE sql IMMUTABLE AS 'SELECT false'"
+            )
+        )
+        ddl.execute(
+            text(
+                f"CREATE OPERATOR {SCHEMA}.= (LEFTARG = uuid, RIGHTARG = uuid, "
+                f"FUNCTION = {SCHEMA}.eq_uuid)"
+            )
+        )
+    key = new_key()
+    try:
+        connection, plan, reservation = fresh_post(one, scratch, key, evidence=False)
+        seen, record = _recording(one)
+        write_all(connection, reservation)
+        with listening(one, "before_cursor_execute", record):
+            with pytest.raises(AuthorizationPlanViolationError):
+                plan.lock_campaign_evidence(connection)
+        _assert_refused_before_the_lock(scratch, one, connection, plan, key, seen)
+    finally:
+        with scratch.engine.begin() as ddl:
+            ddl.execute(text(f"DROP OPERATOR IF EXISTS {SCHEMA}.= (uuid, uuid)"))
+            ddl.execute(text(f"DROP FUNCTION IF EXISTS {SCHEMA}.eq_uuid(uuid, uuid)"))
+    connection, plan, reservation = fresh_post(one, scratch, new_key())  # control: valid again
+    assert plan.evidence(CAMPAIGN_EVIDENCE_LOCK) == {(scratch.campaign_id,)}
+    connection.rollback()
+    connection.close()
+
+
+def test_a_compared_column_of_another_type_refuses_the_session_before_the_evidence_lock(
+    scratch: World, one: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """plan + session guard: the evidence statement compares `campaign.campaigns.campaign_id`; the plan
+    verifies its actual PostgreSQL type against the catalogue (as it does for a declared lock). A type that
+    does not match is refused before the lock. (The catalogue is not altered: the expected type is.)"""
+    key = new_key()
+    connection, plan, reservation = fresh_post(one, scratch, key, evidence=False)
+    seen, record = _recording(one)
+    real = authorization.kind_and_pg_type
+    monkeypatch.setattr(
+        authorization,
+        "kind_and_pg_type",
+        lambda column: (real(column)[0], real(column)[1], "text"),
+    )
+    write_all(connection, reservation)
+    with listening(one, "before_cursor_execute", record):
+        with pytest.raises(AuthorizationPlanViolationError):
+            plan.lock_campaign_evidence(connection)
+    _assert_refused_before_the_lock(scratch, one, connection, plan, key, seen)
+
+
+def test_a_valid_session_produces_evidence_and_the_pooled_backend_stays_clean(
+    scratch: World, one: Engine
+) -> None:
+    """plan + session guard: with a valid session the validation statements precede the lock, evidence is for
+    the plan's campaign, the request commits, and the same pooled backend then carries nothing over (settings
+    are the defaults and the next transaction is immediate)."""
+    key = new_key()
+    seen, record = _recording(one)
+    connection, plan = open_post(one, scratch)
+    first_pid = pid_of(connection)
+    plan.defer_reservation_campaign_fk(connection)
+    reservation = reserve(connection, scratch, key)
+    assert isinstance(reservation, IdempotentReservation)
+    plan.bind_reservation(connection, reservation)
+    with listening(one, "before_cursor_execute", record):
+        plan.lock_campaign_evidence(connection)
+    assert plan.evidence(CAMPAIGN_EVIDENCE_LOCK) == {(scratch.campaign_id,)}
+    assert plan.violation is None
+    lock_at = next(i for i, s in enumerate(seen) if "FOR KEY SHARE" in s and "campaigns" in s)
+    assert any("session_replication_role" in s for s in seen[:lock_at])  # the session check
+    assert any("pg_attribute" in s for s in seen[:lock_at])  # the compared-type check
+    assert lock_at == len(seen) - 1
+    full_request(connection, plan, scratch, reservation)
+    connection.commit()
+    connection.close()
+    assert completed(scratch.engine, key) == 1
+
+    with one.connect() as next_connection:
+        assert pid_of(next_connection) == first_pid
+        row = next_connection.execute(
+            text(
+                "SELECT current_setting('session_replication_role'), current_setting('search_path')"
+            )
+        ).one()
+        assert row[0] == "origin" and "pg_catalog" not in row[1]
+        next_connection.rollback()
     assert_next_transaction_is_immediate(one, scratch)
 
 
