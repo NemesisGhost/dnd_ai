@@ -625,11 +625,21 @@ def _assert_refused_before_the_lock(
     plan: AuthorizationPlan,
     key: str,
     seen: list[str],
+    reason: ViolationReason = ViolationReason.SESSION,
+    lock_statement_may_be_seen: bool = False,
 ) -> None:
-    """The refusal is `SESSION`, no campaign lock statement reached the driver, no evidence exists, the
+    """The refusal is `reason` (`SESSION` unless stated), no campaign lock statement reached the driver, no evidence exists, the
     caught refusal stays latched (a second call, `finalize` and COMMIT all refuse) and nothing persists."""
-    assert plan.violation is R.SESSION
-    assert _campaign_lock_statements(seen) == []
+    assert plan.violation is reason
+    if not lock_statement_may_be_seen:
+        assert _campaign_lock_statements(seen) == []
+    # whatever a listener saw, the campaign row is not locked by the refused request: a competitor's
+    # `FOR UPDATE NOWAIT` is granted at once
+    with scratch.engine.begin() as probe:
+        probe.execute(
+            text("SELECT 1 FROM campaign.campaigns WHERE campaign_id = :c FOR UPDATE NOWAIT"),
+            {"c": scratch.campaign_id},
+        ).all()
     assert not plan.evidence(CAMPAIGN_EVIDENCE_LOCK)
     with pytest.raises(AuthorizationPlanViolationError):
         plan.lock_campaign_evidence(connection)  # a latched plan refuses again
@@ -757,6 +767,250 @@ def test_a_valid_session_produces_evidence_and_the_pooled_backend_stays_clean(
         ).one()
         assert row[0] == "origin" and "pg_catalog" not in row[1]
         next_connection.rollback()
+    assert_next_transaction_is_immediate(one, scratch)
+
+
+# =====================================================================================================
+# 3c. The whole evidence operation is protected against listeners (Luna's second O-1 finding)
+# =====================================================================================================
+#
+# Every listener below is installed AFTER the plan was created and BEFORE the evidence call: the plan cannot
+# have snapshotted it away. The validation statements and the lock are controlled flights, judged at the driver
+# hop, so a listener that rewrites the SQL, changes the parameters or runs a statement of its own is refused,
+# and a registration made during the call is refused too.
+
+
+def _rewriting(match: str, rewrite: Any) -> Any:
+    def listener(
+        conn: Connection,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        many: bool,
+    ) -> tuple[str, Any]:
+        if match in statement:
+            return rewrite(statement, parameters)
+        return statement, parameters
+
+    return listener
+
+
+def _adversary(
+    scratch: World,
+    one: Engine,
+    *,
+    setup: str | None,
+    listener: Any,
+    retval: bool,
+    event_name: str,
+    reason: ViolationReason,
+    monkeypatch: pytest.MonkeyPatch | None = None,
+    lock_statement_may_be_seen: bool = False,
+) -> None:
+    key = new_key()
+    connection, plan, reservation = fresh_post(one, scratch, key, evidence=False)
+    seen, record = _recording(one)
+    if setup:
+        connection.execute(text(setup))
+    if monkeypatch is not None:  # an incompatible compared type, seen by the catalogue check
+        real = authorization.kind_and_pg_type
+        monkeypatch.setattr(
+            authorization, "kind_and_pg_type", lambda c: (real(c)[0], real(c)[1], "text")
+        )
+    write_all(connection, reservation)
+    with listening(one, "before_cursor_execute", record):  # observational, first
+        with listening(one, event_name, listener, retval=retval):
+            with pytest.raises(AuthorizationPlanViolationError):
+                plan.lock_campaign_evidence(connection)
+    _assert_refused_before_the_lock(
+        scratch, one, connection, plan, key, seen, reason, lock_statement_may_be_seen
+    )
+
+
+def test_a_listener_that_rewrites_the_session_validation_to_hide_an_invalid_session_is_refused(
+    scratch: World, one: Engine
+) -> None:
+    """adversarial: the session really is invalid (`replica` role), and a listener installed after the plan
+    rewrites the validation SQL so the server would answer `origin`. The rewritten text is refused at the
+    driver hop, before the campaign lock, and the caught refusal stays latched."""
+    listener = _rewriting(
+        "session_replication_role",
+        lambda statement, parameters: (
+            statement.replace("pg_catalog.current_setting('session_replication_role')", "'origin'"),
+            parameters,
+        ),
+    )
+    _adversary(
+        scratch,
+        one,
+        setup="SET LOCAL session_replication_role = replica",
+        listener=listener,
+        retval=True,
+        event_name="before_cursor_execute",
+        reason=R.RENDERING,
+    )
+
+
+def test_a_listener_that_replaces_the_session_validation_with_a_constant_answer_is_refused(
+    scratch: World, one: Engine
+) -> None:
+    """adversarial: the whole validation statement is replaced by a constant, valid-looking answer that even
+    echoes the parameter."""
+    listener = _rewriting(
+        "session_replication_role",
+        lambda statement, parameters: (
+            "SELECT 'public', 'origin', false, CAST(%(campaign)s AS pg_catalog.uuid)",
+            parameters,
+        ),
+    )
+    _adversary(
+        scratch,
+        one,
+        setup="SET LOCAL search_path = pg_catalog, public",
+        listener=listener,
+        retval=True,
+        event_name="before_cursor_execute",
+        reason=R.RENDERING,
+    )
+
+
+def test_a_listener_that_rewrites_the_type_validation_to_hide_an_incompatible_type_is_refused(
+    scratch: World, one: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """adversarial: the compared column's expected type does not match the catalogue, and a listener rewrites
+    the type-check SQL so it reports no mismatch."""
+    listener = _rewriting(
+        "VALUES",
+        lambda statement, parameters: (
+            statement.replace("pg_catalog.count(*)", "0"),
+            parameters,
+        ),
+    )
+    _adversary(
+        scratch,
+        one,
+        setup=None,
+        listener=listener,
+        retval=True,
+        event_name="before_cursor_execute",
+        reason=R.RENDERING,
+        monkeypatch=monkeypatch,
+    )
+
+
+@pytest.mark.parametrize("target", ["session_replication_role", "VALUES", "FOR KEY SHARE"])
+def test_a_listener_that_changes_the_parameters_of_any_evidence_statement_is_refused(
+    scratch: World, one: Engine, target: str
+) -> None:
+    """adversarial: the driver parameters of the session validation, the type validation and the lock are
+    each replaced after the guard's own checks; the driver hop refuses all three."""
+    listener = _rewriting(
+        target, lambda statement, parameters: (statement, {"campaign": uuid.uuid4()})
+    )
+    _adversary(
+        scratch,
+        one,
+        setup=None,
+        listener=listener,
+        retval=True,
+        event_name="before_cursor_execute",
+        reason=R.PARAMETERS,
+        lock_statement_may_be_seen=target
+        == "FOR KEY SHARE",  # sent to the guard, refused before the driver
+    )
+
+
+@pytest.mark.parametrize("target", ["session_replication_role", "VALUES", "FOR KEY SHARE"])
+def test_an_unauthorized_side_execution_inside_any_evidence_statement_is_refused(
+    scratch: World, one: Engine, target: str
+) -> None:
+    """adversarial: a listener runs a statement of its own while the session validation, the type validation
+    or the lock is in flight."""
+    armed = [True]
+
+    def side(conn: Connection, element: Any, *_: Any) -> None:
+        text_of = getattr(element, "text", "")
+        hit = target in text_of or (
+            target == "FOR KEY SHARE" and element is CAMPAIGN_EVIDENCE_LOCK.statement
+        )
+        if armed[0] and hit:
+            armed[0] = False
+            conn.execute(text("SELECT 1")).all()
+
+    _adversary(
+        scratch,
+        one,
+        setup=None,
+        listener=side,
+        retval=False,
+        event_name="before_execute",
+        reason=R.SIDE_EXECUTION,
+    )
+
+
+def test_a_listener_registered_between_the_validation_and_the_lock_is_refused(
+    scratch: World, one: Engine
+) -> None:
+    """adversarial (D-6, per call): a registration made after one statement of the call and before the next
+    changes the call's topology and is refused before the next flight, so the lock is never sent."""
+
+    def noop(*_: Any) -> None:
+        return None
+
+    armed = [True]
+
+    def after_session(conn: Connection, element: Any, *_: Any) -> None:
+        if armed[0] and "session_replication_role" in getattr(element, "text", ""):
+            armed[0] = False
+            event.listen(one, "before_cursor_execute", noop)
+
+    try:
+        _adversary(
+            scratch,
+            one,
+            setup=None,
+            listener=after_session,
+            retval=False,
+            event_name="after_execute",
+            reason=R.LISTENER_TOPOLOGY,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            event.remove(one, "before_cursor_execute", noop)
+
+
+def test_observational_listeners_and_race_gates_still_work_through_the_whole_call(
+    scratch: World, one: Engine
+) -> None:
+    """compatibility: an observational listener that never changes anything, and `StatementGate`s holding the
+    session validation and then the lock (the established way tests park a statement), leave the call valid:
+    evidence is recorded and the request commits."""
+    from tests.http_race_support import StatementGate
+
+    seen, record = _recording(one)
+    key = new_key()
+    connection, plan, reservation = fresh_post(one, scratch, key, evidence=False)
+    with listening(one, "before_cursor_execute", record):
+        with StatementGate(one, r"session_replication_role", strict=True) as validation_gate:
+            with StatementGate(one, r"FOR KEY SHARE", strict=True) as lock_gate:
+                request = run_in_thread("evidence", lambda: plan.lock_campaign_evidence(connection))
+                validation_gate.track(request)
+                lock_gate.track(request)
+                validation_gate.wait_reached()
+                assert not request.finished()
+                validation_gate.release()
+                lock_gate.wait_reached()
+                assert not request.finished()
+                lock_gate.release()
+                request.wait("the call completes once both statements are released")
+    assert plan.violation is None
+    assert plan.evidence(CAMPAIGN_EVIDENCE_LOCK) == {(scratch.campaign_id,)}
+    assert len(_campaign_lock_statements(seen)) == 1
+    full_request(connection, plan, scratch, reservation)
+    connection.commit()
+    connection.close()
+    assert completed(scratch.engine, key) == 1
     assert_next_transaction_is_immediate(one, scratch)
 
 

@@ -183,10 +183,11 @@ import weakref
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, Self
+from typing import Any, Final, NoReturn, Self, cast
 
-from sqlalchemy import Connection, Engine, bindparam, event, select, text
+from sqlalchemy import Connection, Engine, Uuid, bindparam, event, select, text
 from sqlalchemy.engine.interfaces import ExecuteStyle
+from sqlalchemy.sql.elements import TextClause
 
 from dnd_ai.persistence.tables.campaign import campaigns as _campaigns
 
@@ -667,6 +668,70 @@ _TYPE_SQL: Final = text(
     "AND t.typnamespace OPERATOR(pg_catalog.=) 'pg_catalog'::pg_catalog.regnamespace "
     "AND t.typname::pg_catalog.text OPERATOR(pg_catalog.=) e.typ)"
 )
+
+
+# -- the evidence call's validation statements (R01 O-1 correction, Luna's findings) -------------------------
+#
+# `lock_campaign_evidence` validates the session and the compared column's type, then takes the lock. Each of the
+# three statements runs as its own *flight*, exactly like a declared lock: statement identity, the rendered text,
+# the driver parameters, one cursor event, completion, and the listener registrations, all judged at the driver hop
+# (`do_execute`), after every other listener has had its say. Every statement carries the plan's campaign id as a
+# real bind and echoes it (`CAST(:campaign AS uuid)`), so a rewritten parameter is caught at the driver and a
+# rewritten statement is caught by its text. The validation statements are a separate copy of the pre-write ones
+# (`_SESSION_SQL`, `_TYPE_SQL` stay as they were for the pre-write path), with the type check's compared columns
+# written as literals taken from `CAMPAIGN_EVIDENCE_LOCK`.
+
+_CAMPAIGN_SPECS: Final[Mapping[str, BindSpec]] = MappingProxyType(
+    {"campaign": BindSpec("campaign", Kind.UUID, False)}
+)
+
+
+class _ValidationStatement:
+    """The subject of a validation flight: the flight machinery reads only `statement` and `specs`."""
+
+    __slots__ = ("__weakref__", "specs", "statement")
+
+    def __init__(self, statement: TextClause) -> None:
+        self.statement = statement
+        self.specs = _CAMPAIGN_SPECS
+
+
+def _with_campaign(sql: str) -> TextClause:
+    return text(sql).bindparams(bindparam("campaign", type_=Uuid))
+
+
+_EVIDENCE_SESSION: Final = _ValidationStatement(
+    _with_campaign(
+        f"SELECT s.*, CAST(:campaign AS pg_catalog.uuid) FROM ({_SESSION_SQL.text}) AS s"
+    )
+)
+
+_TYPE_WHERE: Final = (
+    "WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a "
+    "JOIN pg_catalog.pg_type t ON t.oid OPERATOR(pg_catalog.=) a.atttypid "
+    "WHERE a.attrelid OPERATOR(pg_catalog.=) pg_catalog.to_regclass(e.rel) "
+    "AND a.attname::pg_catalog.text OPERATOR(pg_catalog.=) e.col "
+    "AND a.attnum OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped "
+    "AND t.typtype OPERATOR(pg_catalog.=) 'b' "
+    "AND t.typnamespace OPERATOR(pg_catalog.=) 'pg_catalog'::pg_catalog.regnamespace "
+    "AND t.typname::pg_catalog.text OPERATOR(pg_catalog.=) e.typ)"
+)
+
+
+def _literal(value: str) -> str:
+    if not value.isascii() or any(c in value for c in "':%\\\0") or not value.isprintable():
+        raise ValueError("an unexpected character in a compared column's identity")
+    return f"'{value}'::pg_catalog.text"
+
+
+def _evidence_type_check(rows: list[tuple[str, str, str]]) -> _ValidationStatement:
+    values = ", ".join(f"({_literal(r)}, {_literal(c)}, {_literal(t)})" for r, c, t in rows)
+    return _ValidationStatement(
+        _with_campaign(
+            "SELECT (SELECT pg_catalog.count(*) FROM (VALUES "
+            f"{values}) AS e(rel, col, typ) {_TYPE_WHERE}), CAST(:campaign AS pg_catalog.uuid)"
+        )
+    )
 
 
 def _search_path_lists_pg_catalog(value: str) -> bool:
@@ -1329,13 +1394,68 @@ class AuthorizationPlan:
         finally:
             self._flight = None
 
-    def _verify_evidence_session(self, connection: Connection) -> None:
-        """The session assumptions `lock` enforces before it takes a lock, for the evidence lock: the
-        replication role, `search_path` and operator resolution (`_verify_session`), and the actual type
-        of every column the statement compares. A post-write plan has no declaration to carry the type
-        checks, so they are derived from `CAMPAIGN_EVIDENCE_LOCK` itself. Run before the evidence flight;
-        a failure latches `SESSION`. (R01 O-1 correction: Luna's session-validation finding.)"""
-        self._verify_session(connection)
+    def _protected_read(
+        self,
+        connection: Connection,
+        subject: _ValidationStatement | PreLock,
+        call_topology: tuple[object, ...],
+        failure: ViolationReason,
+    ) -> tuple[tuple[Any, ...], ...]:
+        """Run one statement of the evidence call as a controlled flight and return its rows. The listener
+        registrations must equal those the call started with (D-6: per call); the statement, its rendering and
+        its driver parameters are the declared ones; exactly one cursor event ran and completed. Any
+        interference latches (the first reason stays) and is raised; a caller that catches it still has a
+        latched plan."""
+        if _topology(connection) != call_topology:
+            self._refuse(ViolationReason.LISTENER_TOPOLOGY)
+        frozen, call_params = self._build_snapshot(subject.specs, {"campaign": self._campaign_id})
+        # the flight reads only `.statement` and `.specs` of its subject (a `PreLock` or a validation statement)
+        flight = self._issue(connection, "lock", cast("PreLock", subject), frozen, call_params)
+        result = None
+        failed = False
+        try:
+            try:
+                result = connection.execute(subject.statement, call_params)
+                rows = tuple(tuple(row) for row in result.all())
+            finally:
+                if result is not None:
+                    failed = self._close(result)
+            if self._violated:
+                raise AuthorizationPlanViolationError()
+            if flight.cursor_events != 1 or not flight.dispatched or not flight.completed:
+                self._refuse(failure)
+            if failed:
+                self._refuse(ViolationReason.INTERNAL)
+            if _topology(connection) != call_topology:
+                self._refuse(ViolationReason.LISTENER_TOPOLOGY)
+            return rows
+        except BaseException:
+            self._latch(failure)
+            raise
+        finally:
+            self._flight = None
+
+    def _validate_evidence_session(
+        self, connection: Connection, call_topology: tuple[object, ...]
+    ) -> None:
+        """The session assumptions `lock` enforces before it takes a lock (replication role `origin`,
+        no explicit `pg_catalog` in `search_path`, no lookalike comparison operator for the key types) and
+        the actual type of every column the evidence statement compares, each as a protected flight, so a
+        listener that rewrites or re-parameterises either statement is refused, not trusted. A post-write
+        plan has no declaration to carry the type checks, so they come from `CAMPAIGN_EVIDENCE_LOCK`."""
+        rows = self._protected_read(
+            connection, _EVIDENCE_SESSION, call_topology, ViolationReason.SESSION
+        )
+        if len(rows) != 1 or len(rows[0]) != 4:
+            self._refuse(ViolationReason.SESSION)
+        search_path, role, lookalike, echoed = rows[0]
+        if (
+            echoed != self._campaign_id
+            or role != "origin"
+            or _search_path_lists_pg_catalog(str(search_path))
+            or lookalike is not False
+        ):
+            self._refuse(ViolationReason.SESSION)
         preparer = connection.dialect.identifier_preparer
         checks = sorted(
             {
@@ -1348,29 +1468,28 @@ class AuthorizationPlan:
             }
         )
         try:
-            mismatches = connection.execute(
-                _TYPE_SQL,
-                {
-                    "rels": [c[0] for c in checks],
-                    "cols": [c[1] for c in checks],
-                    "types": [c[2] for c in checks],
-                },
-            ).scalar_one()
-        except BaseException:
-            self._latch(ViolationReason.SESSION)
-            raise
-        if mismatches != 0:
+            statement = _evidence_type_check(checks)
+        except ValueError:
+            self._refuse(ViolationReason.SESSION)
+        rows = self._protected_read(connection, statement, call_topology, ViolationReason.SESSION)
+        if len(rows) != 1 or len(rows[0]) != 2 or rows[0][1] != self._campaign_id:
+            self._refuse(ViolationReason.SESSION)
+        if rows[0][0] != 0 or type(rows[0][0]) is not int:
             self._refuse(ViolationReason.SESSION)
 
     def lock_campaign_evidence(self, connection: Connection) -> None:
         """Take this request's campaign row `FOR KEY SHARE` as the evidence a deferred reservation owes
         (R01 O-1, AM-1.4). Keyed post-write plans only, once deferred and bound `RESERVED`, before
         `finalize`. The statement is `CAMPAIGN_EVIDENCE_LOCK` and the campaign id is the plan's own; the
-        caller supplies nothing. The session assumptions are verified first (replication role, `search_path`,
-        operator resolution, the compared column's actual type; failure latches `SESSION`). It runs on the lock path (statement identity, rendering, parameter
-        snapshot, one cursor event, completion, validated keys) and records evidence only on success.
-        A failure latches `LOCK_FAILED`; a call in any other state latches `SEQUENCE` and is refused,
-        never skipped (callers test `owes_campaign_evidence`)."""
+        caller supplies nothing.
+
+        The whole operation is protected: the session validation, the compared-column type validation and
+        the lock itself are each a controlled flight (statement identity, rendering and driver parameters
+        checked at `do_execute`, one cursor event, completion), and the listener registrations must not
+        change during the call (per call, not per plan). Evidence is recorded only after the whole sequence
+        succeeded. A failure or any detected interference latches (`SESSION` for the validation, then
+        `LOCK_FAILED`; an earlier, more specific reason stays) and is raised; a call in any other state
+        latches `SEQUENCE` and is refused, never skipped (callers test `owes_campaign_evidence`)."""
         try:
             self._check_bound(connection)
         except AuthorizationPlanBindingError:
@@ -1386,22 +1505,14 @@ class AuthorizationPlan:
         dispatch = list(connection.dialect.dispatch.do_execute)
         if not dispatch or dispatch[0] is not _on_do_execute:
             self._refuse(ViolationReason.LISTENER_ORDER)
+        call_topology = _topology(connection)
         prelock = CAMPAIGN_EVIDENCE_LOCK
-        self._verify_evidence_session(connection)
-        frozen, call_params = self._build_snapshot(prelock.specs, {"campaign": self._campaign_id})
-        flight = self._issue(connection, "lock", prelock, frozen, call_params)
         kinds = tuple(kind_of(column)[0] for column in prelock.key)
-        result = None
-        failed = False
         try:
-            try:
-                result = connection.execute(prelock.statement, call_params)
-                rows = tuple(tuple(row) for row in result.all())
-            finally:
-                if result is not None:
-                    failed = self._close(result)
-            if self._violated:
-                raise AuthorizationPlanViolationError()
+            self._validate_evidence_session(connection, call_topology)
+            rows = self._protected_read(
+                connection, prelock, call_topology, ViolationReason.LOCK_FAILED
+            )
             keys: list[tuple[Any, ...]] = []
             for row in rows:
                 key = _validate_key(kinds, row)
@@ -1410,16 +1521,12 @@ class AuthorizationPlan:
                 keys.append(key)
             if len(set(keys)) != len(keys):
                 self._refuse(ViolationReason.LOCK_FAILED)
-            if flight.cursor_events != 1 or not flight.dispatched or not flight.completed:
-                self._refuse(ViolationReason.LOCK_FAILED)
-            if failed:
-                self._refuse(ViolationReason.INTERNAL)
+            if self._violated:
+                raise AuthorizationPlanViolationError()
             self._evidence.setdefault(prelock, set()).update(keys)
         except BaseException:
             self._latch(ViolationReason.LOCK_FAILED)
             raise
-        finally:
-            self._flight = None
 
     @staticmethod
     def _close(result: Any) -> bool:
