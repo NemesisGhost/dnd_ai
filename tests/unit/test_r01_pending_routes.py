@@ -61,6 +61,7 @@ from tests.r01_manifest import (
     _S5E6_ROUTES as S5E6_ROUTES,
 )
 from tests.r01_manifest import (
+    E1_ROUTES,
     MANIFEST_PATH,
     MIGRATED_ROUTES,
     OUTSIDE_R01,
@@ -114,8 +115,10 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
     (keyed-optional pre-write, plan 6.31). S5-E5 migrates the six access-group routes (keyed-optional pre-write,
     plan 6.34). S5-E6 migrates the two reveal-delegation routes (unkeyed pre-write, plan 6.36). 179 are finalized;
     the 5 world routes are the explicit planned exclusions (neither finalized nor pending) and the 8 engine routes stay pending."""
-    assert len(R01_FINALIZED_ROUTES) == 179
-    assert len(R01_PENDING_ROUTES) == 8 and len(R01_EXCLUDED_WORLD_ROUTES) == 5
+    # R01 E1 (plan 6.45): the proposal-review route moved from pending to finalized: 180 / 7 / 5.
+    assert len(R01_FINALIZED_ROUTES) == 180
+    assert len(R01_PENDING_ROUTES) == 7 and len(R01_EXCLUDED_WORLD_ROUTES) == 5
+    assert set(R01_FINALIZED_ROUTES) >= E1_ROUTES and len(E1_ROUTES) == 1
     s2 = {
         route
         for route in R01_FINALIZED_ROUTES
@@ -131,6 +134,7 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
         | S5E4_ROUTES
         | S5E5_ROUTES
         | S5E6_ROUTES
+        | E1_ROUTES
     }
     assert {
         path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1] for _, path in s2
@@ -198,7 +202,7 @@ def test_the_pending_counts_by_family_are_pinned() -> None:
     """8 distinct pending routes, the engine routes (S5-F: the five world routes moved to the explicit exclusion set; was 13: 192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5, S5-E1's 3, S5-E2's 5, S5-E3's 1, S5-E4's 5, S5-E5's 6 and S5-E6's 2). The manifest
     has 192 inside records: S5-E5 removed the duplicated `@router.post` of the members route (B-4), so no
     (method, path) is registered twice any more. No route-capability-only route is pending any more."""
-    assert dict(Counter(R01_PENDING_ROUTES.values())) == {"engine_early_commit": 8}
+    assert dict(Counter(R01_PENDING_ROUTES.values())) == {"engine_early_commit": 7}
     records = Counter(str(r["family"]) for r in _inside())
     assert records["access_management"] == 32, (
         "S5-E5 removed the duplicated members decorator (B-4)"
@@ -220,8 +224,10 @@ def test_routes_without_a_scope_helper_are_pinned_by_route() -> None:
         assert route not in R01_PENDING_ROUTES, route
         assert route in R01_FINALIZED_ROUTES, route
     assert ROUTE_CAPABILITY_ONLY == S4B_ROUTES
-    for route in ENGINE_EARLY_COMMIT:
+    for route in ENGINE_EARLY_COMMIT - E1_ROUTES:
         assert R01_PENDING_ROUTES[route] == "engine_early_commit", route
+    for route in E1_ROUTES:  # R01 E1: migrated, no longer pending
+        assert route not in R01_PENDING_ROUTES and route in R01_FINALIZED_ROUTES, route
     assert len(ROUTE_CAPABILITY_ONLY) == 21
     assert len(ENGINE_EARLY_COMMIT) == 8
 

@@ -20,14 +20,19 @@ import pytest
 from sqlalchemy import Connection, Engine, text
 
 from dnd_ai.commands.ai_npc import request_npc_conversation_turn
-from dnd_ai.commands.ai_proposals import ProposedChangeNotFoundError, review_proposed_change
+from dnd_ai.commands.ai_proposals import ProposedChangeNotFoundError
 from dnd_ai.domain.ai_provider import FakeAiProvider
 from dnd_ai.domain.context_assembly import assemble_npc_conversation_context
+from tests.ai_review_support import (
+    delete_reviewer,
+    make_active_campaign,
+    make_gm_reviewer,
+    review_proposed_change,
+)
 from tests.factories import (
     cleanup_committed_ai_world,
     make_agent,
     make_agent_assignment,
-    make_campaign,
     make_campaign_party,
     make_character,
     make_encounter,
@@ -40,7 +45,6 @@ from tests.factories import (
     make_quest_participant,
     make_quest_state,
     make_timeline,
-    make_user,
     make_world,
     make_world_time,
 )
@@ -56,14 +60,11 @@ class Fixture:
         self.world_id = make_world(connection, slug=slug)
         self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
         self.world_time_id = make_world_time(connection, self.world_id, 100)
-        # 'pending', not the default 'active': the committed fixture below
-        # commits for real, and an active campaign must retain a qualifying
-        # access.manage membership at commit time (DATABASE_MODEL.md §22
-        # rule 19) — this fixture sets up no such membership, and nothing
-        # under test needs campaign lifecycle status to be 'active'.
-        self.campaign_id = make_campaign(
-            connection, self.timeline_id, lifecycle_status_code="pending"
-        )
+        # R01 E1: the proposal review now runs under the operation scope, which requires an `active`
+        # campaign. An active campaign must retain a qualifying access.manage membership at commit time
+        # (DATABASE_MODEL.md §22 rule 19), so `make_active_campaign` creates it pending, gives it an
+        # owner and activates it.
+        self.campaign_id = make_active_campaign(connection, self.timeline_id)
         self.npc_id = make_character(connection, self.world_id, name="Old Innkeeper")
         self.pc_id = make_character(connection, self.world_id, name="Hero")
         self.party_id = make_party(connection, self.world_id)
@@ -250,10 +251,12 @@ def test_review_rejects_a_proposal_from_a_different_campaign(
             ),
             {"k": committed.secret_id},
         )
-        other_campaign_id = make_campaign(
-            connection, committed.timeline_id, "Other Campaign", lifecycle_status_code="pending"
+        other_campaign_id = make_active_campaign(
+            connection, committed.timeline_id, "Other Campaign"
         )
-        reviewer_user_id = make_user(connection, "Cross-Campaign Reviewer")
+        reviewer_user_id = make_gm_reviewer(
+            connection, other_campaign_id, "Cross-Campaign Reviewer"
+        )
 
     result = request_npc_conversation_turn(
         postgres_engine,
@@ -290,9 +293,7 @@ def test_review_rejects_a_proposal_from_a_different_campaign(
             text("DELETE FROM campaign.campaigns WHERE campaign_id = :c"),
             {"c": other_campaign_id},
         )
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_secret_reveal_requires_approval_and_review_applies_it(
@@ -306,7 +307,7 @@ def test_secret_reveal_requires_approval_and_review_applies_it(
             ),
             {"k": committed.secret_id},
         )
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
     result = request_npc_conversation_turn(
         postgres_engine,
@@ -356,9 +357,7 @@ def test_secret_reveal_requires_approval_and_review_applies_it(
         assert aware == 1
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_rejecting_a_proposal_leaves_canonical_state_unchanged(
@@ -371,7 +370,7 @@ def test_rejecting_a_proposal_leaves_canonical_state_unchanged(
             ),
             {"k": committed.secret_id},
         )
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
     result = request_npc_conversation_turn(
         postgres_engine,
@@ -413,6 +412,4 @@ def test_rejecting_a_proposal_leaves_canonical_state_unchanged(
         assert status == "rejected"
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)

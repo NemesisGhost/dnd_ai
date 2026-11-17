@@ -93,6 +93,7 @@ def test_the_r01_pending_call_sites_are_exactly_the_pinned_set() -> None:
 #: slice adds its commands here.
 REAL_PLAN_SITES = [
     ("commands/_operations.py", "lock_operation_scope", "lock_authoring_scope"),
+    ("commands/ai_proposals.py", "review_proposed_change", "lock_operation_scope"),  # R01 E1
     ("commands/campaign_clock.py", "advance_campaign_clock", "lock_operation_scope"),
     ("commands/campaign_clock.py", "correct_campaign_clock", "lock_operation_scope"),
     ("commands/character_builds.py", "activate_character_build", "lock_operation_scope"),

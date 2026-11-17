@@ -39,18 +39,20 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
-from sqlalchemy import Engine
+from sqlalchemy import Connection, Engine
 
 from dnd_ai.commands.ai_npc import request_npc_conversation_turn
 from dnd_ai.commands.ai_proposals import review_proposed_change
 from dnd_ai.config import settings
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.ai_provider import AiProvider, OpenAiCompatibleProvider
+from dnd_ai.domain.authorization import AuthorizationPlan
 
 from ._shared import timeline_world_id
 from .access import require_campaign_capability
-from .deps import end_request_transaction, get_engine
+from .deps import end_request_transaction, get_connection, get_engine
 from .errors import ApiError, ForbiddenError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["ai-npc"])
 
@@ -170,22 +172,25 @@ def _world_id(engine: Engine, timeline_id: uuid.UUID) -> uuid.UUID:
     status_code=200,
 )
 def review_proposed_change_endpoint(
-    request: Request,
     campaign_id: uuid.UUID,
     ai_proposed_change_id: uuid.UUID,
     body: ReviewProposedChangeRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_REVIEW_CAPABILITY))],
-    engine: Annotated[Engine, Depends(get_engine)],
+    plan: Annotated[AuthorizationPlan, Depends(get_authorization_plan)],
+    connection: Annotated[Connection, Depends(get_connection)],
 ) -> ReviewProposedChangeResponse:
-    end_request_transaction(request)
+    # R01 E1: the review and everything it applies run in the request-owned transaction, under the
+    # actor's scope locks, and the final authorization decision is the last statement (post-write).
     result = review_proposed_change(
-        engine,
+        connection,
+        plan=plan,
         ai_proposed_change_id=ai_proposed_change_id,
         campaign_id=campaign_id,
         reviewer_user_id=access.user_id,
         decision=body.decision,
         comments=body.comments,
     )
+    plan.finalize(connection)
     return ReviewProposedChangeResponse(
         ai_change_review_id=result.ai_change_review_id,
         status=result.status,

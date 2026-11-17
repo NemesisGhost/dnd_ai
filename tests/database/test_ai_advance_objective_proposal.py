@@ -28,16 +28,20 @@ from dnd_ai.commands.ai_proposals import (
     ProposedChangeNotPendingError,
     ReviewProposedChangeResult,
     _apply_proposal,
-    review_proposed_change,
 )
 from dnd_ai.commands.quests import advance_objective
 from dnd_ai.domain.ai_provider import FakeAiProvider, NpcTurnOutput, ProviderResult
 from dnd_ai.domain.context_assembly import NpcConversationContext, assemble_npc_conversation_context
+from tests.ai_review_support import (
+    delete_reviewer,
+    make_active_campaign,
+    make_gm_reviewer,
+    review_proposed_change,
+)
 from tests.factories import (
     cleanup_committed_ai_world,
     make_agent,
     make_agent_assignment,
-    make_campaign,
     make_campaign_party,
     make_character,
     make_context_request,
@@ -52,7 +56,6 @@ from tests.factories import (
     make_quest_stage,
     make_quest_state,
     make_timeline,
-    make_user,
     make_world,
     make_world_time,
 )
@@ -68,9 +71,7 @@ class Fixture:
         self.world_id = make_world(connection, slug=slug)
         self.timeline_id = make_timeline(connection, self.world_id, is_primary=True)
         self.world_time_id = make_world_time(connection, self.world_id, 100)
-        self.campaign_id = make_campaign(
-            connection, self.timeline_id, lifecycle_status_code="pending"
-        )
+        self.campaign_id = make_active_campaign(connection, self.timeline_id)
         self.npc_id = make_character(connection, self.world_id, name="Old Innkeeper")
         self.pc_id = make_character(connection, self.world_id, name="Hero")
         self.party_id = make_party(connection, self.world_id)
@@ -283,7 +284,7 @@ def test_approving_advance_objective_invokes_the_quest_command_and_records_event
     postgres_engine: Engine, committed: Fixture
 ) -> None:
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
     result = request_npc_conversation_turn(
         postgres_engine,
@@ -339,16 +340,14 @@ def test_approving_advance_objective_invokes_the_quest_command_and_records_event
         assert effect_count == 1
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_rejecting_advance_objective_leaves_canonical_state_unchanged(
     postgres_engine: Engine, committed: Fixture
 ) -> None:
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
     result = request_npc_conversation_turn(
         postgres_engine,
@@ -391,9 +390,7 @@ def test_rejecting_advance_objective_leaves_canonical_state_unchanged(
         assert status == "rejected"
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -687,7 +684,7 @@ def test_already_terminal_at_apply_time_rolls_back_the_whole_review(
     call), and — since review-row-insert and apply share one transaction —
     the review decision itself must never be recorded either."""
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
     result = request_npc_conversation_turn(
         postgres_engine,
@@ -753,9 +750,7 @@ def test_already_terminal_at_apply_time_rolls_back_the_whole_review(
     )
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -825,7 +820,7 @@ def test_npc_participation_removed_before_approval_rolls_back(
     postgres_engine: Engine, committed: Fixture
 ) -> None:
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
     proposal_id = _pending_advance_proposal_id(postgres_engine, committed)
 
     with postgres_engine.begin() as connection:
@@ -850,16 +845,14 @@ def test_npc_participation_removed_before_approval_rolls_back(
     )
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_visibility_changed_to_gm_only_before_approval_rolls_back(
     postgres_engine: Engine, committed: Fixture
 ) -> None:
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
     proposal_id = _pending_advance_proposal_id(postgres_engine, committed)
 
     with postgres_engine.begin() as connection:
@@ -892,16 +885,14 @@ def test_visibility_changed_to_gm_only_before_approval_rolls_back(
             ),
             {"objective": committed.open_objective_id},
         )
-        connection.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(connection, reviewer_user_id)
 
 
 def test_party_removed_from_campaign_before_approval_rolls_back(
     postgres_engine: Engine, committed: Fixture
 ) -> None:
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
     proposal_id = _pending_advance_proposal_id(postgres_engine, committed)
 
     with postgres_engine.begin() as connection:
@@ -935,9 +926,7 @@ def test_party_removed_from_campaign_before_approval_rolls_back(
             ),
             {"campaign": committed.campaign_id, "party": committed.party_id},
         )
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_stored_timeline_differing_from_campaigns_pinned_timeline_rolls_back(
@@ -952,7 +941,7 @@ def test_stored_timeline_differing_from_campaigns_pinned_timeline_rolls_back(
     ruleset consistency triggers that have nothing to do with what this
     test is about)."""
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
         other_timeline_id = make_timeline(connection, committed.world_id, "Other Timeline")
     proposal_id = _pending_advance_proposal_id(postgres_engine, committed)
 
@@ -988,9 +977,7 @@ def test_stored_timeline_differing_from_campaigns_pinned_timeline_rolls_back(
         cleanup.execute(
             text("DELETE FROM campaign.timelines WHERE timeline_id = :t"), {"t": other_timeline_id}
         )
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_cross_quest_objective_named_in_a_tampered_proposal_is_rejected(
@@ -1001,7 +988,7 @@ def test_cross_quest_objective_named_in_a_tampered_proposal_is_rejected(
     named adversarial cases above, but reached via a tampered stored row
     instead of a model naming it directly."""
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
     proposal_id = _pending_advance_proposal_id(postgres_engine, committed)
 
     with postgres_engine.begin() as connection:
@@ -1041,9 +1028,7 @@ def test_cross_quest_objective_named_in_a_tampered_proposal_is_rejected(
     )
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 _CONCURRENT_RACE_DEADLINE_SECONDS = 60
@@ -1108,7 +1093,7 @@ def _approve(
     suitable for `_run_concurrent_race`, that reviewer's user_id — the
     caller owns deleting it in its own cleanup)."""
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
 
     def _do() -> ReviewProposedChangeResult:
         return review_proposed_change(
@@ -1203,9 +1188,7 @@ def test_a_concurrent_visibility_change_during_approval_is_always_safe(
             ),
             {"objective": committed.open_objective_id},
         )
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_a_concurrent_participant_removal_during_approval_is_always_safe(
@@ -1269,9 +1252,7 @@ def test_a_concurrent_participant_removal_during_approval_is_always_safe(
         assert objective_status is None
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_a_concurrent_party_removal_during_approval_is_always_safe(
@@ -1334,9 +1315,7 @@ def test_a_concurrent_party_removal_during_approval_is_always_safe(
             ),
             {"campaign": committed.campaign_id, "party": committed.party_id},
         )
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_a_concurrent_independent_advance_during_approval_is_always_safe(
@@ -1420,9 +1399,7 @@ def test_a_concurrent_independent_advance_during_approval_is_always_safe(
             assert review_count == 0
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_campaign_pinned_timeline_is_immutable_so_no_concurrent_change_race_exists(
@@ -1482,7 +1459,7 @@ def _pending_advance_proposal(postgres_engine: Engine, committed: Fixture) -> uu
 
 def test_duplicate_approval_is_rejected(postgres_engine: Engine, committed: Fixture) -> None:
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
     proposal_id = _pending_advance_proposal(postgres_engine, committed)
 
     review_proposed_change(
@@ -1502,14 +1479,12 @@ def test_duplicate_approval_is_rejected(postgres_engine: Engine, committed: Fixt
         )
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_rejection_after_approval_is_rejected(postgres_engine: Engine, committed: Fixture) -> None:
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
     proposal_id = _pending_advance_proposal(postgres_engine, committed)
 
     review_proposed_change(
@@ -1529,14 +1504,12 @@ def test_rejection_after_approval_is_rejected(postgres_engine: Engine, committed
         )
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 def test_approval_after_rejection_is_rejected(postgres_engine: Engine, committed: Fixture) -> None:
     with postgres_engine.begin() as connection:
-        reviewer_user_id = make_user(connection, "Reviewer")
+        reviewer_user_id = make_gm_reviewer(connection, committed.campaign_id, "Reviewer")
     proposal_id = _pending_advance_proposal(postgres_engine, committed)
 
     review_proposed_change(
@@ -1556,9 +1529,7 @@ def test_approval_after_rejection_is_rejected(postgres_engine: Engine, committed
         )
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 _CONCURRENT_REVIEW_DEADLINE_SECONDS = 60
@@ -1581,8 +1552,8 @@ def test_concurrent_reviews_serialize_and_apply_exactly_once(
     it (still holding a lock) — daemon threads would hide exactly that
     failure mode instead of surfacing it."""
     with postgres_engine.begin() as connection:
-        reviewer_a = make_user(connection, "Reviewer A")
-        reviewer_b = make_user(connection, "Reviewer B")
+        reviewer_a = make_gm_reviewer(connection, committed.campaign_id, "Reviewer A")
+        reviewer_b = make_gm_reviewer(connection, committed.campaign_id, "Reviewer B")
     proposal_id = _pending_advance_proposal(postgres_engine, committed)
 
     barrier = threading.Barrier(2)
@@ -1658,18 +1629,20 @@ def test_concurrent_reviews_serialize_and_apply_exactly_once(
     )
 
     with postgres_engine.begin() as cleanup:
-        cleanup.execute(text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_a})
-        cleanup.execute(text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_b})
+        delete_reviewer(cleanup, reviewer_a)
+        delete_reviewer(cleanup, reviewer_b)
 
 
 def test_review_still_rejects_a_proposal_from_a_different_campaign(
     postgres_engine: Engine, committed: Fixture
 ) -> None:
     with postgres_engine.begin() as connection:
-        other_campaign_id = make_campaign(
-            connection, committed.timeline_id, "Other Campaign", lifecycle_status_code="pending"
+        other_campaign_id = make_active_campaign(
+            connection, committed.timeline_id, "Other Campaign"
         )
-        reviewer_user_id = make_user(connection, "Cross-Campaign Reviewer")
+        reviewer_user_id = make_gm_reviewer(
+            connection, other_campaign_id, "Cross-Campaign Reviewer"
+        )
     proposal_id = _pending_advance_proposal(postgres_engine, committed)
 
     with pytest.raises(ProposedChangeNotFoundError):
@@ -1686,9 +1659,7 @@ def test_review_still_rejects_a_proposal_from_a_different_campaign(
             text("DELETE FROM campaign.campaigns WHERE campaign_id = :c"),
             {"c": other_campaign_id},
         )
-        cleanup.execute(
-            text("DELETE FROM security.users WHERE user_id = :u"), {"u": reviewer_user_id}
-        )
+        delete_reviewer(cleanup, reviewer_user_id)
 
 
 # ---------------------------------------------------------------------------

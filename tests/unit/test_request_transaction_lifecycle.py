@@ -484,9 +484,10 @@ def test_t13_every_route_starts_with_the_commit_dependency_and_one_connection_en
                 assert dependency.scope is None and dependency.use_cache, context.path
 
 
+#: R01 E1 migrated `review_proposed_change_endpoint` to the request-owned transaction (plan 6.45): it takes no
+#: `get_engine` dependency and does not end the request transaction, so seven engine-backed routes remain.
 _ENGINE_BACKED = {
     "request_npc_conversation_turn_endpoint",
-    "review_proposed_change_endpoint",
     "request_campaign_synthesis_endpoint",
     "apply_foundry_combat_sync_endpoint",
     "ingest_reference_passages_endpoint",
@@ -496,7 +497,7 @@ _ENGINE_BACKED = {
 }
 
 
-def test_t13_the_engine_backed_routes_are_exactly_the_eight_and_each_ends_its_transaction() -> None:
+def test_t13_the_engine_backed_routes_are_exactly_the_seven_and_each_ends_its_transaction() -> None:
     found: dict[str, Any] = {}
     for context in _api_contexts():
         direct_engine = any(d.call is get_engine for d in context.dependant.dependencies)

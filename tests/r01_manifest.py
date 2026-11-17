@@ -346,8 +346,13 @@ def _record(route: APIRoute, method: str) -> dict[str, Any]:
     }
 
 
+ENGINE_REQUEST_SCOPED = "engine_request_scoped"
+
+
 def classify(record: dict[str, Any]) -> str:
     """The R01 family of a manifest record (plan section 7.1 / 8 / 10), or `unclassified`."""
+    if (str(record.get("method")), str(record.get("path"))) in E1_ROUTES:
+        return ENGINE_REQUEST_SCOPED
     if record["early_commit"]:
         return "engine_early_commit"
     scope = set(record["command_scope_markers"]) | set(record["precheck_markers"])
@@ -647,6 +652,15 @@ _S5E6_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: R01 E1 migrates the proposal-review route: an **unkeyed post-write** plan on the request-owned transaction
+#: (`dnd_ai.commands.ai_proposals.review_proposed_change`, `lock_operation_scope` first). It calls the operation
+#: scope helper but is **not** an operation-scope route for the reservation opt-in: it has no reservation, so it
+#: must stay out of `R01_DEFERRED_RESERVATION_ROUTES` (O-2's 129). `classify()` returns `engine_request_scoped`
+#: for it before the scope markers are read.
+E1_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {("POST", _CAMPAIGN + "/ai/proposed-changes/{ai_proposed_change_id}/review")}
+)
+
 #: The five world routes, an explicit **planned exclusion** from campaign-scoped R01 work (owner decision 4, plan
 #: 6.21.1; S5-F bookkeeping). Neither finalized nor pending, and not migrated or accepted: their plan lookup fails
 #: closed (`dnd_ai.api.r01_route_plans`). Their unkeyed-window follow-up is recorded in `docs/BACKLOG.md`.
@@ -682,6 +696,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S5E4_ROUTES
     | _S5E5_ROUTES
     | _S5E6_ROUTES
+    | E1_ROUTES
 )
 
 #: R01 O-2 (design 1.3): the two revelation routes reserve **after** their own campaign `KEY SHARE`

@@ -983,9 +983,19 @@
  {
   "audit": false,
   "command_markers": {
-   "dnd_ai.commands.ai_proposals.review_proposed_change": []
+   "dnd_ai.commands.ai_proposals.review_proposed_change": [
+    "reader:access_context",
+    "reader:world_authority",
+    "scope:authoring",
+    "scope:operation"
+   ]
   },
-  "command_scope_markers": [],
+  "command_scope_markers": [
+   "reader:access_context",
+   "reader:world_authority",
+   "scope:authoring",
+   "scope:operation"
+  ],
   "command_writes": {
    "dnd_ai.commands.ai_proposals.review_proposed_change": [
     "ai.change_reviews",
@@ -1013,15 +1023,14 @@
     "world_capability": null
    }
   ],
-  "early_commit": true,
-  "family": "engine_early_commit",
+  "early_commit": false,
+  "family": "engine_request_scoped",
   "handler": "dnd_ai.api.ai_npc.review_proposed_change_endpoint",
   "idempotency": [],
   "method": "POST",
   "path": "/campaigns/{campaign_id}/ai/proposed-changes/{ai_proposed_change_id}/review",
   "precheck_markers": [],
   "route_markers": [
-   "early_commit",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"
