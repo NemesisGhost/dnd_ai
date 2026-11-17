@@ -13,11 +13,13 @@ Two kinds of test live here and must not be confused (the S5-E2 E10 distinction)
    against the end of the member): at the parent the pair deadlocks (the untouched end command and the new end alike,
    SQLSTATE 40P01); here it is shown **clean in both orderings** after the change was migrated, and the retained
    characterization of the parent is replaced by this disposition.
-2. **Characterizations** (`test_characterized_*`): cycles that exist at the untouched baseline too (the legacy command
-   shows the same 40P01) and belong to the deferred authoring opt-in (DEF-019, plan 6.21.7). A pass means the pre-existing
-   defect is *characterized, not fixed*; it fails when the cycle disappears, forcing reclassification.
+2. **The keyed-authoring case** (`test_keyed_authoring_by_the_grantee_...`): a cycle that existed at the untouched baseline
+   too (the legacy command showed the same 40P01) and belonged to the deferred authoring opt-in (DEF-019, plan 6.21.7). It
+   was characterized, not fixed, until R01 O-2 (the keyed authoring opt-in) removed its common edge: it is now a serialization
+   regression in both arrivals. At the parent (`369bd8a`) it fails with exactly one 40P01.
 """
 
+import re
 import uuid
 from typing import Any
 
@@ -816,7 +818,7 @@ def test_deactivating_the_targets_account_and_a_route_that_names_it_serialize_in
     del before
 
 
-# --- the deferred authoring cycle: characterized ----------------------------------------------------------------------------------------------
+# --- the formerly deferred authoring cycle: serialized by R01 O-2 ----------------------------------------------------------------------------------------------
 
 
 def legacy_create_grant(
@@ -846,20 +848,36 @@ def legacy_create_grant(
 AUTHORING_WORLD = r"^SELECT lifecycle_status_id FROM core\.worlds WHERE world_id = \S+ FOR SHARE$"
 
 
+GRANT_CAMPAIGN_UPDATE = (
+    r"FROM campaign\.campaigns WHERE (campaign\.campaigns\.)?campaign_id = .* FOR UPDATE"
+)
+#: the legacy command's own campaign lock: `FROM campaign.campaigns c ... FOR UPDATE OF c`
+LEGACY_GRANT_CAMPAIGN_UPDATE = r"FROM campaign\.campaigns c[\s\S]*FOR UPDATE OF c"
+AUTHOR_MEMBERSHIP = re.compile(
+    r"^SELECT cm\.campaign_membership_id FROM security\.campaign_memberships cm WHERE cm\.campaign_i"
+)
+
+
+@pytest.mark.parametrize("arrival", ("authoring_parked", "grant_parked"))
 @pytest.mark.parametrize("subject", ("new_route", "legacy_command"))
-def test_characterized_keyed_authoring_by_the_grantee_and_a_grant_to_the_grantee_wait_in_a_cycle_at_the_baseline_too(
-    subject: str, s: Scene, pool: Pool
+def test_keyed_authoring_by_the_grantee_and_a_grant_to_the_grantee_serialize_after_the_authoring_opt_in(
+    subject: str, arrival: str, s: Scene, pool: Pool
 ) -> None:
-    """**Characterization (deferred cycle DEF-019, not a fix)**: the grantee is the GM member and also the author of a
-    keyed authoring request. The authoring request takes the campaign `FOR KEY SHARE` (its reservation) and then the
-    author's role rows and membership `FOR SHARE`; the grant (the **untouched baseline command** and the new route alike)
-    takes the grantee's membership `FOR UPDATE` and then wants the campaign `FOR UPDATE`. Interleaved (authoring parked at
-    its world statement, holding the campaign `FOR KEY SHARE`; the grant holding the membership and queued at the
-    campaign) they deadlock: one request is aborted (SQLSTATE 40P01), the other commits. `subject=legacy_command` shows
-    the same 40P01 at the baseline, so S5-E4 introduced no new cycle; it is **deferred under DEF-019** (the authoring
-    opt-in slice, plan 6.21.7, required before A6 and R01 closure). PostgreSQL chooses the victim; which request loses
-    is not asserted. A pass means the defect was characterized, not fixed; it fails when the cycle disappears."""
-    from tests.database.test_r01_s5e2_authoring_transfer_cycles import dungeons
+    """The grantee is the GM member and also the author of a keyed authoring request. This was the **characterized** DEF-019
+    cycle (one 40P01 at the baseline and at every HEAD until R01 O-2): the authoring request's reservation held the campaign
+    `FOR KEY SHARE` and then wanted the author's membership `FOR SHARE`, which the grant (the **untouched baseline command**
+    and the new route alike) held `FOR UPDATE` while it wanted the campaign `FOR UPDATE`. The reservation no longer locks the
+    campaign (its foreign key is deferred; the campaign is first locked at the scope, after the role rows and the membership),
+    so the two serialize in both arrivals and both commit (a grant adds authority, it never removes the author's):
+
+    * `authoring_parked` (at its `core.worlds ... FOR SHARE` statement, after its reservation): the grant does not wait for it
+      at all;
+    * `grant_parked` (holding the membership `FOR UPDATE`, parked just before its campaign `FOR UPDATE`): the author queues at
+      its membership behind that backend alone, holding nothing on the campaign, and proceeds once the grant commits.
+
+    Both: no driver exception, the deadlock counter unmoved, both 201, exactly one authored row, one grant row and one
+    completed receipt, and the same key replays the stored receipt."""
+    from tests.database.test_r01_s5e2_authoring_transfer_cycles import dungeons, reservations
 
     w = s.w
     env_gm = Env(
@@ -905,11 +923,23 @@ def test_characterized_keyed_authoring_by_the_grantee_and_a_grant_to_the_grantee
         return legacy_create_grant(s, pool, env_gm, fresh, actor)
 
     grant = grant_new if subject == "new_route" else grant_old
-    o = race(w, pool, gate_pattern=AUTHORING_WORLD, parked=authoring, second=grant)
-    assert len(o.failures) == 1 and o.failures[0][0] == "40P01", o.summary()
-    assert o.deadlock_delta == 1, o.summary()
-    codes = sorted(code(o.results[n]) for n in ("parked", "second"))
-    assert 500 in codes and len(codes) == 2, o.summary()
+    if arrival == "authoring_parked":
+        o = race(w, pool, gate_pattern=AUTHORING_WORLD, parked=authoring, second=grant)
+        author_response, grant_response = o.results["parked"], o.results["second"]
+    else:
+        gate = GRANT_CAMPAIGN_UPDATE if subject == "new_route" else LEGACY_GRANT_CAMPAIGN_UPDATE
+        o = race(w, pool, gate_pattern=gate, parked=grant, second=authoring)
+        grant_response, author_response = o.results["parked"], o.results["second"]
+    assert not o.failures, f"driver exceptions (40P01 = deadlock): {o.summary()}"
+    assert o.deadlock_delta == 0, o.summary()
+    if arrival == "authoring_parked":
+        assert o.blocked is None, f"the grant waited for the parked author: {o.summary()}"
+    else:
+        assert o.blocked, f"the author never queued behind the parked grant: {o.summary()}"
+        for row in o.blocked:
+            assert len(row["blockers"]) == 1, f"more than one blocker: {o.summary()}"
+            assert AUTHOR_MEMBERSHIP.search(row["query"].strip()), row["query"]
+    assert (code(author_response), code(grant_response)) == (201, 201), o.summary()
     authored = dungeons(w, name)
     granted = rows(
         w.engine,
@@ -918,4 +948,9 @@ def test_characterized_keyed_authoring_by_the_grantee_and_a_grant_to_the_grantee
         m=w.gm_membership,
         c=fresh,
     )[0]["n"]
-    assert (authored == 1) != (granted == 1), (authored, granted, o.summary())
+    assert (authored, granted) == (1, 1), (authored, granted, o.summary())
+    assert reservations(w, key) == 1, o.summary()
+    again = authoring()
+    assert code(again) == 201, "the same key replays the stored receipt"
+    assert dungeons(w, name) == 1 and reservations(w, key) == 1
+    assert not pool.failures, pool.failures

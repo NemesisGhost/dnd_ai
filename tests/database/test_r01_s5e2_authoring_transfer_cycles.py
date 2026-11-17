@@ -3,28 +3,30 @@
 both transaction orderings.
 
 Design: docs/R01_S5E2_E10_CORRECTION_DESIGN_2026-11-15.md (sections 2, 3, 4, 7). Every case drives real routes over
-real connections: the keyed authoring request (`POST .../authoring/dungeons`, the reservation INSERT takes the campaign
-row FOR KEY SHARE) against `POST .../ownership-transfer`. Author = `w.gm_user` (holds `gm`): it is either the
+real connections: the keyed authoring request (`POST .../authoring/dungeons`; since R01 O-2 its reservation defers the
+campaign foreign key, so the INSERT takes no campaign lock) against `POST .../ownership-transfer`. Author = `w.gm_user` (holds `gm`): it is either the
 transferring owner ("actor") or the recipient.
 
 Two orderings, the only meaningful ones:
 
 * **order A** - the authoring request is parked at its `core.worlds ... FOR SHARE` statement (after the reservation
-  INSERT, so it holds the campaign row KEY SHARE); the transfer runs; the authoring is released.
+  INSERT; it holds nothing on the campaign row since R01 O-2, it was KEY SHARE before); the transfer runs and does
+  not wait for it; the authoring is released.
 * **order T** - the transfer is parked at its actor-account statement (after its role-class, membership and account
   passes, before its campaign lock); the authoring runs; the transfer is released.
 
-Two kinds of test live here, and they must not be confused:
+Two kinds of test live here:
 
 1. **New-cycle regressions** (`test_new_cycle_*`): 14 cases that deadlocked at HEAD `45dab7d` and are clean at the
    untouched baseline `0edb94d`. After TA-E10-1 / TA-E10-2 (M2 / M1) they are ordinary passing tests: no driver
    exception, no deadlock, exact statuses, exact queueing statements, exact final state.
-2. **Baseline-cycle characterizations** (`test_baseline_cycle_*`, `test_f_*`): cycles that also deadlock at the baseline
-   and are *deferred* (DEF-019 authoring opt-in; plan 6.29, CL-E10-1). They PASS while the known defect is present.
-   **A pass means the defect was characterized, not fixed.** When the cycle is fixed they fail on "exactly one 40P01",
-   which forces the reclassification. They assert the failed transaction exactly (statement, SQLSTATE, response),
-   but not *which* request is the victim, which PostgreSQL chooses (design 3.1: 2 of 66 probe cases inverted the usual
-   one).
+2. **Serialization regressions** (`test_baseline_cycle_*`, `test_f_*`; R01 O-2, plan 6.43, design N-3): the 10 + 4
+   cases that were *characterized* (they deadlocked at the baseline `0edb94d` and at every HEAD until the keyed
+   authoring opt-in: DEF-019, CL-E10-1, plan 6.29). The authoring route's reservation no longer holds the campaign
+   row `FOR KEY SHARE` (its campaign foreign key is deferred, and the campaign is first locked at the scope, after the
+   author's role rows and membership), so the common edge of every cycle is gone. They are now ordinary passing
+   tests in both arrivals: no driver exception, deadlock counter unmoved, the observed wait, exact statuses, exact
+   durable state. At the parent (`369bd8a`) each of them fails with exactly one 40P01 (the O-2 fail-before).
 """
 
 import json
@@ -453,7 +455,7 @@ NEW_CASES: dict[tuple[str, str], dict[str, re.Pattern[str] | None]] = {
     ("noop", "recipient"): {"A": None, "T": WAIT_AUTHOR_MEMBERSHIP},
     ("insert", "actor"): {"A": None, "T": None},
     ("insert", "recipient"): {"A": None, "T": WAIT_AUTHOR_MEMBERSHIP},
-    ("expired", "actor"): {"A": WAIT_CAMPAIGN_UPDATE, "T": None},
+    ("expired", "actor"): {"A": None, "T": None},
     ("self", "actor"): {"A": None, "T": WAIT_AUTHOR_MEMBERSHIP},
     ("self_flag", "actor"): {"A": None, "T": WAIT_AUTHOR_MEMBERSHIP},
 }
@@ -470,8 +472,10 @@ def test_new_cycle_transfer_and_keyed_authoring_do_not_deadlock(
     run = run_scene(w, pool, s, order)
     # 1. the premise held at the gate (otherwise the case proves nothing)
     if order == "A":
-        assert run.modes["campaign"] == "KS", (
-            f"the authoring reservation holds the campaign KS: {run.summary()}"
+        # R01 O-2: the keyed authoring request has reserved (its campaign foreign key is deferred) and holds nothing
+        # on the campaign; it was "KS" while the reservation locked the campaign through the immediate FK
+        assert run.modes["campaign"] == "none", (
+            f"the parked authoring request holds nothing on the campaign: {run.summary()}"
         )
     else:
         assert run.modes["actor_membership"] in ("S", "U"), run.summary()
@@ -493,67 +497,60 @@ def test_new_cycle_transfer_and_keyed_authoring_do_not_deadlock(
 
 
 # ======================================================================================================================
-# 2. Baseline-cycle characterizations (pre-existing at 0edb94d; deferred to the authoring opt-in slice)
+# 2. The 10 baseline cases, serialized by the authoring opt-in (R01 O-2; they were characterized deadlocks)
 # ======================================================================================================================
 
 
-def victim_from(failures: list[tuple[str | None, str]], summary: str) -> str:
-    """The request whose statement PostgreSQL aborted: `writer` (its campaign FOR UPDATE) or `authoring` (one of its
-    two role-class waits). Anything else is a different failure and fails the characterization."""
-    assert len(failures) == 1, f"expected exactly one driver failure: {summary}"
-    sqlstate, statement = failures[0]
-    assert sqlstate == "40P01", f"the failure is not a deadlock: {summary}"
-    if any(p.search(statement) for p in CYCLE_EDGE_WRITER):
-        return "writer"
-    if any(p.search(statement) for p in CYCLE_EDGE_AUTHOR):
-        return "authoring"
-    raise AssertionError(f"the deadlock aborted a statement that is not a cycle edge: {summary}")
-
-
-def victim_of(run: Run) -> str:
-    return "transfer" if victim_from(run.failures, run.summary()) == "writer" else "authoring"
-
-
-def characterize(w: World, p: Pool, s: Scene, run: Run) -> str:
-    """Assert one aborted transaction, its rollback and its recovery. Returns the victim ("transfer"|"authoring")."""
-    victim = victim_of(run)
-    winner = "authoring" if victim == "transfer" else "transfer"
-    assert run.deadlock_delta == 1, f"expected exactly one deadlock: {run.summary()}"
-    assert run.statuses[victim] == INTERNAL, f"the victim answers 500: {run.summary()}"
-    assert run.statuses[winner] == (OK_TRANSFER if winner == "transfer" else OK_AUTHORING), (
-        run.summary()
+def completed_receipts(w: World, key: str) -> int:
+    return int(
+        rows(
+            w.engine,
+            "SELECT count(*) AS n FROM security.idempotent_requests WHERE idempotency_key = :k "
+            "AND completed_at IS NOT NULL AND response_status_code = 201",
+            k=key,
+        )[0]["n"]
     )
-    b, before, after = s.branch, run.before, run.after
-    if victim == "transfer":
-        # nothing of the transfer survived: no role row changed, no audit; the winner (authoring) committed
-        assert after.transfer_audits == before.transfer_audits, run.summary()
-        assert after.actor_owner == before.actor_owner and after.rec_owner == before.rec_owner, (
-            run.summary()
-        )
-        assert after.dungeons == 1 and after.reservations == 1, run.summary()
-        status = retry(w, p, s, "transfer")
-        assert status == OK_TRANSFER, "the re-posted transfer succeeds"
-        final = snapshot(w, s)
-        assert final.transfer_audits - before.transfer_audits == b.audits
-        assert live_owner(w, s.rec_m) and live_owner(w, s.actor_m) == (not b.relinquished)
-        assert dungeons(w, s.name) == 1
-    else:
-        # nothing of the authoring survived: no authored row, no reservation for its key, no non-transfer audit
-        # row; the winner (transfer) committed in full
-        assert after.dungeons == 0, run.summary()
-        assert after.reservations == 0, (
-            f"the reservation rolled back with the victim: {run.summary()}"
-        )
-        assert after.non_transfer_audits == before.non_transfer_audits, run.summary()
-        assert after.transfer_audits - before.transfer_audits == b.audits, run.summary()
-        status = retry(w, p, s, "authoring")
-        assert status == OK_AUTHORING, "the same Idempotency-Key is reusable after the rollback"
-        assert dungeons(w, s.name) == 1 and reservations(w, s.key) == 1
-        assert live_owner(w, s.rec_m) and live_owner(w, s.actor_m) == (not b.relinquished)
-    return victim
 
 
-#: The 10 retained baseline cases: (branch, author). Each is run in both orders.
+def idle_in_transaction(w: World) -> int:
+    return int(
+        rows(
+            w.engine,
+            "SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database() "
+            "AND state LIKE 'idle in transaction%'",
+        )[0]["n"]
+    )
+
+
+def assert_settled(w: World, p: Pool, s: Scene, run: Run) -> None:
+    """After the race: no backend is left idle in a transaction, the completed receipt is the author's only one, and
+    the pooled connections carry nothing over: the same-key retry on the same pool is the stored receipt (201) and
+    writes nothing again."""
+    assert idle_in_transaction(w) == 0, run.summary()
+    assert completed_receipts(w, s.key) == 1, run.summary()
+    again = s.authoring(p, w)
+    assert (code(again), error_of(again)) == OK_AUTHORING, "the same key replays the stored receipt"
+    assert dungeons(w, s.name) == 1 and reservations(w, s.key) == 1
+    assert not p.failures, p.failures
+
+
+def assert_serialized(w: World, p: Pool, s: Scene, run: Run, queue: re.Pattern[str] | None) -> None:
+    """The opted-in authoring request and the transfer serialize: no driver exception, the deadlock counter unmoved,
+    the wait of the second request exactly `queue` (`None`: it finished while the other was parked), both succeed,
+    and the durable state is the serial one."""
+    assert not run.failures, f"driver exceptions (40P01 = deadlock): {run.summary()}"
+    assert run.deadlock_delta == 0, run.summary()
+    assert run.modes["campaign"] == "none", (
+        f"neither parked request holds the campaign: {run.summary()}"
+    )
+    assert_waited_on(run, queue)
+    assert run.statuses == {"transfer": OK_TRANSFER, "authoring": OK_AUTHORING}, run.summary()
+    assert_transfer_effects(w, s, run)
+    assert_authoring_effects(w, s, run)
+    assert_settled(w, p, s, run)
+
+
+#: The 5 retained baseline cases: (branch, author). Each is run in both orders.
 BASELINE_CASES = [
     ("expired", "recipient"),
     ("rel_already", "actor"),
@@ -562,22 +559,33 @@ BASELINE_CASES = [
     ("rel_insert", "recipient"),
 ]
 
+#: Order T: what the authoring request queues on, behind the parked transfer (the author's role rows when the author
+#: is the actor or the recipient whose expired owner row is replaced; the recipient's membership otherwise). Order A:
+#: the transfer does not wait for the parked authoring request at all.
+BASELINE_QUEUE: dict[tuple[str, str], re.Pattern[str]] = {
+    ("expired", "recipient"): WAIT_AUTHOR_ROLES,
+    ("rel_already", "actor"): WAIT_AUTHOR_ROLES,
+    ("rel_already", "recipient"): WAIT_AUTHOR_MEMBERSHIP,
+    ("rel_insert", "actor"): WAIT_AUTHOR_ROLES,
+    ("rel_insert", "recipient"): WAIT_AUTHOR_MEMBERSHIP,
+}
+
 
 @pytest.mark.parametrize("order", ("A", "T"))
 @pytest.mark.parametrize(("branch", "author"), BASELINE_CASES)
-def test_baseline_cycle_is_characterized_not_fixed(
+def test_baseline_cycle_serializes_after_the_authoring_opt_in(
     branch: str, author: str, order: str, w: World, pool: Pool
 ) -> None:
-    """DEFERRED, NOT FIXED (DEF-019, CL-E10-1): relinquishing transfers, and the replacement of the *recipient-author's*
-    expired owner row, deadlock with keyed authoring exactly as at the baseline `0edb94d`. This test passes while
-    that is true. If it fails on `exactly one driver failure`, the cycle is gone: reclassify, do not 'fix' the test."""
+    """R01 O-2 (DEF-019, CL-E10-1): relinquishing transfers, and the replacement of the *recipient-author's* expired owner
+    row, deadlocked with keyed authoring at every HEAD up to the opt-in (one 40P01 on a cycle-edge statement, the victim's
+    500 and full rollback, the winner's rows; characterized, not fixed). They now serialize in both arrivals."""
     s = build_scene(w, BRANCHES[branch], author)
     run = run_scene(w, pool, s, order)
-    characterize(w, pool, s, run)
+    assert_serialized(w, pool, s, run, BASELINE_QUEUE[(branch, author)] if order == "T" else None)
 
 
 # ======================================================================================================================
-# 3. Test F's two deferred peers, characterized (both positions of the author's other role row)
+# 3. Test F's two peers, serialized (both positions of the author's other role row)
 # ======================================================================================================================
 
 MEMBERSHIP_STATEMENT = (
@@ -588,12 +596,14 @@ MEMBERSHIP_STATEMENT = (
 
 @pytest.mark.parametrize("other_row", ("below_gX", "above_gX"))
 @pytest.mark.parametrize("peer", ("change", "transfer_to_expired_owner"))
-def test_f_the_deferred_cycle_is_characterized(
+def test_f_the_formerly_deferred_cycle_serializes_after_the_authoring_opt_in(
     peer: str, other_row: str, w: World, pool: Pool
 ) -> None:
-    """DEFERRED, NOT FIXED (DEF-019): X (`w.gm_user`) authors while a `change` of X's `gm` row, or a transfer that
-    replaces X's expired owner row, holds X's role rows and then wants the campaign row `FOR UPDATE`, which X's
-    authoring request already holds `FOR KEY SHARE`. Passing means the baseline defect was characterized."""
+    """R01 O-2 (DEF-019): X (`w.gm_user`) authors while a `change` of X's `gm` row, or a transfer that replaces X's expired
+    owner row, holds X's role rows and then wants the campaign row `FOR UPDATE`. The authoring request used to hold it
+    `FOR KEY SHARE` (one 40P01; characterized); it now holds nothing on the campaign, queues at X's role rows behind the
+    parked writer on that backend alone, and the two serialize: the writer first, then the authoring request, which sees
+    the committed change."""
     from tests.database.test_r01_s5e2_lock_order import race
 
     m = make_managers(w.engine, w.campaign_id, label="F")
@@ -655,40 +665,40 @@ def test_f_the_deferred_cycle_is_characterized(
         second=authoring,
     )
     summary = o.summary()
-    victim = victim_from(o.failures, summary)
-    assert o.deadlock_delta == 1, summary
-    win_writer = OK201 if peer == "change" else OK_TRANSFER
-    victim_request = "parked" if victim == "writer" else "second"
-    winner_request = "second" if victim == "writer" else "parked"
-    assert o.status(victim_request) == INTERNAL, summary
-    assert o.status(winner_request) == (OK_AUTHORING if victim == "writer" else win_writer), summary
+    assert not o.failures, f"driver exceptions (40P01 = deadlock): {summary}"
+    assert o.deadlock_delta == 0, summary
+    assert o.blocked, f"the authoring request never queued behind the parked writer: {summary}"
+    for row in o.blocked:
+        assert len(row["blockers"]) == 1, f"more than one blocker: {summary}"
+        assert WAIT_AUTHOR_ROLES.search(row["query"].strip()), row["query"]
     gm_rows_after = rows(
         w.engine,
         "SELECT membership_role_id AS id, revoked_at IS NULL AS live FROM security.membership_roles "
         "WHERE campaign_membership_id = :m ORDER BY 1",
         m=w.gm_membership,
     )
-    pool.failures.clear()
-    pool.engine.dispose()
-    if victim == "writer":
-        assert gm_rows_after == gm_rows_before, "the aborted writer changed no role row"
-        assert transfer_audits(w.engine) == audits_before
-        assert dungeons_named(w, name) == 1 and reservations_for(w, key) == 1
-        again = writer()
-        assert (code(again), error_of(again)) == win_writer, "the re-posted writer succeeds"
-    else:
-        assert dungeons_named(w, name) == 0, "no authored row survived the aborted authoring"
-        assert reservations_for(w, key) == 0, "the reservation rolled back with the victim"
+    assert idle_in_transaction(w) == 0, summary
+    if peer == "change":
+        # the change committed first; X no longer holds `gm`, so the authoring request is refused by the early check it
+        # always had (404 `not_found`), after waiting for the rows the change held: nothing authored, nothing reserved
+        assert o.status("parked") == OK201, summary
+        assert o.status("second") == (404, "not_found"), summary
+        assert gm_rows_after != gm_rows_before, "the change committed"
+        assert dungeons_named(w, name) == 0 and reservations_for(w, key) == 0, summary
         again = authoring()
-        if peer == "change":
-            # the change committed: the author lost `gm` (and `canon.edit`): the same key is reusable, and refused
-            assert code(again) == 403, (
-                f"the retry executes (not a replay) and is refused: {again.text}"
-            )
-            assert dungeons_named(w, name) == 0
-        else:
-            assert (code(again), error_of(again)) == OK_AUTHORING
-            assert dungeons_named(w, name) == 1 and reservations_for(w, key) == 1
+        # the retry is a fresh request: the route's capability check (403 `forbidden`) refuses it before any reservation
+        assert (code(again), error_of(again)) == (403, "forbidden"), "the same key is reusable"
+        assert dungeons_named(w, name) == 0 and reservations_for(w, key) == 0
+    else:
+        assert o.status("parked") == OK_TRANSFER, summary
+        assert o.status("second") == OK_AUTHORING, summary
+        assert transfer_audits(w.engine) == audits_before + 1
+        assert dungeons_named(w, name) == 1 and reservations_for(w, key) == 1, summary
+        assert completed_receipts(w, key) == 1, summary
+        again = authoring()
+        assert (code(again), error_of(again)) == OK_AUTHORING, "the stored receipt is replayed"
+        assert dungeons_named(w, name) == 1 and reservations_for(w, key) == 1
+    assert not pool.failures, pool.failures
 
 
 def dungeons_named(w: World, name: str) -> int:

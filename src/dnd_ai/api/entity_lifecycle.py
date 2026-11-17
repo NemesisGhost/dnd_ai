@@ -56,7 +56,7 @@ from dnd_ai.domain.record_authoring import CAMPAIGN_ORIGINATED_TYPES, authorized
 from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.entity_lifecycle import get_entity_lifecycle, list_replacement_candidates
 
-from ._authoring import require_authoring_decisions
+from ._authoring import begin_planned_idempotent_request, require_authoring_decisions
 from ._shared import timeline_world_id
 from .access import (
     require_campaign_capability,
@@ -67,11 +67,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import InvalidCursorError, NotFoundError
-from .idempotency import (
-    IdempotentReplay,
-    begin_idempotent_request,
-    complete_idempotent_request,
-)
+from .idempotency import IdempotentReplay, complete_idempotent_request
 from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, build_page, decode_typed_cursor
 from .r01_route_plans import get_authorization_plan
 
@@ -312,8 +308,9 @@ def _run(
     )
     reservation_id: uuid.UUID | None = None
     if idempotency_key is not None:
-        outcome = begin_idempotent_request(
+        outcome = begin_planned_idempotent_request(
             connection,
+            plan=plan,
             actor_user_id=access.user_id,
             campaign_id=access.campaign_id,
             idempotency_key=idempotency_key,

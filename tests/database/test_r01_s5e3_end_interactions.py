@@ -10,15 +10,15 @@ the same membership or the same campaign row from the other side:
   membership. Executed for the removal and the no-op branches of the end (the same coverage boundary as plan 6.29).
 * **campaign archive** (the campaign `FOR UPDATE`): conflicts with the end's campaign lock; exactly one wins and
   `finalize` re-resolves the route requirement against the archived campaign.
-* **keyed authoring** (the author's role rows and membership, with the campaign `FOR KEY SHARE` from its reservation): a
-  **characterization**, not a regression. Authoring takes the campaign (`KEY SHARE`) first and the member's role rows
-  (`SHARE`) second, while every end (the untouched baseline command and the new route alike) takes the role rows
-  (`UPDATE`) first and the campaign (`UPDATE`) later: the cycle exists at the baseline and is **deferred under DEF-019**
-  (the authoring opt-in slice, plan 6.21.7, required before A6 and R01 closure). Each case asserts exactly one 40P01 on a
-  cycle-edge statement, the 500 on the request whose statement failed, deadlock delta 1, and that the loser rolled back
-  completely; the victim is not pinned (PostgreSQL chooses). A pass means the defect was characterized, not fixed.
+* **keyed authoring** (the author's role rows and membership): a **serialization regression** since R01 O-2. It was a
+  characterized DEF-019 cycle: authoring took the campaign (`KEY SHARE`) first, through its reservation, and the member's
+  role rows (`SHARE`) second, while every end (the untouched baseline command and the new route alike) takes the role rows
+  (`UPDATE`) first and the campaign (`UPDATE`) later. The reservation no longer locks the campaign (its foreign key is
+  deferred), so both arrivals serialize: no driver exception, the deadlock counter unmoved, the end wins, the author is
+  refused at its scope with nothing left. At the parent (`369bd8a`) the cases fail with exactly one 40P01.
 """
 
+import re
 import uuid
 from datetime import timedelta
 from typing import Any
@@ -33,6 +33,7 @@ from dnd_ai.commands.recovery import recover_campaign_access_manager
 from tests.database.test_r01_s3_authoring_routes import (  # noqa: F401 - fixture by name
     World,
     code,
+    error_of,
     w,
 )
 from tests.database.test_r01_s5e2_authoring_transfer_cycles import dungeons, reservations
@@ -276,25 +277,35 @@ def test_campaign_archive_against_an_end_serializes_and_one_never_corrupts_the_o
     assert open_dependents_of(w, cast.x_m)["roles"] == (0 if end_result == OK200 else 1)
 
 
-# --- keyed authoring: a characterization of a deferred cycle --------------------------------------------------------------
+# --- keyed authoring against the end of its member: serialized by the authoring opt-in (R01 O-2) ------------------------
 
 AUTHORING_WORLD = r"^SELECT lifecycle_status_id FROM core\.worlds WHERE world_id = \S+ FOR SHARE$"
+AUTHOR_ROLE_ROWS = re.compile(
+    r"^SELECT mr\.membership_role_id FROM security\.membership_roles mr JOIN"
+)
 
 
 @pytest.mark.parametrize("subject", ("new_end", "legacy_end"))
 @pytest.mark.parametrize("arrival", ("authoring_parked", "end_parked"))
-def test_characterized_keyed_authoring_by_the_member_and_the_end_of_the_member_wait_in_a_cycle_at_the_baseline_too(
+def test_keyed_authoring_by_the_member_and_the_end_of_the_member_serialize_after_the_authoring_opt_in(
     arrival: str, subject: str, w: World, pool: Pool
 ) -> None:
-    """**Characterization (deferred cycle DEF-019, not a fix)**: the author is the GM member (`w.gm_user`) and the owner
-    ends that member. Order `authoring_parked`: the keyed authoring request is parked at its `core.worlds ... FOR
-    SHARE` statement (after its reservation `INSERT`, holding the campaign `FOR KEY SHARE`); the end takes the member's
-    role rows `FOR UPDATE` and the membership and then wants the campaign `FOR UPDATE`; the authoring request, released,
-    wants those role rows. Order `end_parked`: the end is parked at its account statement (every role and membership
-    lock held, the campaign not yet); the authoring request takes the campaign `FOR KEY SHARE` and then wants the role
-    rows. `subject=legacy_end` runs the *untouched baseline command* (`end_campaign_membership`) in the same positions
-    and shows the same 40P01, so S5-E3 introduced no new cycle. Exactly one request is the victim of one 40P01; the
-    victim rolled back whole (no authored row for the authoring victim, the membership still open for the end victim)."""
+    """The author is the GM member (`w.gm_user`) and the owner ends that member. This was the **characterized** DEF-019 cycle
+    (one 40P01 at the baseline and at every HEAD until R01 O-2): the keyed authoring request's reservation held the campaign
+    `FOR KEY SHARE` while it wanted the member's role rows, which the end held and held while it wanted the campaign
+    `FOR UPDATE`. The reservation no longer locks the campaign (its foreign key is deferred; the campaign is first locked at
+    the scope, after the role rows and the membership), so the two serialize in both arrivals and the end always wins:
+
+    * `authoring_parked` (parked at its `core.worlds ... FOR SHARE` statement, after its reservation): the end does not wait for
+      it at all and commits; the released author is refused at its scope;
+    * `end_parked` (parked where every role and membership lock is held, the campaign not yet taken: the account statement of the
+      route, the relationship `UPDATE` of the legacy command): the author queues at its role rows behind that backend alone,
+      holding nothing on the campaign; released, the end commits and the author is refused.
+
+    `subject=legacy_end` runs the *untouched baseline command* (`end_campaign_membership`) in the same positions: the opt-in is
+    the authoring side's. Both: no driver exception, the deadlock counter unmoved, the end a 200 and the membership ended, the
+    author a 404 `not_found` (its scope's existing early check) with no authored row, no reservation, and the same key reusable
+    (the retry is refused by the route's capability check and still writes nothing)."""
     name = f"S5E3 {uuid.uuid4().hex[:8]}"
     key = str(uuid.uuid4())
     actor = owner_membership_of_owner(w)
@@ -317,6 +328,7 @@ def test_characterized_keyed_authoring_by_the_member_and_the_end_of_the_member_w
     end = end_new if subject == "new_end" else end_old
     if arrival == "authoring_parked":
         o = race(w, pool, gate_pattern=AUTHORING_WORLD, parked=authoring, second=end)
+        author_response, end_response = o.results["parked"], o.results["second"]
     else:
         gate = (
             ACTOR_ACCOUNT
@@ -324,16 +336,26 @@ def test_characterized_keyed_authoring_by_the_member_and_the_end_of_the_member_w
             else r"^UPDATE security\.membership_character_relationships"
         )
         o = race(w, pool, gate_pattern=gate, parked=end, second=authoring)
-    assert len(o.failures) == 1 and o.failures[0][0] == "40P01", o.summary()
-    assert o.deadlock_delta == 1, o.summary()
-    codes = sorted(code(o.results[n]) for n in ("parked", "second"))
-    assert 500 in codes and len(codes) == 2, o.summary()
-    ended = not membership_open(w, w.gm_membership)
-    authored = dungeons(w, name)
-    # exactly one of the two committed; the victim left nothing behind (a rolled-back authoring request leaves no
-    # authored row and no reservation, a rolled-back end leaves the membership open)
-    assert ended != (authored == 1), (ended, authored, o.summary())
-    assert reservations(w, key) == (1 if authored == 1 else 0), o.summary()
+        end_response, author_response = o.results["parked"], o.results["second"]
+    assert not o.failures, f"driver exceptions (40P01 = deadlock): {o.summary()}"
+    assert o.deadlock_delta == 0, o.summary()
+    if arrival == "authoring_parked":
+        assert o.blocked is None, f"the end waited for the parked author: {o.summary()}"
+    else:
+        assert o.blocked, f"the author never queued behind the parked end: {o.summary()}"
+        for row in o.blocked:
+            assert len(row["blockers"]) == 1, f"more than one blocker: {o.summary()}"
+            assert AUTHOR_ROLE_ROWS.search(row["query"].strip()), row["query"]
+    assert (code(end_response), error_of(end_response)) == (200, None), o.summary()
+    assert (code(author_response), error_of(author_response)) == (404, "not_found"), o.summary()
+    assert not membership_open(w, w.gm_membership), "the end committed"
+    assert dungeons(w, name) == 0, o.summary()
+    assert reservations(w, key) == 0, o.summary()
+    # the key is reusable: a fresh request is refused by the route's capability check and writes nothing
+    again = authoring()
+    assert code(again) in (403, 404), again.text
+    assert dungeons(w, name) == 0 and reservations(w, key) == 0
+    assert not pool.failures, pool.failures
 
 
 def owner_membership_of_owner(w: World) -> uuid.UUID:

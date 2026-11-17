@@ -68,11 +68,6 @@ from dnd_ai.commands.reveal_delegation_plans import (
 from dnd_ai.domain.authorization import ReservationDeclarations
 from dnd_ai.domain.authorization_steps import PreWriteDeclaration
 
-#: Finalized post-write routes that may opt in to the reservation deferral (R01 O-1, AM-1.1): their plan is
-#: opened as a keyed post-write plan. **Empty in O-1: no production route adopts the capability.** A route
-#: listed here must be finalized and in neither pre-write registry (`begin_route_plan` refuses it otherwise).
-R01_DEFERRED_RESERVATION_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset()
-
 R01_KEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], ReservationDeclarations]] = (
     MappingProxyType(
         {

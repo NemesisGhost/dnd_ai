@@ -1173,6 +1173,11 @@ def release_character_public_profile(
         ),
         {"membership": actor_membership_id},
     ).all()
+    # An opted-in keyed release (R01 O-2, AM-1) deferred its reservation's campaign foreign key: this is the first
+    # lock on the row, taken by the plan's own evidence statement after the reveal-authority rows and the
+    # membership above; the statement below then re-locks a held row. No other plan owes it.
+    if plan.owes_campaign_evidence:
+        plan.lock_campaign_evidence(connection)
     campaign = connection.execute(
         text(
             "SELECT lifecycle_status_id FROM campaign.campaigns "

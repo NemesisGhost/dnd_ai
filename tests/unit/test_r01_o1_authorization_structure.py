@@ -107,8 +107,9 @@ def test_the_new_entry_points_have_the_designed_shape() -> None:
 # --- the registry and the route-plan dispatch --------------------------------------------------------
 
 
-def test_no_route_is_registered_in_o1() -> None:
-    assert not r01_pre_write_routes.R01_DEFERRED_RESERVATION_ROUTES
+# R01 O-2 deliberate change: O-1 pinned the registry empty (`test_no_route_is_registered_in_o1`). O-2 registers the
+# 129 routes, generated into `api/r01_pending_routes.py`; the registry's content is pinned in
+# `tests/unit/test_r01_o2_structure.py`, and the dispatch below is unchanged.
 
 
 class _Recorder:
@@ -128,8 +129,12 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> type[_Recorder]:
 
 
 def _post_write_route() -> tuple[str, str]:
-    taken = set(r01_pre_write_routes.R01_KEYED_PRE_WRITE_ROUTES) | set(
-        r01_pre_write_routes.R01_UNKEYED_PRE_WRITE_ROUTES
+    taken = (
+        set(r01_pre_write_routes.R01_KEYED_PRE_WRITE_ROUTES)
+        | set(r01_pre_write_routes.R01_UNKEYED_PRE_WRITE_ROUTES)
+        | set(
+            r01_pending_routes.R01_DEFERRED_RESERVATION_ROUTES
+        )  # O-2: a registered route is not "unregistered"
     )
     return next(
         key
@@ -188,9 +193,13 @@ def _sources() -> list[Path]:
 
 
 _ADOPTERS = {
-    r"\.lock_campaign_evidence\(": set(),
+    # R01 O-2 deliberate change: the two evidence sites (design 2.2 step 5) and the generated registry
+    r"\.lock_campaign_evidence\(": {
+        "commands/_content.py",
+        "commands/character_public_profile.py",
+    },
     r"\bkeyed_post_write\s*=\s*(?!False)": {"api/r01_route_plans.py"},
-    r"R01_DEFERRED_RESERVATION_ROUTES": {"api/r01_pre_write_routes.py", "api/r01_route_plans.py"},
+    r"R01_DEFERRED_RESERVATION_ROUTES": {"api/r01_pending_routes.py", "api/r01_route_plans.py"},
     r"\bCAMPAIGN_EVIDENCE_LOCK\b": {"commands/_pre_write_steps.py"},
 }
 

@@ -12,7 +12,8 @@ every non-GET route through `open_request_plan` (rule 1b) and a migrated handler
   declarations its handler chooses from by the reservation's server outcome.
 - A route in `R01_UNKEYED_PRE_WRITE_ROUTES` (S5-E2 ownership transfer) opens a pre-write plan with its one
   declaration and no reservation. The two registries are disjoint and a pre-write route is finalized.
-- A route in `R01_DEFERRED_RESERVATION_ROUTES` (R01 O-1; empty until a reviewed slice registers routes) opens
+- A route in `R01_DEFERRED_RESERVATION_ROUTES` (R01 O-2: the 129 finalized authoring, operation and reveal
+  routes except the two late-reservation routes; generated into `r01_pending_routes`) opens
   a **keyed post-write** plan: final authorization stays post-write, and the route may defer the
   reservation's campaign FK and then owes campaign evidence. It is finalized and in no pre-write registry.
 - A route in `R01_EXCLUDED_WORLD_ROUTES` (the five world routes, a planned exclusion, neither finalized nor pending)
@@ -29,12 +30,12 @@ from sqlalchemy import Connection
 from dnd_ai.domain.authorization import AuthorizationPlan, PlanMode
 
 from .r01_pending_routes import (
+    R01_DEFERRED_RESERVATION_ROUTES,
     R01_EXCLUDED_WORLD_ROUTES,
     R01_FINALIZED_ROUTES,
     R01_PENDING_ROUTES,
 )
 from .r01_pre_write_routes import (
-    R01_DEFERRED_RESERVATION_ROUTES,
     R01_KEYED_PRE_WRITE_ROUTES,
     R01_UNKEYED_PRE_WRITE_ROUTES,
 )

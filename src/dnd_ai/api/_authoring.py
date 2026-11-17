@@ -28,6 +28,7 @@ from dnd_ai.domain.data_classification import replay_body
 from ._shared import timeline_world_id
 from .idempotency import (
     IdempotentReplay,
+    IdempotentReservation,
     begin_actor_idempotent_request,
     begin_idempotent_request,
     complete_actor_idempotent_request,
@@ -69,6 +70,45 @@ def _judge_replay(connection: Connection, plan: AuthorizationPlan | None) -> Non
     """R-D4: judge the plan's requirements, then finalize it, before a stored receipt leaves."""
     if plan is not None:
         plan.finalize(connection)
+
+
+def begin_planned_idempotent_request(
+    connection: Connection,
+    *,
+    plan: AuthorizationPlan | None,
+    actor_user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    idempotency_key: str,
+    command_name: str,
+    payload: dict[str, Any],
+    correlation_id: str | None,
+) -> IdempotentReservation | IdempotentReplay:
+    """`begin_idempotent_request` for a keyed request of a route that may be registered for the reservation
+    deferral (R01 O-2, AM-1): the one place the two reservation paths of the 129 opted-in routes (this module's
+    `start_campaign_idempotency` and `entity_lifecycle`) meet.
+
+    A **keyed post-write plan** (`plan.keyed_post_write`, opened by `begin_route_plan` for a registered
+    route only) defers the reservation's campaign foreign key **before** the
+    reservation, at the top-level transaction and before any row lock, then binds the server's recorded outcome
+    right after it. The reservation therefore no longer takes the campaign row `FOR KEY SHARE` ahead of the
+    request's role rows and membership: the plan's `lock_campaign_evidence` takes it at the scope's own campaign
+    position, which every access writer already precedes (design 2.2). Any other plan (or none) reserves exactly as
+    before. Call it only for a keyed request: an unkeyed request reserves nothing and defers nothing."""
+    deferring = plan is not None and plan.keyed_post_write
+    if plan is not None and deferring:
+        plan.defer_reservation_campaign_fk(connection)
+    outcome = begin_idempotent_request(
+        connection,
+        actor_user_id=actor_user_id,
+        campaign_id=campaign_id,
+        idempotency_key=idempotency_key,
+        command_name=command_name,
+        payload=payload,
+        correlation_id=correlation_id,
+    )
+    if plan is not None and deferring:
+        plan.bind_reservation(connection, outcome)
+    return outcome
 
 
 @dataclass
@@ -152,8 +192,9 @@ def start_campaign_idempotency(
     no statement follows). A route not yet migrated passes none and behaves as before."""
     if idempotency_key is None:
         return CampaignIdempotency()
-    outcome = begin_idempotent_request(
+    outcome = begin_planned_idempotent_request(
         connection,
+        plan=plan,
         actor_user_id=actor_user_id,
         campaign_id=campaign_id,
         idempotency_key=idempotency_key,

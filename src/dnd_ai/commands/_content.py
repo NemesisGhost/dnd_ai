@@ -259,6 +259,14 @@ def lock_authoring_scope(
     # while it waits for the membership row this command already holds FOR SHARE above;
     # FOR SHARE here made the two wait on each other (SQLSTATE 40P01). Nothing locks
     # this row again later in any caller, so no later upgrade can reintroduce a wait.
+    #
+    # A keyed request of an opted-in route (R01 O-2, AM-1) deferred its reservation's campaign foreign key, so
+    # this is the first lock on the row: the plan's own evidence statement takes it here, after every role row,
+    # membership and account lock above (the order every access writer follows), and the statement below then
+    # re-locks a row already held and never waits. Only a plan that owes the evidence takes it; any other plan,
+    # an unkeyed request included, goes straight to the statement below.
+    if isinstance(plan, AuthorizationPlan) and plan.owes_campaign_evidence:
+        plan.lock_campaign_evidence(connection)
     campaign = connection.execute(
         text(
             "SELECT lifecycle_status_id FROM campaign.campaigns "

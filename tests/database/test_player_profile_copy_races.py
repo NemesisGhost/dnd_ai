@@ -82,6 +82,9 @@ DRAFT_INSERT = r"INSERT INTO campaign\.character_public_profiles"
 DRAFT_UPDATE = r"UPDATE campaign\.character_public_profiles SET"
 RELEASE_INSERT = r"INSERT INTO campaign\.character_public_profile_releases"
 ROLE_REVOKE = r"UPDATE security\.membership_roles SET revoked_at"
+# the S5-E2 role routes take the actor account `FOR SHARE` after the role rows and the membership and before the campaign
+# lock: parked there, the revoke holds the copier's role row and has not yet taken the campaign (the arrival of the cycle)
+ROLE_ROUTE_ACCOUNT = r"SELECT security\.users\.user_id FROM security\.users WHERE security\.users\.user_id = \S+ FOR SHARE$"
 # the end route (S5-E3) takes it as a Core `select` (`campaign.campaigns.campaign_id = ...`); the legacy commands as text
 CAMPAIGN_LOCK = (
     r"FROM campaign\.campaigns WHERE (campaign\.campaigns\.)?campaign_id = .* FOR UPDATE"
@@ -598,7 +601,12 @@ def test_c8_the_same_key_and_body_executes_once_and_the_other_gets_the_stored_re
     assert deadlock_count(postgres_engine) == baseline
 
 
-# --- KA1 to KA3: the keyed copy under DEF-019's reservation cycle -----------------------------------------------
+# --- KA1 to KA3: the keyed copy against its competitors (DEF-019's reservation cycle, removed by R01 O-2) ------------
+#
+# These were *tolerant* exposure tests: they accepted either the deadlock (a 5xx on one request) or serialization. Since the
+# keyed copy's reservation no longer locks the campaign they are discriminators: in both arrivals they require
+# `serialized` (no 5xx, the deadlock counter unmoved). At the parent (`369bd8a`) the competitor-first arrival deadlocks
+# (the fail-before recorded in the O-2 evidence).
 
 OUTCOMES: list[str] = []
 
@@ -662,7 +670,7 @@ def _competitor(
     "the authority loss committed" probe)."""
     if kind == "revoke":
         return (
-            m.gm_user_id, ROLE_REVOKE, COPY_HEAD,
+            m.gm_user_id, ROLE_ROUTE_ACCOUNT, COPY_HEAD,
             revoke_role(factory, g, m.gm_role),
             lambda e: role_revoked(e, m.gm_role),
         )  # fmt: skip
@@ -680,13 +688,16 @@ def _competitor(
 
 
 @pytest.mark.parametrize("kind", COMPETITORS)
-def test_ka_competitor_first_the_keyed_copy_serialises_or_loses_to_the_documented_deadlock(
+def test_ka_competitor_first_the_keyed_copy_serializes_and_is_refused_by_the_committed_loss(
     client_factory: Factory, postgres_engine: Engine, g: Gate, m: Members, npc: uuid.UUID,
     source: dict[str, str], record_property: Callable[..., Any], kind: str,
 ) -> None:  # fmt: skip
     """KA1 (end), KA2 (revoke), KA3 (deny through the grant route): the competitor holds its row locks
-    and has not yet taken the campaign row; the keyed copy reserves its key (the campaign row `FOR KEY
-    SHARE`) and waits at the role rows. The competitor's campaign lock then closes DEF-019's cycle."""
+    and has not yet taken the campaign row; the keyed copy reserves its key (its campaign foreign key is deferred, so it
+    takes no campaign lock; it used to take the campaign row `FOR KEY SHARE` here, which the competitor's campaign lock then
+    closed into DEF-019's cycle) and waits at the role rows or the membership. Required: serialized (no 5xx, the deadlock
+    counter unmoved), the competitor committed (2xx) and the authority loss is durable, the copy refused by its existing
+    early check, nothing of the copy persisted (no draft change, audit row or receipt), the key reusable."""
     user, first_pattern, _copy_pattern, competitor, lost_probe = _competitor(
         kind, client_factory, g, m, npc
     )
@@ -695,19 +706,22 @@ def test_ka_competitor_first_the_keyed_copy_serialises_or_loses_to_the_documente
         postgres_engine, first_pattern, competitor,
         copier(client_factory, g, npc, user, key=key),
     )  # fmt: skip
-    _classify(
+    outcome = _classify(
         postgres_engine, copy_response=copied, competitor=done, baseline=baseline,
         record=record_property,
     )  # fmt: skip
-    lost = lost_probe(postgres_engine)
-    assert lost == (code(done) in (200, 201)), (
-        "a 2xx competitor committed; a failed one rolled back"
+    assert outcome == "serialized", (
+        f"the keyed copy and its competitor must not deadlock: {outcome}"
     )
+    assert code(done) in (200, 201), body(done)
+    assert lost_probe(postgres_engine), (
+        "the competitor committed first: the authority loss is durable"
+    )
+    assert is_refusal(copied), (code(copied), body(copied))
     _assert_copy_invariants(
-        postgres_engine, g, npc, key, copy_response=copied, lost=lost, source=source
+        postgres_engine, g, npc, key, copy_response=copied, lost=True, source=source
     )
-    if not lost:  # the competitor lost: the copy ran with its authority intact
-        assert code(copied) in (200, 201)
+    assert receipts_for(postgres_engine, key) == 0, "the key is reusable: no reservation survived"
 
 
 @pytest.mark.parametrize("kind", COMPETITORS)
@@ -726,11 +740,13 @@ def test_ka_copy_first_the_competitor_waits_and_both_commit_in_order(
         postgres_engine, copy_response=copied, competitor=done, baseline=baseline,
         record=record_property,
     )  # fmt: skip
-    if outcome == "serialized":  # the copy committed first; the competitor waited behind it
-        assert code(copied) in (200, 201) and code(done) in (200, 201)
-        assert lost_probe(postgres_engine)
-    # The copy held the locks first, so an authority loss that committed afterwards is legal; the
-    # invariant here is only that a 2xx matches committed state and a loser left nothing.
+    # the copy held the locks first and committed; the competitor waited behind it and committed after it (tightened by R01 O-2:
+    # it was conditional on the outcome being `serialized`). The authority loss that committed afterwards is legal.
+    assert outcome == "serialized", (
+        f"the keyed copy and its competitor must not deadlock: {outcome}"
+    )
+    assert code(copied) in (200, 201) and code(done) in (200, 201), (body(copied), body(done))
+    assert lost_probe(postgres_engine)
     _assert_copy_invariants(
         postgres_engine, g, npc, key, copy_response=copied, lost=False, source=source
     )
@@ -743,12 +759,16 @@ def _uncovered_copy(factory: Factory, g: Gate, npc: uuid.UUID) -> None:
     assert code(copy_pp(factory, g.o1_user_id, g, npc)) == 201
 
 
-def test_ka4_competitor_first_the_keyed_release_serialises_or_loses_to_the_documented_deadlock(
+def test_ka4_competitor_first_the_keyed_release_serializes_and_is_refused_by_the_committed_deny(
     client_factory: Factory, postgres_engine: Engine, g: Gate, npc: uuid.UUID, source: dict[str, str],
     record_property: Callable[..., Any],
 ) -> None:  # fmt: skip
     """The releaser `o2` (an owner, so reveal authority) is given a `canon.edit` deny through the grant
-    route while a keyed release of a draft holding an uncovered player-profile field is in flight."""
+    route while a keyed release of a draft holding an uncovered player-profile field is in flight. The grant holds the membership
+    and has not yet taken the campaign; the keyed release reserves (no campaign lock: its foreign key is deferred, it used to
+    take the campaign `FOR KEY SHARE` here and deadlock with the grant) and waits at the membership. Required: serialized (no 5xx,
+    the deadlock counter unmoved), the grant committed, the release refused with the existing 403
+    `public_profile_field_withheld`, no release row or receipt, the draft unchanged."""
     _uncovered_copy(client_factory, g, npc)
     key = new_key()
     granted, released, baseline = run_gated(
@@ -756,24 +776,20 @@ def test_ka4_competitor_first_the_keyed_release_serialises_or_loses_to_the_docum
         grant_deny(client_factory, g, npc, g.o2, g.o1_user_id),
         lambda: release(client_factory, g.o2_user_id, g, npc, 1, key=key),
     )  # fmt: skip
-    _classify(
+    outcome = _classify(
         postgres_engine, copy_response=released, competitor=granted, baseline=baseline,
         record=record_property,
     )  # fmt: skip
-    lost = denied(postgres_engine, g, g.o2)
-    assert lost == (code(granted) in (200, 201))
+    assert outcome == "serialized", f"the keyed release and the deny must not deadlock: {outcome}"
+    assert code(granted) in (200, 201), body(granted)
+    assert denied(postgres_engine, g, g.o2), "the deny committed first"
     rows = release_rows(postgres_engine, g, npc)
-    released_ok = code(released) in (200, 201)
-    assert not (released_ok and lost), "an uncovered field was released after the deny committed"
-    if released_ok:
-        assert [r["version_number"] for r in rows] == [1] and completed_receipts_for(postgres_engine, key) == 1  # fmt: skip
-    else:
-        assert rows == [] and receipts_for(postgres_engine, key) == 0
-        assert (code(released), error_code(released) if code(released) < 500 else "") in (
-            (403, "public_profile_field_withheld"),
-            (500, ""),
-        ), (code(released), body(released))
-        assert source["personality"] not in released.text
+    assert (code(released), error_code(released)) == (403, "public_profile_field_withheld"), (
+        code(released),
+        body(released),
+    )
+    assert rows == [] and receipts_for(postgres_engine, key) == 0
+    assert source["personality"] not in released.text
     state_row = draft(postgres_engine, g, npc)
     assert (
         state_row is not None and state_row["row_version"] == 1

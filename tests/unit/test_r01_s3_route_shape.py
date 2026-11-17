@@ -249,6 +249,16 @@ def test_every_migrated_command_requires_a_keyword_only_plan() -> None:
     assert seen >= 60, "the test lost its subject"
 
 
+#: The functions that open an idempotency key. R01 O-2 routes the nine entity-lifecycle routes' reservation through
+#: `begin_planned_idempotent_request` (the one helper that defers and binds for an opted-in plan); the decisions must
+#: still be registered before it, exactly as before it replaced the direct `begin_idempotent_request` call.
+_RESERVATION_OPENERS = (
+    "start_campaign_idempotency",
+    "begin_idempotent_request",
+    "begin_planned_idempotent_request",
+)
+
+
 @pytest.mark.parametrize("route", sorted(_S3_ROUTES))
 def test_the_authoring_decisions_are_registered_before_any_replay_can_finalize(
     route: tuple[str, str],
@@ -260,19 +270,12 @@ def test_the_authoring_decisions_are_registered_before_any_replay_can_finalize(
     openers = [
         (function, tree)
         for function, tree in chain
-        if any(
-            _name(c) in ("start_campaign_idempotency", "begin_idempotent_request")
-            for c in _calls(tree)
-        )
+        if any(_name(c) in _RESERVATION_OPENERS for c in _calls(tree))
     ]
     assert len(openers) == 1, "exactly one function of the chain opens the idempotency key"
     _function, tree = openers[0]
     calls = sorted(_calls(tree), key=lambda c: (c.lineno, c.col_offset))
-    open_line = next(
-        c.lineno
-        for c in calls
-        if _name(c) in ("start_campaign_idempotency", "begin_idempotent_request")
-    )
+    open_line = next(c.lineno for c in calls if _name(c) in _RESERVATION_OPENERS)
     registered = [c for c in calls if _name(c) == "require_authoring_decisions"]
     assert len(registered) == 1, "the decisions are registered exactly once, in the opener"
     assert registered[0].lineno < open_line, (
