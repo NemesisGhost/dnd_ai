@@ -86,6 +86,28 @@ production users so far.
   `finalize` (statements before `finalize` are not policed); undoing the deferral only costs the early
   campaign lock, never an authorization check.
 
+**Keyed post-write plans** (R01 O-1, AM-1; design `R01_AUTHORING_OPT_IN_DESIGN_2026-11-16.md` section 2.3).
+`AuthorizationPlan.begin(..., keyed_post_write=True)` (only a route in `R01_DEFERRED_RESERVATION_ROUTES`, which is
+empty in O-1) extends the keyed mechanism above to a plan whose final authorization stays **post-write**. It
+declares nothing and has no pre-write steps; every rule below is the S5-C rule, reused.
+
+- Immediate by default: a registered plan that does not call `defer_reservation_campaign_fk` (an unkeyed request)
+  owes nothing and behaves as an ordinary post-write plan.
+- `defer_reservation_campaign_fk` and `bind_reservation` are admitted, with the same identity, sequence and
+  transaction checks; `bind_reservation` only after a deferral, and it installs no declaration. `bind_unkeyed` is
+  refused. `REPLAY` owes nothing; `RESERVED` owes campaign evidence.
+- `lock_campaign_evidence(connection)` takes `CAMPAIGN_EVIDENCE_LOCK` (this plan's own campaign row,
+  `FOR KEY SHARE`) on the lock path and records evidence only on success. Callers test `owes_campaign_evidence`;
+  a call in any other state latches `SEQUENCE`. During that one flight the plan is *controlled*: statement
+  identity, rendering, parameter snapshot, one cursor event, completion, and the listener topology **of that flight**
+  (not a lifetime baseline: a post-write plan's guarantee does not rest on statement admission, so registering a
+  gate after the plan opens stays allowed). Outside a flight, and after `finalize`, the post-write rule is
+  unchanged: no statement may follow the final one.
+- `finalize` checks the obligations before the snapshot (a deferral with no outcome: `OUTCOME`; `RESERVED` with no
+  evidence for this campaign: `CAMPAIGN_EVIDENCE`); the COMMIT guard repeats them. A savepoint rollback once the plan
+  holds a deferral, an outcome or evidence latches `SAVEPOINT_ROLLBACK`. Constraint-mode policing covers it as it
+  covers a keyed pre-write plan.
+
 **Evidence-conditioned INSERTs** (`PerEvidence`, R01 S5-D amendment; plan section 6.25.5). An INSERT may
 declare `cardinality=PerEvidence(lock)`, where `lock` is one of the declaration's own `PreLock`s. What it owes
 is read from the evidence that lock produced **in this plan, in this transaction, before `finalize`**:
@@ -163,8 +185,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, NoReturn, Self
 
-from sqlalchemy import Connection, Engine, event, text
+from sqlalchemy import Connection, Engine, bindparam, event, select, text
 from sqlalchemy.engine.interfaces import ExecuteStyle
+
+from dnd_ai.persistence.tables.campaign import campaigns as _campaigns
 
 from .access import FRESH_INSTANT, AuthoritySnapshot, read_authority_snapshot
 from .authorization_steps import (
@@ -449,6 +473,18 @@ def _is_campaign_lock(lock: PreLock) -> bool:
     )
 
 
+#: The campaign row, `FOR KEY SHARE`, bound `campaign`. The one lock a keyed *post-write* plan runs as
+#: campaign evidence (`AuthorizationPlan.lock_campaign_evidence`; R01 O-1, AM-1.4). It is a domain-level
+#: constant so a post-write plan, which declares no locks, still has an exact object to run and to
+#: recognise; `commands._pre_write_steps.CAMPAIGN_KEY_SHARE_LOCK` is an alias of this very object.
+CAMPAIGN_EVIDENCE_LOCK = PreLock(
+    "campaign_key_share",
+    select(_campaigns.c.campaign_id)
+    .where(_campaigns.c.campaign_id == bindparam("campaign"))
+    .with_for_update(read=True, key_share=True),
+)
+
+
 class _Pending:
     """The type of `R01_PENDING`."""
 
@@ -674,6 +710,7 @@ class AuthorizationPlan:
         "_evidence",
         "_finalised",
         "_flight",
+        "_keyed_post_write",
         "_mode",
         "_pending",
         "_reading",
@@ -695,10 +732,18 @@ class AuthorizationPlan:
         pre_write: PreWriteDeclaration | None,
         pending: bool,
         by_outcome: ReservationDeclarations | None = None,
+        keyed_post_write: bool = False,
     ) -> None:
         transaction = connection.get_transaction()
         if transaction is None:
             raise AuthorizationPlanBindingError()
+        if keyed_post_write and (
+            mode is not PlanMode.POST_WRITE
+            or pending
+            or pre_write is not None
+            or by_outcome is not None
+        ):
+            raise ValueError("a keyed post-write plan is post-write, final, and declares nothing")
         if mode is PlanMode.POST_WRITE and (pre_write is not None or by_outcome is not None):
             raise ValueError("a post-write plan declares no pre-write steps")
         if by_outcome is not None:
@@ -715,6 +760,7 @@ class AuthorizationPlan:
         self._mode = mode
         self._declaration: PreWriteDeclaration | None = None
         self._by_outcome = by_outcome
+        self._keyed_post_write = keyed_post_write
         self._bound: _Bound | None = None
         self._deferred = False
         self._set_flight = False
@@ -755,6 +801,7 @@ class AuthorizationPlan:
         pre_write: PreWriteDeclaration | None = None,
         pending: bool = False,
         by_outcome: ReservationDeclarations | None = None,
+        keyed_post_write: bool = False,
     ) -> Self:
         """Open a plan on `connection`'s current transaction and register it with the commit guard
         (installing the guard on the connection's engine if it is not installed yet). `pending`
@@ -771,10 +818,11 @@ class AuthorizationPlan:
             pre_write=pre_write,
             pending=pending,
             by_outcome=by_outcome,
+            keyed_post_write=keyed_post_write,
         )
         if mode is PlanMode.PRE_WRITE:
             plan._baseline = _topology(connection)
-        if by_outcome is not None and connection.info.get(_FK_MODE_MARK) is plan._transaction:
+        if plan._is_keyed() and connection.info.get(_FK_MODE_MARK) is plan._transaction:
             # the reservation FK's mode was changed by other code earlier in this transaction
             plan._latch(ViolationReason.CONSTRAINT_MODE)
         with _LOCK:
@@ -803,6 +851,28 @@ class AuthorizationPlan:
     def violation(self) -> ViolationReason | None:
         """The first latched reason, for tests and diagnostics only."""
         return self._violation
+
+    @property
+    def keyed_post_write(self) -> bool:
+        """Whether this is a keyed post-write plan (R01 O-1): it may defer the reservation's campaign FK and
+        then owes campaign evidence, while its final authorization stays post-write."""
+        return self._keyed_post_write
+
+    @property
+    def owes_campaign_evidence(self) -> bool:
+        """Whether `lock_campaign_evidence` is the right call now: a keyed post-write plan that deferred, was
+        bound `RESERVED`, is not finalised and not violated. A caller checks this and skips the call
+        otherwise; the call itself never silently skips."""
+        return (
+            self._keyed_post_write
+            and self._deferred
+            and self._bound is _Bound.RESERVED
+            and not self._finalised
+            and not self._violated
+        )
+
+    def _is_keyed(self) -> bool:
+        return self._by_outcome is not None or self._keyed_post_write
 
     @property
     def deferred(self) -> bool:
@@ -920,7 +990,8 @@ class AuthorizationPlan:
         dispatch = list(connection.dialect.dispatch.do_execute)
         if not dispatch or dispatch[0] is not _on_do_execute:
             self._refuse(ViolationReason.LISTENER_ORDER)
-        if _topology(connection) != self._baseline:
+        if not self._keyed_post_write and _topology(connection) != self._baseline:
+            # a keyed post-write plan keeps no lifetime baseline: its flights compare per flight (AM-1.9)
             self._refuse(ViolationReason.LISTENER_TOPOLOGY)
 
     def finalize(self, connection: Connection) -> AuthoritySnapshot | None:
@@ -944,6 +1015,12 @@ class AuthorizationPlan:
             self._check_obligations()
             self._check_listeners(connection)
             self._verify_session(connection)
+        if self._keyed_post_write:
+            if self._flight is not None:
+                self._refuse(ViolationReason.REENTRANT)
+            if self._violated:
+                raise AuthorizationPlanViolationError()
+            self._check_obligations()
         if not self._requirements:
             self._finalised = True
             return None
@@ -973,14 +1050,15 @@ class AuthorizationPlan:
 
     def _keyed_entry(
         self, connection: Connection, reason: ViolationReason
-    ) -> ReservationDeclarations:
-        """Entry checks shared by the three keyed-plan calls. Every refusal latches first."""
+    ) -> ReservationDeclarations | None:
+        """Entry checks shared by the three keyed-plan calls. Every refusal latches first. Returns the
+        declarations of a keyed pre-write plan, `None` for a keyed post-write plan (it has none)."""
         try:
             self._check_bound(connection)
         except AuthorizationPlanBindingError:
             self._latch(ViolationReason.BINDING)
             raise
-        if self._by_outcome is None or self._mode is not PlanMode.PRE_WRITE:
+        if not self._is_keyed():
             self._latch(reason)
             raise AuthorizationPlanStateError()
         if self._flight is not None:
@@ -995,7 +1073,7 @@ class AuthorizationPlan:
     def defer_reservation_campaign_fk(self, connection: Connection) -> None:
         """Opt in to deferring the reservation's campaign foreign key check to COMMIT (J-1').
 
-        Keyed pre-write plans only; before the reservation (so before `bind_reservation`), before
+        Keyed pre-write and registered keyed post-write plans only; before the reservation (so before `bind_reservation`), before
         `finalize`, exactly once, and never inside a savepoint (`SET CONSTRAINTS` made there is undone by
         its rollback). The plan issues `SET CONSTRAINTS` itself, after the catalogue shows the one
         constraint it means to defer. Nothing here takes a lock, so the advisory key lock that
@@ -1038,7 +1116,8 @@ class AuthorizationPlan:
         (receipt included). A second call, a call after `finalize` or inside a savepoint, or any
         mismatch latches."""
         declarations = self._keyed_entry(connection, ViolationReason.OUTCOME)
-        if connection.in_nested_transaction():
+        if connection.in_nested_transaction() or (self._keyed_post_write and not self._deferred):
+            # a keyed post-write plan binds only after its deferral: an immediate reservation owes nothing
             self._latch(ViolationReason.OUTCOME)
             raise AuthorizationPlanStateError()
         recorded = recorded_reservation_outcome(connection)
@@ -1056,16 +1135,23 @@ class AuthorizationPlan:
         clear_reservation_outcome(connection)
         if recorded.kind is ReservationKind.REPLAY:
             self._bound = _Bound.REPLAY
-            self._install_declaration(REPLAY_DECLARATION)
+            if declarations is not None:
+                self._install_declaration(REPLAY_DECLARATION)
         else:
             self._bound = _Bound.RESERVED
-            self._install_declaration(declarations.reserved)
+            if declarations is not None:  # a post-write plan has no declaration to install
+                self._install_declaration(declarations.reserved)
 
     def bind_unkeyed(self, connection: Connection) -> None:
         """Choose the unkeyed declaration for a request that carries no idempotency key. It cannot
         follow a deferral (nothing would be reserved to defer), a bound outcome or `finalize`, and the
         plan must have been created with an unkeyed declaration."""
         declarations = self._keyed_entry(connection, ViolationReason.OUTCOME)
+        if (
+            declarations is None
+        ):  # a keyed post-write plan: an unkeyed request simply does not defer
+            self._latch(ViolationReason.OUTCOME)
+            raise AuthorizationPlanStateError()
         pending = recorded_reservation_outcome(connection)
         if (
             pending is not None
@@ -1095,10 +1181,14 @@ class AuthorizationPlan:
     def _has_campaign_evidence(self) -> bool:
         """Actual `plan.lock` evidence, taken through this plan (hence on its connection and in its
         transaction), for **this request's** campaign row at `KEY SHARE` or stronger."""
+        key = (self._campaign_id,)
+        if self._keyed_post_write:
+            return key in self._evidence.get(CAMPAIGN_EVIDENCE_LOCK, ()) and _is_campaign_lock(
+                CAMPAIGN_EVIDENCE_LOCK
+            )
         declaration = self._declaration
         if declaration is None:
             return False
-        key = (self._campaign_id,)
         return any(
             declaration.has_lock(lock) and _is_campaign_lock(lock) and key in keys
             for lock, keys in self._evidence.items()
@@ -1107,9 +1197,9 @@ class AuthorizationPlan:
     def _obligation_failure(self, *, finalising: bool) -> ViolationReason | None:
         """The keyed plan's unmet obligation, if any. At `finalize` (`finalising`) the declaration must
         have been chosen; at COMMIT the plan must also be finalised for a `RESERVED` opt-in."""
-        if self._by_outcome is None:
+        if not self._is_keyed():
             return None
-        if finalising and self._declaration is None:
+        if finalising and self._declaration is None and not self._keyed_post_write:
             return ViolationReason.DECLARATION
         if not self._deferred:
             return None
@@ -1232,6 +1322,63 @@ class AuthorizationPlan:
                 self._refuse(ViolationReason.INTERNAL)
             self._evidence.setdefault(prelock, set()).update(keys)
             return tuple(keys)
+        except BaseException:
+            self._latch(ViolationReason.LOCK_FAILED)
+            raise
+        finally:
+            self._flight = None
+
+    def lock_campaign_evidence(self, connection: Connection) -> None:
+        """Take this request's campaign row `FOR KEY SHARE` as the evidence a deferred reservation owes
+        (R01 O-1, AM-1.4). Keyed post-write plans only, once deferred and bound `RESERVED`, before
+        `finalize`. The statement is `CAMPAIGN_EVIDENCE_LOCK` and the campaign id is the plan's own; the
+        caller supplies nothing. It runs on the lock path (statement identity, rendering, parameter
+        snapshot, one cursor event, completion, validated keys) and records evidence only on success.
+        A failure latches `LOCK_FAILED`; a call in any other state latches `SEQUENCE` and is refused,
+        never skipped (callers test `owes_campaign_evidence`)."""
+        try:
+            self._check_bound(connection)
+        except AuthorizationPlanBindingError:
+            self._latch(ViolationReason.BINDING)
+            raise
+        if self._flight is not None:
+            self._refuse(ViolationReason.REENTRANT)
+        if self._violated:
+            raise AuthorizationPlanViolationError()
+        if not self.owes_campaign_evidence or connection.in_nested_transaction():
+            self._latch(ViolationReason.SEQUENCE)
+            raise AuthorizationPlanStateError()
+        dispatch = list(connection.dialect.dispatch.do_execute)
+        if not dispatch or dispatch[0] is not _on_do_execute:
+            self._refuse(ViolationReason.LISTENER_ORDER)
+        prelock = CAMPAIGN_EVIDENCE_LOCK
+        frozen, call_params = self._build_snapshot(prelock.specs, {"campaign": self._campaign_id})
+        flight = self._issue(connection, "lock", prelock, frozen, call_params)
+        kinds = tuple(kind_of(column)[0] for column in prelock.key)
+        result = None
+        failed = False
+        try:
+            try:
+                result = connection.execute(prelock.statement, call_params)
+                rows = tuple(tuple(row) for row in result.all())
+            finally:
+                if result is not None:
+                    failed = self._close(result)
+            if self._violated:
+                raise AuthorizationPlanViolationError()
+            keys: list[tuple[Any, ...]] = []
+            for row in rows:
+                key = _validate_key(kinds, row)
+                if key is None:
+                    self._refuse(ViolationReason.LOCK_FAILED)
+                keys.append(key)
+            if len(set(keys)) != len(keys):
+                self._refuse(ViolationReason.LOCK_FAILED)
+            if flight.cursor_events != 1 or not flight.dispatched or not flight.completed:
+                self._refuse(ViolationReason.LOCK_FAILED)
+            if failed:
+                self._refuse(ViolationReason.INTERNAL)
+            self._evidence.setdefault(prelock, set()).update(keys)
         except BaseException:
             self._latch(ViolationReason.LOCK_FAILED)
             raise
@@ -1523,6 +1670,10 @@ class AuthorizationPlan:
 
     def _controlled(self) -> bool:
         """Whether this plan's pre-write statement rules apply right now."""
+        if self._keyed_post_write:
+            # AM-1.9: only the evidence flight is controlled; after `finalize` a post-write plan is policed
+            # by `_observe_statement` as ever
+            return self._flight is not None and not self._finalised and not self._reading
         return (
             self._mode is PlanMode.PRE_WRITE
             and not self._reading
@@ -1579,7 +1730,7 @@ class AuthorizationPlan:
     ) -> None:
         if self._reading:
             return
-        if self._mode is PlanMode.POST_WRITE:
+        if self._mode is PlanMode.POST_WRITE and not self._controlled():
             self._observe_statement()
             return
         if not self._controlled():
@@ -1662,7 +1813,9 @@ class AuthorizationPlan:
             flight.completed = True
 
     def _on_handle_error(self) -> None:
-        if self._mode is PlanMode.PRE_WRITE and (self._finalised or self._flight is not None):
+        if (self._mode is PlanMode.PRE_WRITE and (self._finalised or self._flight is not None)) or (
+            self._keyed_post_write and self._flight is not None
+        ):
             self._latch(ViolationReason.EXECUTION_FAILED)
 
     def _on_savepoint_rollback(self) -> None:
@@ -1674,6 +1827,10 @@ class AuthorizationPlan:
         # rolled-back savepoint could have discarded the write behind one.
         if self._mode is PlanMode.PRE_WRITE and (
             bool(self._evidence) or self._deferred or self._bound is not None or any(self._attempts)
+        ):
+            self._latch(ViolationReason.SAVEPOINT_ROLLBACK)
+        if self._keyed_post_write and (
+            bool(self._evidence) or self._deferred or self._bound is not None
         ):
             self._latch(ViolationReason.SAVEPOINT_ROLLBACK)
 
@@ -1758,7 +1915,7 @@ def _on_fk_mode_statement(
     if any(plan._authorizes_fk_mode(statement, context) for plan in plans):
         return
     connection.info[_FK_MODE_MARK] = connection.get_transaction()
-    keyed = [plan for plan in plans if plan._by_outcome is not None]
+    keyed = [plan for plan in plans if plan._is_keyed()]
     for plan in keyed:
         plan._latch(ViolationReason.CONSTRAINT_MODE)
     if keyed:
@@ -1847,6 +2004,7 @@ type PlanArgument = AuthorizationPlan | _Pending
 
 __all__ = [
     "R01_PENDING",
+    "CAMPAIGN_EVIDENCE_LOCK",
     "PlanArgument",
     "AuthorizationPlan",
     "AuthorizationPlanBindingError",

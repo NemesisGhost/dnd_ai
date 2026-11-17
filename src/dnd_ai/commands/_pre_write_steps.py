@@ -25,6 +25,7 @@ from typing import Any
 
 from sqlalchemy import ForeignKeyConstraint, Table, bindparam, func, select, update
 
+from dnd_ai.domain.authorization import CAMPAIGN_EVIDENCE_LOCK
 from dnd_ai.domain.authorization_steps import (
     Exactly,
     FkBinding,
@@ -33,7 +34,6 @@ from dnd_ai.domain.authorization_steps import (
     WriteStep,
 )
 from dnd_ai.persistence.tables.audit import change_actions, change_log
-from dnd_ai.persistence.tables.campaign import campaigns
 from dnd_ai.persistence.tables.security import idempotent_requests, users
 
 
@@ -48,13 +48,9 @@ def fk_of(table: Table, column: str) -> ForeignKeyConstraint:
 #: The FK targets a change-log insert leaves unlocked (see the module docstring).
 CHANGE_LOG_UNLOCKED_FK_TARGETS = frozenset({users, change_actions})
 
-#: The campaign row, `FOR KEY SHARE`, bound `campaign`.
-CAMPAIGN_KEY_SHARE_LOCK = PreLock(
-    "campaign_key_share",
-    select(campaigns.c.campaign_id)
-    .where(campaigns.c.campaign_id == bindparam("campaign"))
-    .with_for_update(read=True, key_share=True),
-)
+#: The campaign row, `FOR KEY SHARE`, bound `campaign`: the domain-level `CAMPAIGN_EVIDENCE_LOCK` itself
+#: (R01 O-1), so a keyed post-write plan and a pre-write declaration run and recognise the same object.
+CAMPAIGN_KEY_SHARE_LOCK = CAMPAIGN_EVIDENCE_LOCK
 
 #: The reservation row this request inserted, `FOR UPDATE`, bound `receipt`.
 RECEIPT_LOCK = PreLock(
