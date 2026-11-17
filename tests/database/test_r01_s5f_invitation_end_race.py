@@ -21,6 +21,7 @@ import uuid
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 
 from tests.database.test_r01_s2_profile_routes import idle_in_transaction
 from tests.database.test_r01_s3_authoring_routes import code, error_of, w  # noqa: F401
@@ -58,6 +59,22 @@ def _membership_open(sc: Scene, member: uuid.UUID) -> bool:
             m=member,
         )[0]["open"]
     )
+
+
+def _receipts(sc: Scene, actor: uuid.UUID, key: str) -> list[tuple[Any, ...]]:
+    """The receipts scoped by actor, campaign and key: (status, body, completed)."""
+    with sc.w.engine.connect() as c:
+        return [
+            (r[0], r[1], r[2])
+            for r in c.execute(
+                text(
+                    "SELECT response_status_code, response_body, completed_at IS NOT NULL "
+                    "FROM security.idempotent_requests "
+                    "WHERE actor_user_id = :a AND campaign_id = :c AND idempotency_key = :k"
+                ),
+                {"a": actor, "c": sc.w.campaign_id, "k": key},
+            )
+        ]
 
 
 @pytest.mark.parametrize("arrival", ("create_parked", "end_parked"))
@@ -108,3 +125,22 @@ def test_a_keyed_invitation_create_and_the_migrated_end_of_the_inviting_manager_
         assert code(created) in (403, 404), (code(created), error_of(created), o.summary())
         assert after == before, "a refused create leaves no invitation, audit row or receipt"
     assert idle_in_transaction(s.w.engine) == 0
+    # the receipts, scoped by actor, campaign and key
+    end_receipts = _receipts(s, s.m.keeper_user, end_key)
+    assert len(end_receipts) == 1, end_receipts
+    status, body, completed = end_receipts[0]
+    assert completed is True and status == 200 and body == ended.json(), (end_receipts, ended.text)
+    create_receipts = _receipts(s, s.m.manager_user, create_key)
+    if arrival == "create_parked":
+        assert len(create_receipts) == 1, create_receipts
+        status, body, completed = create_receipts[0]
+        expected = {"campaign_invitation_id": created.json()["campaign_invitation_id"]}
+        assert completed is True and status == 201 and body == expected, (
+            create_receipts,
+            created.text,
+        )
+        assert created.json()["token"] not in str(body), (
+            "the raw token is not stored in the receipt"
+        )
+    else:
+        assert create_receipts == [], "a refused create leaves no receipt"

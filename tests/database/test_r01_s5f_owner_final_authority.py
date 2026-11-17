@@ -46,7 +46,10 @@ from tests.database.test_r01_s3_authoring_routes import (  # noqa: F401 - fixtur
     w,
 )
 from tests.database.test_r01_s5e2_membership_routes import (  # noqa: F401 - fixtures used by name
+    AUDIT_STEPS,
+    COMMAND,
     FIRST_LOCK,
+    STATUS,
     Scene,
     call,
     m,
@@ -139,6 +142,63 @@ def _core(sc: Scene, key: str | None) -> tuple[Any, ...]:
     return memberships, [row[:3] for row in assignments], audit, receipt
 
 
+def _owner_effect(sc: Scene, route: str, user: uuid.UUID) -> dict[str, Any]:
+    """The business effect of an owner-role route: live built-in owner rows on its target, and the changed row's state."""
+    with sc.w.engine.connect() as c:
+        if route == "add":
+            member = c.execute(
+                text(
+                    "SELECT campaign_membership_id FROM security.campaign_memberships "
+                    "WHERE campaign_id = :c AND user_id = :u"
+                ),
+                {"c": sc.w.campaign_id, "u": sc.new_user},
+            ).scalar_one()
+        else:
+            member = sc.target_membership
+        owner_rows = c.execute(
+            text(
+                "SELECT count(*) FROM security.membership_roles WHERE campaign_membership_id = :m "
+                "AND role_id = :r AND revoked_at IS NULL"
+            ),
+            {"m": member, "r": sc.owner},
+        ).scalar_one()
+        old_live = c.execute(
+            text(
+                "SELECT revoked_at IS NULL FROM security.membership_roles WHERE membership_role_id = :r"
+            ),
+            {"r": sc.target_role},
+        ).scalar_one()
+    return {"owner_rows": owner_rows, "old_row_live": old_live}
+
+
+def _audit_count(sc: Scene, command: str) -> int:
+    with sc.w.engine.connect() as c:
+        return int(
+            c.execute(
+                text(
+                    "SELECT count(*) FROM audit.change_log WHERE world_id = :w AND command_name = :n"
+                ),
+                {"w": sc.w.world_id, "n": command},
+            ).scalar_one()
+        )
+
+
+def _receipts(sc: Scene, actor: uuid.UUID, key: str) -> list[tuple[Any, ...]]:
+    """The receipts scoped by actor, campaign and key: (status, body, completed)."""
+    with sc.w.engine.connect() as c:
+        return [
+            (r[0], r[1], r[2])
+            for r in c.execute(
+                text(
+                    "SELECT response_status_code, response_body, completed_at IS NOT NULL "
+                    "FROM security.idempotent_requests "
+                    "WHERE actor_user_id = :a AND campaign_id = :c AND idempotency_key = :k"
+                ),
+                {"a": actor, "c": sc.w.campaign_id, "k": key},
+            )
+        ]
+
+
 @pytest.mark.parametrize("keyed", (False, True), ids=("unkeyed", "keyed"))
 @pytest.mark.parametrize("route", ("add", "assign", "change"))
 def test_the_owner_role_is_refused_when_the_actors_owner_assignment_lapses_before_finalize(
@@ -169,9 +229,37 @@ def test_the_owner_role_is_refused_when_the_actors_owner_assignment_lapses_befor
         )
     assert final.access is not None and "access.manage" in final.access.role_capabilities
     assert final.reveal_authority != "owner"
-    # pooled reuse, and a keyed retry by a live owner runs the command
-    retry = call(pooled_factory, s, route, key=key, actor=s.w.owner, role=s.owner)
-    assert code(retry) in (200, 201), retry.text
+    if not keyed:
+        # pooled reuse: the next request on the same pooled connection is served
+        retry = call(pooled_factory, s, route, key=None, actor=s.w.owner, role=s.owner)
+        assert code(retry) in (200, 201), retry.text
+        return
+    # the same scoped key (actor, campaign, key), same payload: the original actor's owner authority is restored with
+    # supported setup (the lapsed assignment is made non-expiring again) and the retry runs the command once
+    with s.w.engine.begin() as c:
+        c.execute(
+            text(
+                "UPDATE security.membership_roles SET expires_at = NULL WHERE membership_role_id = :r"
+            ),
+            {"r": owner_row},
+        )
+    retry = call(pooled_factory, s, route, key=key, actor=user, role=s.owner)
+    assert code(retry) == STATUS[route], (code(retry), retry.text)
+    effect = _owner_effect(s, route, user)
+    assert effect["owner_rows"] == 1, effect
+    if route == "change":
+        assert effect["old_row_live"] is False, "the changed assignment was revoked"
+    assert _audit_count(s, COMMAND[route]) == len(AUDIT_STEPS[route]), (
+        "exactly the route's audit rows, once"
+    )
+    receipts = _receipts(s, user, key)
+    assert len(receipts) == 1, receipts
+    status, body, completed = receipts[0]
+    assert completed is True and status == STATUS[route] and body == retry.json(), receipts
+    # the stored receipt is what a further same-key retry replays, writing nothing
+    again = call(pooled_factory, s, route, key=key, actor=user, role=s.owner)
+    assert code(again) == STATUS[route] and again.json() == retry.json()
+    assert _audit_count(s, COMMAND[route]) == len(AUDIT_STEPS[route])
 
 
 @pytest.mark.parametrize("route", ("add", "assign", "change"))
