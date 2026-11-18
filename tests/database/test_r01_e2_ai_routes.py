@@ -1155,6 +1155,30 @@ def end_membership_then_clock_moved_setup(sc: Scene) -> Callable[[], None]:
     return move
 
 
+T1_START_RE = re.compile(r"FROM ai\.agent_assignments\s+WHERE agent_assignment_id")
+
+
+class T1StartMarker:
+    """Records T1's first statement (the active-assignment read of `_lock_active_assignment`; T2 locks by the output). The request transaction and its early checks never run it, so any hit means the command
+    entered a transaction after the request's own authorization."""
+
+    def __init__(self, engine: Any) -> None:
+        self._engine = engine
+        self.seen: list[str] = []
+
+    def _record(self, _c: Any, _cur: Any, statement: Any, *_: Any) -> None:
+        flat = " ".join(str(statement).split())
+        if T1_START_RE.search(flat):
+            self.seen.append(flat)
+
+    def __enter__(self) -> "T1StartMarker":
+        event.listen(self._engine, "before_cursor_execute", self._record)
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        event.remove(self._engine, "before_cursor_execute", self._record)
+
+
 @pytest.mark.parametrize(
     "change", ("left_the_party", "party_dissociated", "clock_moved", "clock_unset")
 )
@@ -1178,7 +1202,8 @@ def test_c3_a_party_or_clock_change_before_each_final_snapshot_decides_it(
         mutate = lambda: leave_party(sc)  # noqa: E731
     spy = Spy(dialogue="Hello.", reveal_first_candidate=True)
     nth = {"request": 1, "t1": 2, "t2": 3}[phase]
-    with NthGate(pool.engine, FINAL_STATEMENT, nth) as gate:
+    t1_started = T1StartMarker(pool.engine)
+    with t1_started, NthGate(pool.engine, FINAL_STATEMENT, nth) as gate:
         request = gate.track(run_in_thread("turn", lambda: turn(sc, pool, user, spy)))
         gate.wait_reached()
         assert gate.matched is not None and re.search(FINAL_STATEMENT, gate.matched)
@@ -1192,7 +1217,20 @@ def test_c3_a_party_or_clock_change_before_each_final_snapshot_decides_it(
     assert (code(response), error_of(response)) == (404, "not_found"), response.text
     assert spy.calls == (1 if phase == "t2" else 0)
     assert counts(sc) == (DISCLOSED_ONLY if phase == "t2" else NOTHING_KEPT), counts(sc)
+    if phase == "request":
+        # T1 never starts once the request's own final check refuses (not merely refused by T1's early check)
+        assert t1_started.seen == [], t1_started.seen
     assert idle_in_transaction(sc.engine) == 0
+
+
+def test_c3_the_t1_marker_fires_on_an_authorized_turn(sc: Scene, pool: Pool) -> None:
+    """Control for the request-phase marker: an authorized turn runs T1, so the marker sees it once."""
+    set_sensitivity(sc, "public")
+    user = persona(sc, "Owner Player", ("campaign.view", "character.interact"), "owner")
+    with T1StartMarker(pool.engine) as marker:
+        response = turn(sc, pool, user, Spy(dialogue="Hello.", reveal_first_candidate=True))
+    assert code(response) == 200, response.text
+    assert len(marker.seen) == 1, marker.seen  # only T1 reads the active assignment
 
 
 def test_c3_the_control_without_a_change_passes_every_final_snapshot(sc: Scene, pool: Pool) -> None:
