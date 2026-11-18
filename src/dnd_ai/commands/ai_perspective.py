@@ -8,11 +8,10 @@ judged by its own post-write final check:
   (and no verdict it holds) is ever reused by another transaction;
 - the factory must return something: `AuthorizationPlan.finalize` on a plan with no requirement silently
   passes, so an empty factory is refused before any statement (`register_requirements`);
-- the party perspective's two domain facts are read inside the transaction that judges them
-  (`read_perspective_facts`, at that transaction's own campaign-clock instant), once early (the domain refusal
-  precedes any disclosure) and once more as the last statement before the final check, which closes over the
-  second reading (R01 plan 6.5: "facts captured under lock earlier are closed over by `predicate`"). The
-  capability half is judged from the final check's own snapshot, never from an earlier transaction.
+- the party perspective is read twice inside the transaction that judges it: early (`read_perspective_facts`, so the
+  domain refusal precedes any disclosure and the refusal order is unchanged) and by the final statement itself, which
+  evaluates the campaign-party association and the membership at the campaign clock in the same statement and MVCC
+  snapshot as the capability checks (R01 E2 correction C-1). The final decision uses only the snapshot's values.
 
 Only identifiers cross a transaction boundary.
 """
@@ -77,16 +76,20 @@ def perspective_facts_or_refuse(
 
 
 def party_perspective_requirement(
-    *, name: str, character_id: uuid.UUID, facts: PerspectiveFacts
+    *, name: str, character_id: uuid.UUID, party_id: uuid.UUID
 ) -> Requirement:
-    """The perspective as a requirement of the final check (decision G-2: no `canon.edit` bypass). It holds
-    when this transaction's snapshot gives the caller `character.view_knowledge` for the character and the
-    facts read in this same transaction hold. A refusal is the early refusal."""
+    """The perspective as a requirement of the final check (decision G-2: no `canon.edit` bypass). The requirement
+    declares the party and the character as inputs of the final statement, which evaluates in that one statement and
+    MVCC snapshot: the caller's capabilities, the campaign-party association and the membership at the campaign
+    clock (R01 E2 correction C-1). It holds only when the snapshot gives the caller `character.view_knowledge` for the
+    character and both facts are true. A refusal is the early refusal."""
 
     def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
         access = snapshot.access
+        facts = snapshot.perspective
         if (
             access is None
+            or facts is None
             or not access.has_capability(PERSPECTIVE_CAPABILITY, character_id=character_id)
             or not facts.party_in_campaign
             or not facts.member_now
@@ -94,30 +97,20 @@ def party_perspective_requirement(
             return PartyPerspectiveRefusedError("party perspective not authorized")
         return None
 
-    return judged_requirement(name, decide)
+    return judged_requirement(name, decide, perspective=(party_id, character_id))
 
 
-def finalize_with_fresh_perspective(
+def register_perspective(
     connection: Connection,
     plan: AuthorizationPlan,
     *,
     name: str,
-    campaign_id: uuid.UUID,
-    timeline_id: uuid.UUID,
     character_id: uuid.UUID,
     party_id: uuid.UUID,
 ) -> None:
-    """The last statements of a transaction that judges a perspective: read the facts once more, register the
-    requirement over that reading, then run the final check. A change committed before this read is seen;
-    one that commits between this read and the final statement is the documented R-E2-6 window."""
-    facts = read_perspective_facts(
-        connection,
-        campaign_id=campaign_id,
-        timeline_id=timeline_id,
-        character_id=character_id,
-        party_id=party_id,
-    )
+    """Register the perspective requirement on this transaction's plan (after the route requirements, so the
+    refusal order is the early one). Its facts are read by the final statement, never by an earlier read."""
     plan.require(
-        connection, party_perspective_requirement(name=name, character_id=character_id, facts=facts)
+        connection,
+        party_perspective_requirement(name=name, character_id=character_id, party_id=party_id),
     )
-    plan.finalize(connection)

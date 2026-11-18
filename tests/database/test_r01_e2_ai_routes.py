@@ -51,6 +51,7 @@ from tests.database.test_r01_s2_profile_routes import (  # noqa: F401 - fixtures
 )
 from tests.database.test_r01_s3_authoring_routes import code, error_of
 from tests.database.test_r01_s5e2_lock_order import (  # noqa: F401 - fixtures by name
+    NthGate,
     Pool,
     assert_clean,
     pool,
@@ -1119,3 +1120,182 @@ def test_t7e_t1_and_a_grant_on_the_npc_do_not_wait_in_a_cycle(
         turned, granted = o.results["second"], o.results["parked"]
     assert_clean(o)
     assert code(turned) == 200 and code(granted) == 201, o.summary()
+
+
+# =====================================================================================================================
+# Correction C-1 / C-2 / C-3: the final snapshot judges the party, incomplete player summaries are refused, T-5(b)
+# =====================================================================================================================
+
+FINAL_STATEMENT = r"^WITH clock AS MATERIALIZED \(SELECT clock_timestamp\(\) AS t_auth\)"
+
+
+def end_membership_then_clock_moved_setup(sc: Scene) -> Callable[[], None]:
+    """The character's membership ends at 150 while the clock reads 100 (still a member); the returned change moves the
+    clock to 200 (no longer a member)."""
+    with sc.engine.begin() as c:
+        left = make_world_time(c, sc.f.world_id, 150)
+        later = make_world_time(c, sc.f.world_id, 200)
+        c.execute(
+            text(
+                "UPDATE campaign.party_memberships SET effective_to_world_time_id = :left "
+                "WHERE party_id = :p AND member_entity_id = :c"
+            ),
+            {"left": left, "p": sc.f.party_id, "c": sc.f.pc_id},
+        )
+
+    def move() -> None:
+        with sc.engine.begin() as c:
+            c.execute(
+                text(
+                    "UPDATE campaign.timeline_clocks SET current_world_time_id = :w WHERE timeline_id = :t"
+                ),
+                {"w": later, "t": sc.f.timeline_id},
+            )
+
+    return move
+
+
+@pytest.mark.parametrize(
+    "change", ("left_the_party", "party_dissociated", "clock_moved", "clock_unset")
+)
+@pytest.mark.parametrize("phase", ("request", "t1", "t2"))
+def test_c3_a_party_or_clock_change_before_each_final_snapshot_decides_it(
+    phase: str, change: str, sc: Scene, pool: Pool
+) -> None:
+    """The gate stops the phase's FINAL statement itself, after every early check and every earlier read of that
+    transaction; the change commits there. The final snapshot (which evaluates the association and the membership at the
+    clock in its own statement) must see it: R and T1 refuse before any disclosure, T2 rolls back and T1 stays."""
+    set_sensitivity(sc, "public")
+    user = persona(sc, "Owner Player", ("campaign.view", "character.interact"), "owner")
+    mutate: Callable[[], None]
+    if change == "clock_moved":
+        mutate = end_membership_then_clock_moved_setup(sc)
+    elif change == "clock_unset":
+        mutate = lambda: unset_clock(sc)  # noqa: E731
+    elif change == "party_dissociated":
+        mutate = lambda: dissociate_party(sc)  # noqa: E731
+    else:
+        mutate = lambda: leave_party(sc)  # noqa: E731
+    spy = Spy(dialogue="Hello.", reveal_first_candidate=True)
+    nth = {"request": 1, "t1": 2, "t2": 3}[phase]
+    with NthGate(pool.engine, FINAL_STATEMENT, nth) as gate:
+        request = gate.track(run_in_thread("turn", lambda: turn(sc, pool, user, spy)))
+        gate.wait_reached()
+        assert gate.matched is not None and re.search(FINAL_STATEMENT, gate.matched)
+        assert spy.calls == (
+            1 if phase == "t2" else 0
+        )  # the gate is at the phase's own final statement
+        mutate()
+        gate.release()
+        assert request.done.wait(30.0)
+    response = request.result
+    assert (code(response), error_of(response)) == (404, "not_found"), response.text
+    assert spy.calls == (1 if phase == "t2" else 0)
+    assert counts(sc) == (DISCLOSED_ONLY if phase == "t2" else NOTHING_KEPT), counts(sc)
+    assert idle_in_transaction(sc.engine) == 0
+
+
+def test_c3_the_control_without_a_change_passes_every_final_snapshot(sc: Scene, pool: Pool) -> None:
+    set_sensitivity(sc, "public")
+    user = persona(sc, "Owner Player", ("campaign.view", "character.interact"), "owner")
+    response = turn(sc, pool, user, Spy(dialogue="Hello.", reveal_first_candidate=True))
+    assert code(response) == 200 and counts(sc)["knows"] == 1
+
+
+def test_t5b_a_party_made_inactive_during_the_call_and_a_lapse_give_the_domain_refusal_and_roll_t2_back(
+    sc: Scene, pool: Pool
+) -> None:
+    """The domain refusal precedes the final check (design refusal precedence, R-D2): the party is archived and the caller's
+    role is revoked after T2's early perspective check and before the apply, so the apply's `validate_campaign_party` refuses
+    (409 party_not_active) and that is the response, never the lapse's 403. T2 is rolled back whole (no output, no proposal,
+    no reveal, no event); T1's request row remains."""
+    set_sensitivity(sc, "public")
+    user = persona(sc, "Lapsing Player", BASE_CAPS)
+    spy = Spy(dialogue="Hello.", reveal_first_candidate=True)
+    with StatementGate(pool.engine, OUTPUT_INSERT, strict=True, hold_seconds=30.0) as gate:
+        request = gate.track(run_in_thread("turn", lambda: turn(sc, pool, user, spy)))
+        gate.wait_reached()
+        with (
+            sc.engine.begin() as c
+        ):  # after T2's early checks (they ran before this gated output INSERT, T2's first write)
+            c.execute(
+                text(
+                    "UPDATE campaign.parties SET lifecycle_status_id = "
+                    "(SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = 'archived') "
+                    "WHERE party_id = :p"
+                ),
+                {"p": sc.f.party_id},
+            )
+        revoke_role(sc, user)
+        gate.release()
+        assert request.done.wait(30.0)
+    response = request.result
+    assert (code(response), error_of(response)) == (409, "party_not_active"), response.text
+    assert spy.calls == 1
+    assert counts(sc) == DISCLOSED_ONLY, counts(sc)
+    assert idle_in_transaction(sc.engine) == 0
+    # control: the same inactive party without a lapse gives the same domain refusal (so it is not the lapse's)
+    other = persona(sc, "Second Player", BASE_CAPS)
+    again = turn(sc, pool, other, Spy(dialogue="Hello.", reveal_first_candidate=True))
+    assert (code(again), error_of(again)) == (409, "party_not_active")
+    assert counts(sc)["outputs"] == 0 and counts(sc)["proposals"] == 0
+
+
+# --- C-2: a player summary needs its whole perspective ------------------------------------------------------------------
+
+
+def direct_summary(sc: Scene, **overrides: Any) -> Any:
+    from tests.ai_e2_support import synthesis
+
+    arguments: dict[str, Any] = {
+        "user_id": sc.f.interactor_id,
+        "agent_assignment_id": sc.f.assignment_id,
+        "campaign_id": sc.campaign_id,
+        "audience_tier": "player_summary",
+        "question_text": "What do we know?",
+        "provider": Spy(dialogue="Summary."),
+        "timeline_id": sc.f.timeline_id,
+        "requesting_character_id": sc.f.pc_id,
+        "requesting_party_id": sc.f.party_id,
+    }
+    arguments.update(overrides)
+    return synthesis(sc.engine, **arguments)
+
+
+@pytest.mark.parametrize(
+    "missing", ("timeline_id", "requesting_character_id", "requesting_party_id")
+)
+def test_c2_a_player_summary_missing_an_input_is_refused_before_any_database_work(
+    missing: str, sc: Scene
+) -> None:
+    statements: list[str] = []
+
+    def record(_c: Any, _cur: Any, statement: Any, *_: Any) -> None:
+        statements.append(str(statement))
+
+    event.listen(sc.engine, "before_cursor_execute", record)
+    try:
+        with pytest.raises(ValueError, match="player_summary"):
+            direct_summary(sc, **{missing: None})
+    finally:
+        event.remove(sc.engine, "before_cursor_execute", record)
+    assert statements == []
+    assert counts(sc) == NOTHING_KEPT
+
+
+def test_c2_a_complete_player_summary_registers_the_perspective_and_succeeds(sc: Scene) -> None:
+    provider = Spy(dialogue="Summary.")
+    result = direct_summary(sc, provider=provider)
+    assert result.answer is not None and provider.calls == 1
+    assert counts(sc)["outputs"] == 1
+
+
+def test_c2_a_complete_player_summary_is_judged_on_the_perspective(sc: Scene) -> None:
+    """The perspective requirement is always registered: with the party dissociated the command refuses."""
+    from dnd_ai.domain.errors import DomainAuthorizationError
+
+    dissociate_party(sc)
+    provider = Spy(dialogue="Summary.")
+    with pytest.raises(DomainAuthorizationError):
+        direct_summary(sc, provider=provider)
+    assert provider.calls == 0 and counts(sc) == NOTHING_KEPT

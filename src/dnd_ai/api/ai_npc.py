@@ -187,7 +187,7 @@ def request_npc_conversation_turn_endpoint(
     # member at the campaign clock). One non-disclosing 404.
     if not access.has_capability(PERSPECTIVE_CAPABILITY, character_id=body.requesting_character_id):
         raise PartyPerspectiveRefusedError("party perspective not authorized")
-    facts = perspective_facts_or_refuse(
+    perspective_facts_or_refuse(
         connection,
         campaign_id=campaign_id,
         timeline_id=access.timeline_id,
@@ -203,7 +203,7 @@ def request_npc_conversation_turn_endpoint(
         party_perspective_requirement(
             name="npc_turn.party_perspective",
             character_id=body.requesting_character_id,
-            facts=facts,
+            party_id=body.requesting_party_id,
         ),
     )
     plan.finalize(connection)

@@ -55,8 +55,8 @@ from dnd_ai.domain.errors import DomainAuthorizationError
 from ._shared import lifecycle_code, require_state_targetable
 from .ai_perspective import (
     RequirementFactory,
-    finalize_with_fresh_perspective,
     perspective_facts_or_refuse,
+    register_perspective,
     register_requirements,
 )
 from .ai_proposals import _apply_proposal
@@ -295,6 +295,13 @@ def request_npc_conversation_turn(
     persists, and applies, only if its own final check passes. No transaction or lock spans the provider call."""
     with authorized_transaction(engine, requesting_user_id, campaign_id) as (connection, plan):
         register_requirements(connection, plan, requirements)
+        register_perspective(
+            connection,
+            plan,
+            name="npc_turn.party_perspective",
+            character_id=requesting_character_id,
+            party_id=requesting_party_id,
+        )
         world_id = expected_world_id or _timeline_world(connection, timeline_id)
         assignment = _lock_active_assignment(connection, agent_assignment_id, campaign_id)
         perspective_facts_or_refuse(
@@ -315,20 +322,17 @@ def request_npc_conversation_turn(
             timeline_id=timeline_id,
             expected_world_id=world_id,
         )
-        finalize_with_fresh_perspective(
-            connection,
-            plan,
-            name="npc_turn.party_perspective",
-            campaign_id=campaign_id,
-            timeline_id=timeline_id,
-            character_id=requesting_character_id,
-            party_id=requesting_party_id,
-        )
-
     provider_result = provider.generate_npc_turn(context=context, player_message=player_message)
 
     with authorized_transaction(engine, requesting_user_id, campaign_id) as (connection, plan):
         register_requirements(connection, plan, requirements)
+        register_perspective(
+            connection,
+            plan,
+            name="npc_turn.party_perspective",
+            character_id=requesting_character_id,
+            party_id=requesting_party_id,
+        )
         perspective_facts_or_refuse(
             connection,
             campaign_id=campaign_id,
@@ -458,16 +462,6 @@ def request_npc_conversation_turn(
                     {"event": applied_event_id, "id": ai_proposed_change_id},
                 )
                 proposal_status = "applied"
-
-        finalize_with_fresh_perspective(
-            connection,
-            plan,
-            name="npc_turn.party_perspective",
-            campaign_id=campaign_id,
-            timeline_id=timeline_id,
-            character_id=requesting_character_id,
-            party_id=requesting_party_id,
-        )
 
     return NpcConversationTurnResult(
         context_request_id=context_request_id,

@@ -152,7 +152,7 @@ def request_campaign_synthesis_endpoint(
             PERSPECTIVE_CAPABILITY, character_id=body.requesting_character_id
         ):
             raise PartyPerspectiveRefusedError("party perspective not authorized")
-        facts = perspective_facts_or_refuse(
+        perspective_facts_or_refuse(
             connection,
             campaign_id=campaign_id,
             timeline_id=access.timeline_id,
@@ -164,7 +164,7 @@ def request_campaign_synthesis_endpoint(
             party_perspective_requirement(
                 name="synthesis.player_summary.perspective",
                 character_id=body.requesting_character_id,
-                facts=facts,
+                party_id=body.requesting_party_id,
             ),
         )
         authorized_party_id = body.requesting_party_id

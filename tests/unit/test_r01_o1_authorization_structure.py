@@ -324,7 +324,7 @@ PARENT_PINS: dict[str, str] = {
     "execute": "9aa78aabd3a8b5eb",
     "finalize": "0bc934ca584f5220",
     "lock": "bd099087ed68017a",
-    "require": "92302c364e2191b5",
+    "require": "a0e1349a63a591b9",  # R01 E2 correction C-1: one declared party perspective per plan (was 92302c364e2191b5)
 }
 
 

@@ -1016,6 +1016,16 @@ RevealAuthority = Literal["owner", "delegation", "none"]
 
 
 @dataclass(frozen=True)
+class PerspectiveResult:
+    """The party perspective's two domain facts, evaluated in the snapshot statement itself (R01 E2 correction C-1):
+    `party_in_campaign` is the campaign-party association; `member_now` is the character's membership in the party
+    at the campaign timeline's effective clock (branch-clock inheritance included), false when there is no clock."""
+
+    party_in_campaign: bool
+    member_now: bool
+
+
+@dataclass(frozen=True)
 class AuthoritySnapshot:
     """Every authority source one decision declared, read by ONE SQL statement: one MVCC snapshot,
     one `t_auth` (plan sections 3 and 6.1). Reads take no row locks.
@@ -1036,6 +1046,8 @@ class AuthoritySnapshot:
     #: that membership holds no live one at `t_auth`). Both `None` unless declared.
     subject_membership_id: uuid.UUID | None = None
     subject_gm_assignment: uuid.UUID | None = None
+    #: R01 E2: the declared party perspective's facts, from the same statement and MVCC snapshot. `None` unless declared.
+    perspective: PerspectiveResult | None = None
 
 
 _LIVE_REVELATIONS_IN_STATEMENT_SQL = LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL.replace(
@@ -1335,6 +1347,53 @@ _SUBJECT_GM_CTES = f"""
     )
 """
 
+# R01 E2 (correction C-1): party eligibility in the final statement. The effective campaign clock of the campaign's own
+# timeline is resolved in SQL exactly as `queries.campaign_clock.resolve_effective_clock` does: the timeline's own clock row,
+# else (with a parent) the parent's effective clock bounded at the branch point, else none. Membership is current when the
+# clock lies in the half-open `effective_period` (`queries.party_membership_period`); no clock means nobody is current.
+_PERSPECTIVE_CTES = """
+    perspective_clock AS (
+        WITH RECURSIVE chain AS (
+            SELECT t.timeline_id AS tl, t.parent_timeline_id AS parent,
+                   (SELECT wt.sort_key FROM core.world_times wt
+                     WHERE wt.world_time_id = t.branch_world_time_id) AS branch_key,
+                   (SELECT wt.sort_key FROM campaign.timeline_clocks tc
+                      JOIN core.world_times wt ON wt.world_time_id = tc.current_world_time_id
+                     WHERE tc.timeline_id = t.timeline_id) AS own_key
+            FROM campaign.timelines t
+            WHERE t.timeline_id = (SELECT timeline_id FROM camp)
+          UNION ALL
+            SELECT t.timeline_id, t.parent_timeline_id,
+                   (SELECT wt.sort_key FROM core.world_times wt
+                     WHERE wt.world_time_id = t.branch_world_time_id),
+                   (SELECT wt.sort_key FROM campaign.timeline_clocks tc
+                      JOIN core.world_times wt ON wt.world_time_id = tc.current_world_time_id
+                     WHERE tc.timeline_id = t.timeline_id)
+            FROM chain c JOIN campaign.timelines t ON t.timeline_id = c.parent
+        ), eff AS (
+            SELECT c.tl, c.own_key AS key FROM chain c WHERE c.parent IS NULL
+          UNION ALL
+            SELECT c.tl,
+                   COALESCE(c.own_key,
+                            CASE WHEN e.key IS NULL OR e.key > c.branch_key THEN c.branch_key ELSE e.key END)
+            FROM chain c JOIN eff e ON e.tl = c.parent
+        )
+        SELECT CAST(key AS bigint) AS key FROM eff WHERE tl = (SELECT timeline_id FROM camp)
+    )
+"""
+
+_PERSPECTIVE_COLUMNS = """
+        EXISTS (SELECT 1 FROM campaign.campaign_parties cp
+                 WHERE cp.campaign_id = :campaign_id
+                   AND cp.party_id = :perspective_party_id) AS perspective_party_in_campaign,
+        EXISTS (SELECT 1 FROM campaign.party_memberships pm
+                 WHERE pm.timeline_id = (SELECT timeline_id FROM camp)
+                   AND pm.party_id = :perspective_party_id
+                   AND pm.member_entity_id = :perspective_character_id
+                   AND (SELECT key FROM perspective_clock) IS NOT NULL
+                   AND pm.effective_period @> (SELECT key FROM perspective_clock)) AS perspective_member_now
+"""
+
 _SUBJECT_GM_COLUMNS = """
         (SELECT membership_role_id FROM subject_gm) AS subject_gm_assignment
 """
@@ -1393,7 +1452,12 @@ REVIEWED_POST_WRITE_TABLES: Final[frozenset[str]] = frozenset(
 
 
 def _authority_snapshot_sql(
-    *, instant: str, with_world: bool, with_reveal: bool, with_subject_gm: bool = False
+    *,
+    instant: str,
+    with_world: bool,
+    with_reveal: bool,
+    with_subject_gm: bool = False,
+    with_perspective: bool = False,
 ) -> str:
     ctes = [f"clock AS MATERIALIZED (SELECT {_INSTANT_SQL[instant]} AS t_auth)", _ACCESS_CTES]
     columns = [
@@ -1410,6 +1474,9 @@ def _authority_snapshot_sql(
     if with_subject_gm:
         ctes.append(_SUBJECT_GM_CTES)
         columns.append(_SUBJECT_GM_COLUMNS)
+    if with_perspective:
+        ctes.append(_PERSPECTIVE_CTES)
+        columns.append(_PERSPECTIVE_COLUMNS)
     return "WITH " + ",\n".join(part.strip() for part in ctes) + "\nSELECT " + ",\n".join(columns)
 
 
@@ -1422,6 +1489,7 @@ def read_authority_snapshot(
     world_id: uuid.UUID | None = None,
     with_reveal: bool = False,
     subject_gm_membership_id: uuid.UUID | None = None,
+    perspective: tuple[uuid.UUID, uuid.UUID] | None = None,
     as_of: Instant = None,
 ) -> AuthoritySnapshot:
     """Read the declared authority sources in ONE statement and return them with the instant expiry
@@ -1445,6 +1513,7 @@ def read_authority_snapshot(
         with_world=world_id is not None,
         with_reveal=with_reveal,
         with_subject_gm=subject_gm_membership_id is not None,
+        with_perspective=perspective is not None,
     )
     parameters: dict[str, object] = {"campaign_id": campaign_id, "user_id": user_id}
     if instant == "explicit":
@@ -1453,6 +1522,8 @@ def read_authority_snapshot(
         parameters["world_id"] = world_id
     if subject_gm_membership_id is not None:
         parameters["subject_membership_id"] = subject_gm_membership_id
+    if perspective is not None:
+        parameters["perspective_party_id"], parameters["perspective_character_id"] = perspective
     row = connection.execute(text(sql), parameters).mappings().one()
 
     isolation = _as_str(row["isolation"])
@@ -1486,6 +1557,12 @@ def read_authority_snapshot(
         subject_membership_id=subject_gm_membership_id,
         subject_gm_assignment=row["subject_gm_assignment"]
         if subject_gm_membership_id is not None
+        else None,
+        perspective=PerspectiveResult(
+            party_in_campaign=bool(row["perspective_party_in_campaign"]),
+            member_now=bool(row["perspective_member_now"]),
+        )
+        if perspective is not None
         else None,
     )
 

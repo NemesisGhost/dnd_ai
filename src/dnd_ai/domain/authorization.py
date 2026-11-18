@@ -524,6 +524,8 @@ class Requirement:
     world_id: uuid.UUID | None = None
     reveal: bool = False
     gm_subject: uuid.UUID | None = None
+    #: R01 E2: `(party_id, character_id)` whose party perspective the snapshot must evaluate in its own statement.
+    perspective: tuple[uuid.UUID, uuid.UUID] | None = None
 
 
 @dataclass(frozen=True)
@@ -1015,6 +1017,13 @@ class AuthorizationPlan:
         subjects = {r.gm_subject for r in self._requirements if r.gm_subject is not None}
         if requirement.gm_subject is not None and subjects - {requirement.gm_subject}:
             raise ValueError("a plan's requirements name one gm subject")
+        declared_perspectives = {
+            r.perspective for r in self._requirements if r.perspective is not None
+        }
+        if requirement.perspective is not None and declared_perspectives - {
+            requirement.perspective
+        }:
+            raise ValueError("a plan's requirements name one party perspective")
         self._requirements.append(requirement)
 
     def _verify_session(self, connection: Connection) -> None:
@@ -1092,6 +1101,7 @@ class AuthorizationPlan:
             return None
         world_ids = {r.world_id for r in self._requirements if r.world_id is not None}
         gm_subjects = {r.gm_subject for r in self._requirements if r.gm_subject is not None}
+        perspectives = {r.perspective for r in self._requirements if r.perspective is not None}
         self._reading = True
         try:
             snapshot = read_authority_snapshot(
@@ -1101,6 +1111,7 @@ class AuthorizationPlan:
                 world_id=next(iter(world_ids)) if world_ids else None,
                 with_reveal=any(r.reveal for r in self._requirements),
                 subject_gm_membership_id=next(iter(gm_subjects)) if gm_subjects else None,
+                perspective=next(iter(perspectives)) if perspectives else None,
                 as_of=FRESH_INSTANT,
             )
         finally:
