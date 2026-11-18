@@ -77,7 +77,9 @@ def test_the_routes_are_finalized_two_phase_and_in_no_other_registry() -> None:
 def test_o2s_registries_and_the_inventory_are_as_designed() -> None:
     assert len(R01_DEFERRED_RESERVATION_ROUTES) == 129
     assert len(R01_LATE_RESERVATION_ROUTES) == 2
-    assert len(R01_FINALIZED_ROUTES) == 182 and len(R01_PENDING_ROUTES) == 5
+    assert (
+        len(R01_FINALIZED_ROUTES) == 183 and len(R01_PENDING_ROUTES) == 4
+    )  # 182 / 5 before R01 E3
 
 
 def test_the_committed_manifest_classifies_both_engine_two_phase() -> None:

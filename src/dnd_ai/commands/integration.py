@@ -113,6 +113,16 @@ supplied connection the way a single-transaction command can) and, until
 Phase 11 workstreams 1-3, had no authoritative campaign_id to assert
 against either — both addressed below.
 
+R01 E3 (fresh final authorization). The claim (step 1) and the work (step 2) each run in a
+`_planned_transaction`: a post-write `AuthorizationPlan` bound to the same lock connection, a FRESH set of
+requirements from the caller's factory, and the final authorization check as the last statement before
+COMMIT. A replay is a claim that returns early, so it is judged too. A refused work transaction rolls back every
+combat and completion write and leaves the claim's `in_progress` job retryable (the fail step is not run for it);
+a refused claim keeps no job for a new operation and discloses nothing for a replay. An existing operation must
+belong to the route's campaign (via its encounter) before its payload or status is read: another campaign's route
+gets the non-disclosing 404, never a replay, a 409 or a write to the job. Explicit Foundry device or connection
+revocation is judged at the start of the request only (R01 plan 2.1, the owner's S4b decision).
+
 Foundry combat-sync endpoint (Phase 11 workstream 3,
 `apply_foundry_combat_sync_endpoint`): reachable as of this workstream at
 `POST /campaigns/{campaign_id}/integration/foundry/combat-sync`, requiring
@@ -210,6 +220,7 @@ import logging
 import secrets
 import threading
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -220,9 +231,19 @@ from dnd_ai.domain.access import (
     hash_foundry_system_key,
     resolve_user_by_external_identity,
 )
+from dnd_ai.domain.authorization import (
+    AuthorizationPlan,
+    AuthorizationPlanNotFinalizedError,
+    PlanMode,
+)
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 
-from .encounters import ResolveCombatTurnResult, _resolve_combat_turn_impl
+from .ai_perspective import RequirementFactory, register_requirements
+from .encounters import (
+    EncounterNotFoundError,
+    ResolveCombatTurnResult,
+    _resolve_combat_turn_impl,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -748,13 +769,76 @@ def _find_existing_sync_job(
     return connection.execute(
         text("""
             SELECT sync_job_id, status, payload_jsonb, resulting_event_id,
-                   resulting_encounter_turn_id
+                   resulting_encounter_turn_id, target_encounter_id
             FROM integration.sync_jobs
             WHERE external_system_id = :system AND external_operation_id = :operation
             FOR UPDATE
         """),
         {"system": external_system_id, "operation": external_operation_id},
     ).one_or_none()
+
+
+class _PlannedState:
+    """What a caller needs to know after a `_planned_transaction` raised: whether the failure was the final
+    authorization check (or the commit guard's refusal of it), as opposed to a failure of the work itself."""
+
+    def __init__(self) -> None:
+        self.final_refused = False
+
+
+@contextlib.contextmanager
+def _planned_transaction(
+    connection: Connection,
+    *,
+    actor_user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    requirements: RequirementFactory,
+    state: _PlannedState,
+) -> Iterator[None]:
+    """One transaction on `connection` (the connection that holds the operation's advisory lock) judged by its own
+    post-write `AuthorizationPlan` (R01 E3). It opens the transaction, binds a plan, registers a FRESH set of
+    requirements (the factory is called once per transaction, so no verdict crosses one), runs the body, makes the
+    final authorization check the last statement, and commits. Any failure rolls the transaction back. The
+    connection is never closed here: it stays the one connection of the call, so the advisory lock and the
+    single-connection pool guarantee are untouched. `state.final_refused` is set when the final check (or the commit
+    guard) is what failed."""
+    try:
+        with connection.begin():
+            plan = AuthorizationPlan.begin(
+                connection,
+                actor_user_id=actor_user_id,
+                campaign_id=campaign_id,
+                mode=PlanMode.POST_WRITE,
+            )
+            register_requirements(connection, plan, requirements)
+            yield
+            try:
+                if not plan.finalised:
+                    plan.finalize(connection)
+            except BaseException:
+                state.final_refused = True
+                raise
+    except AuthorizationPlanNotFinalizedError:
+        state.final_refused = True
+        raise
+
+
+def _require_job_in_campaign(
+    connection: Connection, *, target_encounter_id: uuid.UUID | None, campaign_id: uuid.UUID
+) -> None:
+    """An existing operation (replay, conflict check or retry) belongs to the campaign of its encounter. Another
+    campaign's route sees the same non-disclosing 404 an unknown encounter gives: no result, no 409 that confirms the
+    operation id, and no write to the job (R01 E3, finding F-1). A plain read: no row lock."""
+    owner = (
+        connection.execute(
+            text("SELECT campaign_id FROM narrative.encounters WHERE encounter_id = :e"),
+            {"e": target_encounter_id},
+        ).scalar()
+        if target_encounter_id is not None
+        else None
+    )
+    if owner != campaign_id:
+        raise EncounterNotFoundError("the operation's encounter is not in this campaign")
 
 
 def _reconstruct_combat_result(
@@ -1134,6 +1218,9 @@ def _complete_sync_job(
 def apply_foundry_combat_sync(
     engine: Engine,
     *,
+    actor_user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    requirements: RequirementFactory,
     external_system_id: uuid.UUID,
     external_operation_id: str,
     encounter_id: uuid.UUID,
@@ -1153,7 +1240,6 @@ def apply_foundry_combat_sync(
     session_id: uuid.UUID | None = None,
     event_details: str | None = None,
     raw_payload: dict[str, Any] | None = None,
-    campaign_id: uuid.UUID | None = None,
 ) -> ApplyFoundryCombatSyncResult:
     """Route an inbound Foundry combat-turn payload through the real combat-
     resolution logic (never a raw write), exactly once per
@@ -1163,36 +1249,19 @@ def apply_foundry_combat_sync(
     single-connection/advisory-lock concurrency model, and the
     replay/retry/conflict rules.
 
-    campaign_id (Phase 11 workstream 3) is passed straight through to
-    _resolve_combat_turn_impl(), which requires it to match the *locked*
-    encounter's own campaign_id (dnd_ai.commands.encounters._lock_encounter's
-    expected_campaign_id) atomically with acquiring encounter_id's FOR
-    UPDATE lock — identical to how dnd_ai.api.encounters.
-    resolve_combat_turn_endpoint already threads its own URL campaign_id
-    through the same parameter. campaign_id=None (the default, and every
-    caller before this workstream) leaves that assertion unscoped exactly
-    as before — this function's own HTTP endpoint
-    (dnd_ai.api.integration.apply_foundry_combat_sync_endpoint) is the only
-    caller expected to supply a real one, resolved from the authenticated
-    Foundry adapter's own campaign membership (dnd_ai.api.access.
-    require_campaign_capability), now that workstreams 1-2 give a Foundry
-    request an authenticated user_id to resolve that membership from at
-    all. A test or administrative caller with no campaign to assert
-    against is unaffected: encounter_id's own real, current, FOR-UPDATE-
-    locked timeline/status is still resolved either way, so a nonexistent
-    or non-active encounter is rejected the same way regardless of whether
-    campaign_id is supplied.
+    R01 E3 (fresh final authorization): `actor_user_id` and `campaign_id` are required, and `requirements` is a
+    FACTORY of the route's authority requirements (at least one). The claim and work transactions each bind their own
+    post-write plan on the same lock connection, call the factory afresh, and make the final authorization check
+    their last statement before COMMIT: a lapse of authority refuses and rolls that transaction back (a refused work
+    transaction keeps no combat state, no completion and no attempt; a refused claim keeps no job and discloses no
+    replay). The operation's own campaign binding is checked first for an existing job: another campaign's route gets
+    the non-disclosing 404 (`EncounterNotFoundError`), never a replay, a 409 or a write to the job. There is no
+    unscoped mode any more: `campaign_id` is the authorized campaign and is passed straight through to
+    `_resolve_combat_turn_impl`, which requires it to match the *locked* encounter's own campaign atomically with the
+    encounter's `FOR UPDATE` lock (`dnd_ai.commands.encounters._lock_encounter`).
 
-    Not asserting a campaign does not mean discarding one: the
-    interaction.interactions row and any resulting narrative.events row
-    _resolve_combat_turn_impl creates are still attributed to
-    encounter_id's own actual, locked campaign_id (LockedEncounter.
-    campaign_id) whenever the target encounter is campaign-owned — the
-    same provenance a campaign-scoped caller would get. A campaign-less
-    encounter (campaign_id NULL) still produces campaign-less records, as
-    it always has. See dnd_ai.commands.encounters._lock_encounter's and
-    LockedEncounter's own docstrings for the general contract this relies
-    on.
+    The fail step is skipped when the work transaction's final check (or the commit guard) is what refused: nothing
+    durable is written for a request whose authority lapsed, and the claim's `in_progress` job stays retryable.
 
     item_instance_id/spell_id/damage_type_id/resulting_condition_id/
     interaction_type_code/session_id/event_details (Phase 11 workstream 3)
@@ -1225,6 +1294,9 @@ def apply_foundry_combat_sync(
         event_details=event_details,
         raw_payload=raw_payload,
     )
+    if not tuple(requirements()):
+        # before any statement (and before the advisory lock): a plan with no requirement would judge nothing
+        raise ValueError("apply_foundry_combat_sync needs at least one authorization requirement")
     lock_params = {"a": str(external_system_id), "b": external_operation_id}
 
     # Everything below — the claim, work, and (on failure) fail steps — runs
@@ -1238,14 +1310,25 @@ def apply_foundry_combat_sync(
         )
         lock_connection.commit()
 
-        # Step 1: claim. Always committed before any domain work starts.
-        with lock_connection.begin():
+        # Step 1: claim. Always committed before any domain work starts. R01 E3: judged by its own final check.
+        with _planned_transaction(
+            lock_connection,
+            actor_user_id=actor_user_id,
+            campaign_id=campaign_id,
+            requirements=requirements,
+            state=_PlannedState(),
+        ):
             existing = _find_existing_sync_job(
                 lock_connection,
                 external_system_id=external_system_id,
                 external_operation_id=external_operation_id,
             )
             if existing is not None:
+                _require_job_in_campaign(
+                    lock_connection,
+                    target_encounter_id=existing.target_encounter_id,
+                    campaign_id=campaign_id,
+                )
                 if existing.payload_jsonb != payload:
                     raise ConflictingSyncPayloadError(
                         f"external_operation_id {external_operation_id!r} on external system "
@@ -1286,9 +1369,17 @@ def apply_foundry_combat_sync(
                 )
 
         # Step 2: work. The domain mutation and its completion bookkeeping
-        # commit or roll back together — see this module's docstring.
+        # commit or roll back together — see this module's docstring. R01 E3: its own final check is the
+        # last statement before COMMIT.
+        work = _PlannedState()
         try:
-            with lock_connection.begin():
+            with _planned_transaction(
+                lock_connection,
+                actor_user_id=actor_user_id,
+                campaign_id=campaign_id,
+                requirements=requirements,
+                state=work,
+            ):
                 combat_result = _resolve_combat_turn_impl(
                     lock_connection,
                     encounter_id=encounter_id,
@@ -1319,15 +1410,19 @@ def apply_foundry_combat_sync(
                     resulting_encounter_turn_id=combat_result.encounter_turn_id,
                 )
         except Exception as exc:
-            # Step 3: fail. Only reached once step 2 has fully rolled back.
-            try:
-                with lock_connection.begin():
-                    _fail_sync_job(lock_connection, sync_job_id=sync_job_id, error_message=str(exc))
-            except Exception:
-                # A failure recording the failure must never replace the original domain
-                # exception — the caller needs to see what step 2 actually raised, not a
-                # secondary bookkeeping error.
-                pass
+            # Step 3: fail. Only reached once step 2 has fully rolled back, and not when step 2's final
+            # authorization check refused (R01 E3, decision E3-D2): nothing durable for a lapsed request.
+            if not work.final_refused:
+                try:
+                    with lock_connection.begin():
+                        _fail_sync_job(
+                            lock_connection, sync_job_id=sync_job_id, error_message=str(exc)
+                        )
+                except Exception:
+                    # A failure recording the failure must never replace the original domain
+                    # exception — the caller needs to see what step 2 actually raised, not a
+                    # secondary bookkeeping error.
+                    pass
             raise
 
         return ApplyFoundryCombatSyncResult(

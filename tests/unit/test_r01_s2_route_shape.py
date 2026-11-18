@@ -45,6 +45,7 @@ from tests.r01_manifest import (
     _S5E6_ROUTES,
     E1_ROUTES,
     E2_ROUTES,
+    E3_ROUTES,
     _iter_api_routes,
 )
 
@@ -68,6 +69,7 @@ S2_ROUTES = (
     - _S5E6_ROUTES
     - E1_ROUTES
     - E2_ROUTES  # R01 E2: checked by test_r01_e2_route_shape.py
+    - E3_ROUTES  # R01 E3: checked by test_r01_e3_route_shape.py
 )
 
 DB_CALLS = {

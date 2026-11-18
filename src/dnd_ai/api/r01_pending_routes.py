@@ -20,7 +20,6 @@ from typing import Final
 R01_PENDING_ROUTES: Final = MappingProxyType(
     {
         ("DELETE", "/campaigns/{campaign_id}/reference-corpus/grants/{reference_source_campaign_id}"): "engine_early_commit",
-        ("POST", "/campaigns/{campaign_id}/integration/foundry/combat-sync"): "engine_early_commit",
         ("POST", "/campaigns/{campaign_id}/reference-corpus/query"): "engine_early_commit",
         ("POST", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/grant"): "engine_early_commit",
         ("POST", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/passages"): "engine_early_commit",
@@ -152,6 +151,7 @@ R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("POST", "/campaigns/{campaign_id}/integration/external-systems"),
         ("POST", "/campaigns/{campaign_id}/integration/external-systems/{external_system_id}/foundry-identities"),
         ("POST", "/campaigns/{campaign_id}/integration/external-systems/{external_system_id}/identifiers"),
+        ("POST", "/campaigns/{campaign_id}/integration/foundry/combat-sync"),
         ("POST", "/campaigns/{campaign_id}/interactions"),
         ("POST", "/campaigns/{campaign_id}/invitations"),
         ("POST", "/campaigns/{campaign_id}/invitations/{campaign_invitation_id}/revoke"),

@@ -7469,7 +7469,7 @@
    }
   ],
   "early_commit": true,
-  "family": "engine_early_commit",
+  "family": "engine_claim_work",
   "handler": "dnd_ai.api.integration.apply_foundry_combat_sync_endpoint",
   "idempotency": [],
   "method": "POST",

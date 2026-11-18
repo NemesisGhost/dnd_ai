@@ -348,6 +348,7 @@ def _record(route: APIRoute, method: str) -> dict[str, Any]:
 
 ENGINE_REQUEST_SCOPED = "engine_request_scoped"
 ENGINE_TWO_PHASE = "engine_two_phase"
+ENGINE_CLAIM_WORK = "engine_claim_work"
 
 
 def classify(record: dict[str, Any]) -> str:
@@ -356,6 +357,8 @@ def classify(record: dict[str, Any]) -> str:
         return ENGINE_REQUEST_SCOPED
     if (str(record.get("method")), str(record.get("path"))) in E2_ROUTES:
         return ENGINE_TWO_PHASE
+    if (str(record.get("method")), str(record.get("path"))) in E3_ROUTES:
+        return ENGINE_CLAIM_WORK
     if record["early_commit"]:
         return "engine_early_commit"
     scope = set(record["command_scope_markers"]) | set(record["precheck_markers"])
@@ -675,6 +678,14 @@ E2_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: R01 E3 migrates the Foundry combat sync: the request transaction is finalized and ended (the early check), then the
+#: command takes the operation's session advisory lock and runs a claim transaction and a work transaction on that one
+#: connection, each with its own post-write plan (a replay is a claim that returns early). No reservation, so it stays
+#: out of `R01_DEFERRED_RESERVATION_ROUTES`. `classify()` returns `engine_claim_work` before the `early_commit` marker.
+E3_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {("POST", _CAMPAIGN + "/integration/foundry/combat-sync")}
+)
+
 #: The five world routes, an explicit **planned exclusion** from campaign-scoped R01 work (owner decision 4, plan
 #: 6.21.1; S5-F bookkeeping). Neither finalized nor pending, and not migrated or accepted: their plan lookup fails
 #: closed (`dnd_ai.api.r01_route_plans`). Their unkeyed-window follow-up is recorded in `docs/BACKLOG.md`.
@@ -712,6 +723,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S5E6_ROUTES
     | E1_ROUTES
     | E2_ROUTES
+    | E3_ROUTES
 )
 
 #: R01 O-2 (design 1.3): the two revelation routes reserve **after** their own campaign `KEY SHARE`

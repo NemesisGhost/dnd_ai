@@ -295,14 +295,9 @@ def _lock_encounter(
     fully-committed `campaign_id`. There is no window in which this check
     can observe a stale owner.
 
-    `expected_campaign_id=None` is a deliberate "unscoped" mode, not an
-    oversight: `dnd_ai.commands.integration.apply_foundry_combat_sync()`
-    is the one current caller that needs it, since Phase 9's `integration.*`
-    schema scopes an external system to a `world_id` only, never a
-    campaign (docs/architecture/DATABASE_MODEL.md §19) — there is no
-    authoritative campaign to check a Foundry-originated combat turn
-    against yet. Phase 11 is where Foundry's own campaign-scoped
-    authorization is wired up; see that function's own docstring.
+    `expected_campaign_id=None` is the "unscoped" mode for a caller with no campaign to assert
+    (administrative or test callers). `dnd_ai.commands.integration.apply_foundry_combat_sync()`
+    no longer uses it (R01 E3): it is always scoped to the authorized campaign.
 
     A nonexistent encounter and a campaign mismatch both raise the
     identical `EncounterNotFoundError` (a fixed, non-disclosing 404) — see

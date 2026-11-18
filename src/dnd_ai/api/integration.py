@@ -197,6 +197,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection, Engine, text
 
+from dnd_ai.commands.ai_perspective import RequirementFactory
 from dnd_ai.commands.integration import (
     ApplyFoundryCombatSyncResult,
     _link_foundry_identity_impl,
@@ -204,12 +205,16 @@ from dnd_ai.commands.integration import (
     _register_external_system_impl,
     apply_foundry_combat_sync,
 )
-from dnd_ai.domain.access import AccessContext, assert_foundry_system_matches
-from dnd_ai.domain.authorization import AuthorizationPlan
+from dnd_ai.domain.access import (
+    AccessContext,
+    AuthenticatedPrincipal,
+    assert_foundry_system_matches,
+)
+from dnd_ai.domain.authorization import AuthorizationPlan, Requirement
 from dnd_ai.queries.integration import InvalidSyncStateTargetError, get_sync_state_view
 
 from ._shared import timeline_world_id
-from .access import require_campaign_capability
+from .access import _foundry_facts, require_campaign_capability, route_capability_requirement
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import end_request_transaction, get_connection, get_engine, get_idempotency_key
@@ -563,6 +568,30 @@ def link_foundry_identity_endpoint(
     return response
 
 
+def combat_sync_requirements(
+    *, principal: AuthenticatedPrincipal, actor_user_id: uuid.UUID, campaign_id: uuid.UUID
+) -> RequirementFactory:
+    """The combat sync's authority requirement as a factory (R01 E3): each call returns FRESH `Requirement` objects,
+    so the command's claim and work transactions each judge their own (no verdict crosses a transaction). It is the
+    route dependency's own decision (campaign `canon.edit`, the campaign's lifecycle), with the credential's campaign
+    binding and the `combat_sync` scope as constants of the authenticated principal. Explicit device or connection
+    revocation is judged at the start of the request only (plan 2.1, the owner's S4b decision)."""
+
+    def factory() -> list[Requirement]:
+        return [
+            route_capability_requirement(
+                capability_code=_INTEGRATION_MANAGE_CAPABILITY,
+                allow_archived_campaign=False,
+                world_capability=None,
+                world_id=None,
+                actor_user_id=actor_user_id,
+                foundry=_foundry_facts(principal, campaign_id, _COMBAT_SYNC_SCOPE),
+            )
+        ]
+
+    return factory
+
+
 @router.post(
     "/campaigns/{campaign_id}/integration/foundry/combat-sync",
     response_model=ApplyFoundryCombatSyncResponse,
@@ -572,13 +601,11 @@ def apply_foundry_combat_sync_endpoint(
     request: Request,
     campaign_id: uuid.UUID,
     body: ApplyFoundryCombatSyncRequest,
-    # Authorization, plus (Phase 11 workstream 2 correction) the source of
-    # the principal assert_foundry_system_matches checks body.
-    # external_system_id against below — this route otherwise still does
-    # not use the resolved AccessContext for anything else, and
-    # deliberately does not depend on get_connection for its own work. See
-    # this module's docstring ("apply_foundry_combat_sync_endpoint") for
-    # why.
+    # Authorization (route capability `canon.edit`, the Foundry binding and the `combat_sync` scope), and the
+    # source of the principal assert_foundry_system_matches checks body.external_system_id against. The
+    # request connection carries authentication and the early check only (R01 E3: finalized, then ended
+    # before the command opens its lock connection); the command's own transactions are judged by their own
+    # final checks.
     access: Annotated[
         AccessContext,
         Depends(
@@ -589,14 +616,28 @@ def apply_foundry_combat_sync_endpoint(
             )
         ),
     ],
+    plan: _Plan,
+    connection: Annotated[Connection, Depends(get_connection)],
     engine: Annotated[Engine, Depends(get_engine)],
 ) -> ApplyFoundryCombatSyncResponse:
     assert access.principal is not None
-    assert_foundry_system_matches(access.principal, body.external_system_id)
+    principal = access.principal
+    assert_foundry_system_matches(principal, body.external_system_id)
+
+    requirements = combat_sync_requirements(
+        principal=principal, actor_user_id=access.user_id, campaign_id=campaign_id
+    )
+
+    # R01 E3: the request transaction is the early check, now finalized before it ends. The command then judges its
+    # claim and its work transaction (and so every replay) with a final check of their own.
+    plan.finalize(connection)
     end_request_transaction(request)
 
     result = apply_foundry_combat_sync(
         engine,
+        actor_user_id=access.user_id,
+        campaign_id=campaign_id,
+        requirements=requirements,
         external_system_id=body.external_system_id,
         external_operation_id=body.external_operation_id,
         encounter_id=body.encounter_id,
@@ -616,7 +657,6 @@ def apply_foundry_combat_sync_endpoint(
         session_id=body.session_id,
         event_details=body.event_details,
         raw_payload=body.raw_payload,
-        campaign_id=campaign_id,
     )
     return ApplyFoundryCombatSyncResponse.from_result(result)
 
