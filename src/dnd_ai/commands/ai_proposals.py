@@ -132,6 +132,15 @@ def _apply_proposal(
     authored changes" rule (docs/ENTITY_LIFECYCLE.md §10). Returns the
     resulting `narrative.events.event_id`."""
     if proposal_kind == "reveal_knowledge":
+        # R01 E1-C1: the item's `core.entities` row `FOR SHARE` BEFORE its `knowledge_items` row `FOR UPDATE` (taken
+        # by the shared reveal below), the order the knowledge definition edit already uses (entity `FOR UPDATE`, then
+        # the item UPDATE) and the human reveal's `_lock_claim`. A plain lock: it validates nothing and a missing row
+        # locks nothing, so the shared branch's own refusals and their precedence are unchanged. The item is its own
+        # entity (class-table inheritance: `knowledge_item_id` is `core.entities.entity_id`).
+        connection.execute(
+            text("SELECT 1 FROM core.entities WHERE entity_id = :item FOR SHARE"),
+            {"item": uuid.UUID(str(proposed_arguments["knowledge_item_id"]))},
+        )
         result = _reveal_knowledge_to_party_impl(
             connection,
             knowledge_item_id=uuid.UUID(str(proposed_arguments["knowledge_item_id"])),

@@ -23,6 +23,13 @@ reveal's `FOR SHARE`, so it joins the row's share lockers (a multixact) and does
 it commits while the edit is still queued. The second test is the control: the same schedule with an exclusive review lock
 does form the cycle, one 40P01.
 
+**After R01 E1-C1 (plan 6.58) the review takes the item's entity row `FOR SHARE` *before* `ki FOR UPDATE`** (the same order as
+the reveal and the definition edit). Steps 1 to 4 above are the schedule as first observed; with the correction the review
+joins the share lockers at step 2 (before the edit queues) and its later guard is a re-lock of a share it already holds, so
+the row's `xmax` does not change at step 4a and the review still finishes while the edit is queued. The control's exclusive
+guard is then an upgrade, and the review waits on the reveal (a holder of a share), not on the queued edit; the cycle it
+closes is review -> reveal -> review. The assertions below are the corrected observations, moved deliberately.
+
 Every step records the actual SQL of each backend, the lock modes and the queue (`pg_blocking_pids`, `pg_locks`) *before*
 anything is released or cleaned up. With `R3_REPORT=<file>` set, each snapshot is appended as one JSON line (evidence only,
 never an assertion).
@@ -484,8 +491,12 @@ def test_r3_a_queued_entity_update_does_not_make_the_review_wait_so_no_cycle_for
     assert index_of(statements["reveal"], reveal_entity_share) < index_of(
         statements["reveal"], KI_FOR_UPDATE
     )
-    assert index_of(statements["review"], KI_FOR_UPDATE) < index_of(
-        statements["review"], ENTITY_FOR_SHARE_GUARD
+    # E1-C1: the review takes the item's entity row FOR SHARE first, then ki FOR UPDATE, then the guard (a re-lock)
+    entity_share_first = r"^SELECT 1 FROM core\.entities WHERE entity_id = \S+ FOR SHARE$"
+    assert (
+        index_of(statements["review"], entity_share_first)
+        < index_of(statements["review"], KI_FOR_UPDATE)
+        < index_of(statements["review"], ENTITY_FOR_SHARE_GUARD)
     )
     # the edit asked for the entity FOR UPDATE and nothing else on the way blocked it first
     assert any(ENTITY_FOR_UPDATE.search(s) for s in statements["edit"])
@@ -527,8 +538,9 @@ def test_r3_a_queued_entity_update_does_not_make_the_review_wait_so_no_cycle_for
     assert joined["backends"]["edit"]["blocked_by"] == ["reveal"], joined
     assert joined["backends"]["reveal"]["state"] == "idle in transaction", joined
     assert joined["backends"]["reveal"]["blocked_by"] == [], joined
-    assert joined["entity_xmax"] != queued["entity_xmax"], (
-        "the row's xmax did not change: no second locker joined"
+    assert joined["entity_xmax"] == queued["entity_xmax"], (
+        "the row's xmax changed: the review took a new lock on the entity after the edit queued (E1-C1: it holds its "
+        "share from before ki, so the guard re-locks a share it already has)"
     )
     if joined["entity_row_lockers"] is not None:
         # a multixact of two FOR SHARE lockers: the reveal and the (already committed, so pid-less) review
@@ -563,9 +575,9 @@ def test_r3_control_an_exclusive_review_entity_lock_would_deadlock_on_this_sched
     sc: Scene, pool: Pool, owner_is_world_editor: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Harness sensitivity, not production behaviour: with the review's entity lock made **exclusive** (patched in this test
-    only), the same schedule closes the cycle R-3 asked about. The review cannot join the share lockers, so it queues
-    behind the edit's `FOR UPDATE` (the third edge); the edit waits on the reveal; the reveal, released, waits on the
-    review's `ki` lock. The gates, snapshots, driver-failure capture and deadlock counter must each report it, which shows
+    only), the same schedule closes a cycle. The review already holds its entity share lock (E1-C1), so the exclusive guard
+    is an upgrade that waits on the reveal, which also holds a share; the edit waits on the reveal too; the reveal,
+    released toward its `ki` lock, waits on the review, which holds `ki`: review -> reveal -> review. The gates, snapshots, driver-failure capture and deadlock counter must each report it, which shows
     the passing R-3 test above is not a vacuous pass."""
     import dnd_ai.commands.knowledge as knowledge_commands
 
@@ -594,11 +606,12 @@ def test_r3_control_an_exclusive_review_entity_lock_would_deadlock_on_this_sched
     seen = run_schedule(sc, pool, exclusive_review_lock=True)
     by_step = {snap["step"]: snap for snap in seen["snaps"].taken}
     waiting = by_step["4a_review_released_toward_entity"]
-    # before the reveal was released: the third edge exists. The review is queued behind the *edit* (it did not join the
-    # share lockers, its request is exclusive), the edit is queued on the reveal, and the reveal is about to ask for ki
+    # before the reveal was released: the review (which already holds a share) waits on the reveal for its exclusive
+    # upgrade, the edit is queued on the reveal, and the reveal is about to ask for ki, which the review holds
     assert not seen["review_finished_before_reveal_released"], waiting
     assert waiting["backends"]["review"]["wait"].startswith("Lock/"), waiting
-    assert waiting["backends"]["review"]["blocked_by"] == ["edit"], waiting
+    # E1-C1: the review holds a share already, so the exclusive guard is an upgrade that waits on the reveal's share
+    assert waiting["backends"]["review"]["blocked_by"] == ["reveal"], waiting
     assert waiting["backends"]["edit"]["blocked_by"] == ["reveal"], waiting
     assert waiting["backends"]["reveal"]["blocked_by"] == [], waiting
     # then 40P01 only (PostgreSQL's victim is not pinned: the queued edit can be the first, after which the review and the
