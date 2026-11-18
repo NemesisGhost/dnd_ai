@@ -46,7 +46,11 @@ from dnd_ai.domain.authorization import AuthorizationPlan, Requirement
 from dnd_ai.domain.authorization_requirements import judged_requirement
 from dnd_ai.domain.context_assembly import GM_BRIEF, OBSERVER_SUMMARY, PLAYER_SUMMARY
 
-from .access import require_campaign_capability, route_capability_requirement
+from .access import (
+    active_account_requirement,
+    require_campaign_capability,
+    route_capability_requirement,
+)
 from .ai_npc import _resolve_provider
 from .deps import end_request_transaction, get_connection, get_engine
 from .errors import ApiError, ForbiddenError
@@ -89,6 +93,9 @@ def synthesis_requirements(*, actor_user_id: uuid.UUID, audience_tier: str) -> R
             requirements.append(
                 judged_requirement("synthesis.gm_brief.canon.edit", decide_gm_brief)
             )
+        # R01 F-4: the caller's account must be active at each transaction's final check. Last, so every
+        # earlier refusal (route 404/403, the tier's 403) keeps its precedence.
+        requirements.append(active_account_requirement())
         return requirements
 
     return factory
@@ -159,6 +166,10 @@ def request_campaign_synthesis_endpoint(
             character_id=body.requesting_character_id,
             party_id=body.requesting_party_id,
         )
+        # R01 F-4: the tier's and the account requirement join the request's final check (the route's is on the plan).
+        for requirement in requirements():
+            if not requirement.name.startswith("route."):
+                plan.require(connection, requirement)
         plan.require(
             connection,
             party_perspective_requirement(
@@ -172,6 +183,10 @@ def request_campaign_synthesis_endpoint(
     # observer_summary: baseline campaign.view already checked; no further
     # authorization, and the request's own character_id/party_id are never
     # forwarded — see this module's own docstring.
+    if body.audience_tier == OBSERVER_SUMMARY:
+        for requirement in requirements():
+            if not requirement.name.startswith("route."):
+                plan.require(connection, requirement)
 
     # Authorization (including the party-perspective read above) is decided: judge it in one final
     # statement, then end the request transaction before the provider is called.

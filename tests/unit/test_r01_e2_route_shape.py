@@ -172,12 +172,22 @@ def test_the_factories_return_fresh_requirement_objects_on_every_call() -> None:
     user, character = uuid.uuid4(), uuid.uuid4()
     npc = ai_npc.npc_turn_requirements(actor_user_id=user, character_id=character)
     first, second = npc(), npc()
-    assert len(first) == len(second) == 2
+    # R01 F-4: route, character interact, then the active-account requirement
+    assert [r.name for r in first] == [
+        "route.character.interact",
+        "npc_turn.character.interact",
+        "account.active",
+    ]
+    assert len(first) == len(second) == 3
     assert all(a is not b for a, b in zip(first, second, strict=True))
     synthesis = ai_synthesis.synthesis_requirements(actor_user_id=user, audience_tier="gm_brief")
-    assert len(synthesis()) == 2
+    assert [r.name for r in synthesis()] == [
+        "route.campaign.view",
+        "synthesis.gm_brief.canon.edit",
+        "account.active",
+    ]
     assert all(a is not b for a, b in zip(synthesis(), synthesis(), strict=True))
     observer = ai_synthesis.synthesis_requirements(
         actor_user_id=user, audience_tier="observer_summary"
     )
-    assert [r.name for r in observer()] == ["route.campaign.view"]
+    assert [r.name for r in observer()] == ["route.campaign.view", "account.active"]

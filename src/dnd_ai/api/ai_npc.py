@@ -56,7 +56,11 @@ from dnd_ai.domain.ai_provider import AiProvider, OpenAiCompatibleProvider
 from dnd_ai.domain.authorization import AuthorizationPlan, Requirement
 from dnd_ai.domain.authorization_requirements import judged_requirement
 
-from .access import require_campaign_capability, route_capability_requirement
+from .access import (
+    active_account_requirement,
+    require_campaign_capability,
+    route_capability_requirement,
+)
 from .deps import end_request_transaction, get_connection, get_engine
 from .errors import ApiError, ForbiddenError
 from .r01_route_plans import get_authorization_plan
@@ -127,6 +131,9 @@ def npc_turn_requirements(
                 actor_user_id=actor_user_id,
             ),
             judged_requirement("npc_turn.character.interact", decide_interact),
+            # R01 F-4: the account must be active at each transaction's final check. After the route and
+            # character requirements so their refusals keep precedence.
+            active_account_requirement(),
         ]
 
     return factory

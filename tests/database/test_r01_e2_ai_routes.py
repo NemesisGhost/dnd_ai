@@ -1337,3 +1337,107 @@ def test_c2_a_complete_player_summary_is_judged_on_the_perspective(sc: Scene) ->
     with pytest.raises(DomainAuthorizationError):
         direct_summary(sc, provider=provider)
     assert provider.calls == 0 and counts(sc) == NOTHING_KEPT
+
+
+# =====================================================================================================================
+# F-4: the caller's account must be active at every final check (plan 2.1; the E3/E4 `active_account_requirement()`)
+# =====================================================================================================================
+
+ACCOUNT_ROUTES = ("npc_turn", "gm_brief", "player_summary", "observer_summary")
+
+
+def set_account_status(sc: Scene, user: uuid.UUID, status: str) -> None:
+    """A bare lifecycle UPDATE of the caller's account: no role, membership, party or campaign row changes."""
+    with sc.engine.begin() as c:
+        c.execute(
+            text(
+                "UPDATE security.users SET lifecycle_status_id = (SELECT lifecycle_status_id "
+                "FROM core.lifecycle_statuses WHERE code = :s) WHERE user_id = :u"
+            ),
+            {"s": status, "u": user},
+        )
+
+
+def account_caller(sc: Scene, route: str) -> uuid.UUID:
+    caps = (*BASE_CAPS, "canon.edit") if route == "gm_brief" else BASE_CAPS
+    return persona(sc, "Account Caller", caps, "owner")
+
+
+def account_call(
+    sc: Scene, pool: Pool, user: uuid.UUID, provider: FakeAiProvider, route: str
+) -> Any:
+    if route == "npc_turn":
+        return turn(sc, pool, user, provider)
+    return synth(sc, pool, user, provider, route)
+
+
+def account_provider(route: str, **kwargs: Any) -> Spy:
+    return Spy(dialogue="PROVIDER-OUTPUT", reveal_first_candidate=route == "npc_turn", **kwargs)
+
+
+@pytest.mark.parametrize("route", ACCOUNT_ROUTES)
+def test_f4_an_active_account_control_succeeds_through_every_final_check(
+    route: str, sc: Scene, pool: Pool
+) -> None:
+    """Control: the same call, with the account active, passes R, T1 and T2 and keeps its output."""
+    set_sensitivity(sc, "public")
+    user = account_caller(sc, route)
+    spy = account_provider(route)
+    response = account_call(sc, pool, user, spy, route)
+    assert code(response) == 200, response.text
+    assert spy.calls == 1
+    assert counts(sc)["requests"] == 1 and counts(sc)["outputs"] == 1, counts(sc)
+
+
+@pytest.mark.parametrize("phase", ("request", "t1", "t2"))
+@pytest.mark.parametrize("route", ACCOUNT_ROUTES)
+def test_f4_an_account_deactivated_before_each_final_check_is_refused_with_the_established_404(
+    route: str, phase: str, sc: Scene, pool: Pool
+) -> None:
+    """The gate stops the phase's own final statement (after every earlier statement of that transaction); the account
+    is deactivated there and committed; the final snapshot must see it. R refuses and T1 never starts; T1 refuses and the
+    provider is never called; T2 refuses, withholds the provider output and rolls its effects back while T1 stays."""
+    set_sensitivity(sc, "public")
+    user = account_caller(sc, route)
+    spy = account_provider(route)
+    nth = {"request": 1, "t1": 2, "t2": 3}[phase]
+    t1_started = T1StartMarker(pool.engine)
+    with t1_started, NthGate(pool.engine, FINAL_STATEMENT, nth) as gate:
+        request = gate.track(
+            run_in_thread("account", lambda: account_call(sc, pool, user, spy, route))
+        )
+        gate.wait_reached()
+        assert gate.matched is not None and re.search(FINAL_STATEMENT, gate.matched)
+        assert spy.calls == (1 if phase == "t2" else 0)
+        set_account_status(sc, user, "inactive")
+        gate.release()
+        assert request.done.wait(30.0)
+    response = request.result
+    assert (code(response), error_of(response)) == (404, "not_found"), response.text
+    assert "PROVIDER-OUTPUT" not in response.text
+    assert spy.calls == (1 if phase == "t2" else 0)
+    # R and T1 keep nothing; T2 keeps the committed T1 (the disclosure it was authorized for) and nothing of T2
+    assert counts(sc) == (DISCLOSED_ONLY if phase == "t2" else NOTHING_KEPT), counts(sc)
+    if phase == "request":
+        assert t1_started.seen == [], t1_started.seen
+    assert idle_in_transaction(sc.engine) == 0
+    # the same account, reactivated, completes through the normal path
+    set_account_status(sc, user, "active")
+    retry = account_provider(route)
+    again = account_call(sc, pool, user, retry, route)
+    assert code(again) == 200, again.text
+    assert retry.calls == 1
+
+
+@pytest.mark.parametrize("route", ACCOUNT_ROUTES)
+def test_f4_a_caller_deactivated_before_the_request_is_refused_before_t1(
+    route: str, sc: Scene, pool: Pool
+) -> None:
+    """An account already inactive when the call starts is refused by the request's final check: the provider is never
+    called and nothing is written."""
+    user = account_caller(sc, route)
+    set_account_status(sc, user, "inactive")
+    spy = account_provider(route)
+    response = account_call(sc, pool, user, spy, route)
+    assert code(response) in (401, 403, 404), response.text
+    assert spy.calls == 0 and counts(sc) == NOTHING_KEPT
