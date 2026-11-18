@@ -1048,6 +1048,9 @@ class AuthoritySnapshot:
     subject_gm_assignment: uuid.UUID | None = None
     #: R01 E2: the declared party perspective's facts, from the same statement and MVCC snapshot. `None` unless declared.
     perspective: PerspectiveResult | None = None
+    #: R01 E3-D5: whether the caller's account is `active` at the snapshot, from the same statement and MVCC snapshot,
+    #: with no row lock. `None` unless declared (`with_account`).
+    account_active: bool | None = None
 
 
 _LIVE_REVELATIONS_IN_STATEMENT_SQL = LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL.replace(
@@ -1394,6 +1397,23 @@ _PERSPECTIVE_COLUMNS = """
                    AND pm.effective_period @> (SELECT key FROM perspective_clock)) AS perspective_member_now
 """
 
+# R01 E3-D5: the caller's account lifecycle, as an opt-in CTE of the same statement. The predicate is the one the world
+# and reveal sources already use (`core.lifecycle_statuses.code = 'active'`). A plain read: no row lock.
+_ACCOUNT_CTES = """
+    acct AS (
+        SELECT EXISTS (
+            SELECT 1
+            FROM security.users au
+            JOIN core.lifecycle_statuses auls ON auls.lifecycle_status_id = au.lifecycle_status_id
+            WHERE au.user_id = :user_id AND auls.code = 'active'
+        ) AS active
+    )
+"""
+
+_ACCOUNT_COLUMNS = """
+        (SELECT active FROM acct) AS account_active
+"""
+
 _SUBJECT_GM_COLUMNS = """
         (SELECT membership_role_id FROM subject_gm) AS subject_gm_assignment
 """
@@ -1458,6 +1478,7 @@ def _authority_snapshot_sql(
     with_reveal: bool,
     with_subject_gm: bool = False,
     with_perspective: bool = False,
+    with_account: bool = False,
 ) -> str:
     ctes = [f"clock AS MATERIALIZED (SELECT {_INSTANT_SQL[instant]} AS t_auth)", _ACCESS_CTES]
     columns = [
@@ -1477,6 +1498,9 @@ def _authority_snapshot_sql(
     if with_perspective:
         ctes.append(_PERSPECTIVE_CTES)
         columns.append(_PERSPECTIVE_COLUMNS)
+    if with_account:
+        ctes.append(_ACCOUNT_CTES)
+        columns.append(_ACCOUNT_COLUMNS)
     return "WITH " + ",\n".join(part.strip() for part in ctes) + "\nSELECT " + ",\n".join(columns)
 
 
@@ -1490,6 +1514,7 @@ def read_authority_snapshot(
     with_reveal: bool = False,
     subject_gm_membership_id: uuid.UUID | None = None,
     perspective: tuple[uuid.UUID, uuid.UUID] | None = None,
+    with_account: bool = False,
     as_of: Instant = None,
 ) -> AuthoritySnapshot:
     """Read the declared authority sources in ONE statement and return them with the instant expiry
@@ -1514,6 +1539,7 @@ def read_authority_snapshot(
         with_reveal=with_reveal,
         with_subject_gm=subject_gm_membership_id is not None,
         with_perspective=perspective is not None,
+        with_account=with_account,
     )
     parameters: dict[str, object] = {"campaign_id": campaign_id, "user_id": user_id}
     if instant == "explicit":
@@ -1564,6 +1590,7 @@ def read_authority_snapshot(
         )
         if perspective is not None
         else None,
+        account_active=bool(row["account_active"]) if with_account else None,
     )
 
 

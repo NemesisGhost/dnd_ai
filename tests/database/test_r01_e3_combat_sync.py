@@ -311,6 +311,25 @@ def unarchive_campaign(sc: Scene) -> None:
     )
 
 
+def _set_account_status(sc: Scene, code_: str) -> None:
+    _exec(
+        sc,
+        "UPDATE security.users SET lifecycle_status_id = "
+        "(SELECT lifecycle_status_id FROM core.lifecycle_statuses WHERE code = :s) WHERE user_id = :u",
+        s=code_,
+        u=sc.f.gm_user_id,
+    )
+
+
+def deactivate_account(sc: Scene) -> None:
+    """R01 E3-D5: the caller's account is deactivated (no role, membership or campaign row changes)."""
+    _set_account_status(sc, "inactive")
+
+
+def reactivate_account(sc: Scene) -> None:
+    _set_account_status(sc, "active")
+
+
 # change name -> (apply, undo, status the route refuses with)
 CHANGES: dict[str, tuple[Callable[[Scene], None], Callable[[Scene], None], int]] = {
     "role_revoked": (revoke_role, restore_role, 403),
@@ -318,6 +337,7 @@ CHANGES: dict[str, tuple[Callable[[Scene], None], Callable[[Scene], None], int]]
     "role_expired": (expire_role, restore_role, 403),
     "membership_ended": (end_membership, restore_membership, 404),
     "campaign_archived": (archive_campaign, unarchive_campaign, 404),
+    "account_deactivated": (deactivate_account, reactivate_account, 404),
 }
 
 
@@ -889,3 +909,273 @@ def test_a_role_or_membership_change_arriving_during_the_work_commits_after_it(
     later = sync(sc, op_id())
     assert code(later) == refused, later.text  # the change committed afterwards and now applies
     assert_cleaned_up(sc.pool)
+
+
+# =====================================================================================================================
+# E3-D5: the active-account check in every final snapshot (R, C including a replay, W and the fail transaction F)
+# =====================================================================================================================
+#
+# `account_deactivated` is one of CHANGES, so the parametrized tests above already run it through: W's first write and
+# W's final statement (full combat rollback, then an authorized retry applies once), C for a new operation (no job) and
+# for a replay (nothing disclosed), a failed job left unchanged, a replay once the account is gone and a lapse parked at
+# the round lock. An account deactivation fires no deferred trigger and reads no campaign row, so unlike a role revoke
+# or a membership end it does not wait for W's campaign `KEY SHARE` (tested below). These tests add what is specific to
+# the account check: R, F, no lock, and the order against a completed work.
+
+FAIL_ONCE_MESSAGE = "the completion bookkeeping failed once"
+
+
+def fail_the_work_once(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """A transient failure inside W (after the combat writes, so W must roll them all back): the first completion raises."""
+    real = integration_module._complete_sync_job
+    calls: list[int] = []
+
+    def flaky(*args: Any, **kwargs: Any) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError(FAIL_ONCE_MESSAGE)
+        real(*args, **kwargs)
+
+    monkeypatch.setattr(integration_module, "_complete_sync_job", flaky)
+    return calls
+
+
+def test_a_deactivated_account_is_refused_at_the_start_of_the_request_and_nothing_is_taken_or_written(
+    sc: Scene,
+) -> None:
+    deactivate_account(sc)
+    op = op_id()
+    with Recorder(sc.pool.engine) as recorder:
+        response = sync(sc, op)
+    assert (code(response), error_of(response)) == (404, "not_found"), response.text
+    assert not any(
+        "pg_advisory_lock" in s for s in recorder.events
+    )  # refused before the command took its lock
+    assert jobs(sc.pool, sc.system, op) == []
+    assert state(sc.f, sc.pool, sc.encounter, sc.system) == sc.base_state
+    assert_cleaned_up(sc.pool)
+
+
+def test_an_account_deactivated_after_authentication_is_refused_at_the_requests_final_check(
+    sc: Scene,
+) -> None:
+    op = op_id()
+    response = gated(sc, R_FINAL, lambda: sync(sc, op), lambda: deactivate_account(sc))
+    assert (code(response), error_of(response)) == (404, "not_found"), response.text
+    assert jobs(sc.pool, sc.system, op) == []
+    assert state(sc.f, sc.pool, sc.encounter, sc.system) == sc.base_state
+    assert_cleaned_up(sc.pool)
+
+
+def test_a_foundry_credential_whose_account_is_deactivated_is_refused_and_writes_nothing(
+    sc: Scene,
+) -> None:
+    consumed = pair(sc)
+    deactivate_account(sc)
+    op = op_id()
+    response = sync(sc, op, headers=with_token(consumed))
+    assert code(response) == 401, response.text  # refused by authentication, before any snapshot
+    assert jobs(sc.pool, sc.system, op) == []
+    assert state(sc.f, sc.pool, sc.encounter, sc.system) == sc.base_state
+    assert_cleaned_up(sc.pool)
+
+
+@pytest.mark.parametrize("final", (R_FINAL, C_FINAL, W_FINAL))
+def test_a_foundry_credential_whose_account_is_deactivated_after_authentication_is_refused_with_a_404(
+    final: int, sc: Scene
+) -> None:
+    """The credential authenticated (the approved start-of-request boundary), the account is deactivated afterwards: the
+    final snapshots, not authentication, refuse it, with the approved 404 and nothing written."""
+    consumed = pair(sc)
+    op = op_id()
+    response = gated(
+        sc,
+        final,
+        lambda: sync(sc, op, headers=with_token(consumed)),
+        lambda: deactivate_account(sc),
+    )
+    assert (code(response), error_of(response)) == (404, "not_found"), response.text
+    assert state(sc.f, sc.pool, sc.encounter, sc.system) == sc.base_state
+    assert_cleaned_up(sc.pool)
+
+
+@pytest.mark.parametrize("final", (R_FINAL, W_FINAL))
+def test_the_credential_boundary_is_unchanged_a_revocation_after_authentication_still_completes(
+    final: int, sc: Scene
+) -> None:
+    """Control for the D5 change: the account check does not turn the Foundry boundary into a per-statement check. A
+    connection revoked after authentication (the approved boundary) still completes while the account stays active."""
+    consumed = pair(sc)
+    response = gated(
+        sc,
+        final,
+        lambda: sync(sc, op_id(), headers=with_token(consumed)),
+        lambda: revoke_connection(sc, consumed),
+    )
+    assert code(response) == 201, response.text
+
+
+def test_a_deactivation_does_not_wait_for_the_work_that_holds_the_campaign_key_share(
+    sc: Scene,
+) -> None:
+    """Unlike a role revoke or a membership end, an account deactivation commits at once while W is past its first
+    campaign write: it neither waits for W nor makes W wait, and W's own final check then refuses (full rollback)."""
+    op = op_id()
+    with NthGate(sc.pool.engine, INTERACTION_INSERT, 1) as gate:
+        request = gate.track(run_in_thread("sync", lambda: sync(sc, op)))
+        gate.wait_reached()
+        started = time.monotonic()
+        deactivate_account(sc)
+        assert time.monotonic() - started < 5.0
+        gate.release()
+        assert request.done.wait(30.0)
+    assert code(request.result) == 404, request.result.text
+    assert state(sc.f, sc.pool, sc.encounter, sc.system) == sc.base_state
+    [job] = jobs(sc.pool, sc.system, op)
+    assert job["status"] == "in_progress" and job["attempts"] == 0
+    assert_cleaned_up(sc.pool)
+    reactivate_account(sc)
+    assert code(sync(sc, op)) == 201 and state(sc.f, sc.pool, sc.encounter, sc.system)["hp"] == 13
+
+
+def test_a_deactivation_committed_after_the_work_completes_applies_to_the_next_request(
+    sc: Scene,
+) -> None:
+    op = op_id()
+    assert code(sync(sc, op)) == 201
+    done = state(sc.f, sc.pool, sc.encounter, sc.system)
+    [job] = jobs(sc.pool, sc.system, op)
+    deactivate_account(sc)
+    replay = sync(sc, op)
+    fresh_op = op_id()
+    fresh = sync(sc, fresh_op, round_number=2)
+    assert code(replay) == code(fresh) == 404, (replay.text, fresh.text)
+    assert "sync_job_id" not in replay.text and jobs(sc.pool, sc.system, fresh_op) == []
+    assert (
+        state(sc.f, sc.pool, sc.encounter, sc.system) == done
+    )  # the completed work stands; nothing new
+    assert jobs(sc.pool, sc.system, op) == [job]
+    assert_cleaned_up(sc.pool)
+    reactivate_account(sc)
+    assert sync(sc, op).json()["replayed"] is True
+
+
+# --- the fail transaction F ------------------------------------------------------------------------------------------
+
+
+def test_the_fail_transaction_gets_its_own_final_check_before_committing_its_bookkeeping(
+    sc: Scene,
+) -> None:
+    """A domain failure in W (which therefore never reaches its own final statement) is recorded by F, and F's bookkeeping
+    is committed only after F's own final statement: R, C and F make three, F's being the last statement before COMMIT."""
+    op = op_id()
+    with Recorder(sc.pool.engine) as recorder:
+        response = sync(sc, op, **not_participant())
+    assert code(response) == 400, response.text
+    final = re.compile(FINAL_STATEMENT)
+    assert (
+        sum(1 for s in recorder.events if final.search(s)) == 3
+    )  # R, C, F (W failed before its own)
+    written = [
+        i for i, s in enumerate(recorder.events) if "INSERT INTO integration.delivery_attempts" in s
+    ]
+    assert written, "F never recorded the failed attempt"
+    assert any(
+        final.search(s) for s in recorder.events[written[-1] + 1 :]
+    )  # F's final follows its writes
+    [job] = jobs(sc.pool, sc.system, op)
+    assert job["status"] == "failed" and job["attempts"] == 1
+
+
+def test_a_deactivation_before_the_fail_transactions_final_check_refuses_it_and_keeps_the_job_retryable(
+    sc: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = fail_the_work_once(monkeypatch)
+    op = op_id()
+    # R, C and F make three final statements (W's own is never reached: its completion raised). Park F at its final.
+    response = gated(sc, 3, lambda: sync(sc, op), lambda: deactivate_account(sc))
+    assert (code(response), error_of(response)) == (404, "not_found"), response.text
+    assert (
+        FAIL_ONCE_MESSAGE not in response.text
+    )  # the domain error is withheld from an unauthorized caller
+    assert len(calls) == 1
+    # W rolled back every combat and completion write; F's bookkeeping was refused: the job stays in progress
+    assert state(sc.f, sc.pool, sc.encounter, sc.system) == sc.base_state
+    [job] = jobs(sc.pool, sc.system, op)
+    assert job["status"] == "in_progress" and job["attempts"] == 0 and job["error_message"] is None
+    assert_cleaned_up(sc.pool)
+    # authorized again: the retained in-progress job completes exactly once
+    reactivate_account(sc)
+    again = sync(sc, op)
+    assert code(again) == 201 and again.json()["replayed"] is False, again.text
+    after = state(sc.f, sc.pool, sc.encounter, sc.system)
+    assert after["turns"] == 1 and after["hp"] == 13 and after["attempts"] == 1
+    [job] = jobs(sc.pool, sc.system, op)
+    assert job["status"] == "completed" and job["attempts"] == 1 and job["succeeded"] == 1
+    assert sync(sc, op).json()["replayed"] is True  # and now a replay
+    assert state(sc.f, sc.pool, sc.encounter, sc.system)["hp"] == 13
+    assert_cleaned_up(sc.pool)
+
+
+def test_an_authorized_fail_transaction_still_records_the_failure_and_the_original_error_is_returned(
+    sc: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fail_the_work_once(monkeypatch)
+    op = op_id()
+    response = sync(sc, op)
+    assert code(response) == 500, (
+        response.text
+    )  # the original (unexpected) failure, not an authorization refusal
+    [job] = jobs(sc.pool, sc.system, op)
+    assert job["status"] == "failed" and job["attempts"] == 1
+    assert FAIL_ONCE_MESSAGE in job["error_message"]
+    # the combat is rolled back in full; the one failed attempt is the bookkeeping F committed after its final check
+    assert state(sc.f, sc.pool, sc.encounter, sc.system) == {**sc.base_state, "attempts": 1}
+    assert_cleaned_up(sc.pool)
+    assert code(sync(sc, op)) == 201  # the retried delivery completes the failed job once
+
+
+def test_the_fail_step_is_not_run_when_the_works_final_check_refuses_a_deactivated_account(
+    sc: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+    real = integration_module._fail_sync_job
+    monkeypatch.setattr(
+        integration_module, "_fail_sync_job", lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+    )
+    op = op_id()
+    response = gated(sc, W_FINAL, lambda: sync(sc, op), lambda: deactivate_account(sc))
+    assert code(response) == 404, response.text
+    assert calls == []
+    [job] = jobs(sc.pool, sc.system, op)
+    assert job["status"] == "in_progress" and job["attempts"] == 0
+    assert state(sc.f, sc.pool, sc.encounter, sc.system) == sc.base_state
+    assert_cleaned_up(sc.pool)
+
+
+# --- the snapshot input itself ---------------------------------------------------------------------------------------
+
+
+def test_the_account_input_is_opt_in_and_reads_without_a_row_lock(sc: Scene) -> None:
+    from dnd_ai.domain.access import read_authority_snapshot
+
+    def snapshot(**extra: Any) -> Any:
+        with sc.pool.engine.connect() as c:
+            c.execute(text("SET LOCAL lock_timeout = '2s'"))
+            return read_authority_snapshot(
+                c, user_id=sc.f.gm_user_id, campaign_id=sc.f.campaign_id, **extra
+            )
+
+    assert snapshot().account_active is None  # not declared: not read
+    assert snapshot(with_account=True).account_active is True
+    # a writer holding the account row `FOR UPDATE` neither blocks nor is blocked by the read
+    with sc.pool.engine.begin() as holder:
+        holder.execute(
+            text("SELECT user_id FROM security.users WHERE user_id = :u FOR UPDATE"),
+            {"u": sc.f.gm_user_id},
+        )
+        assert snapshot(with_account=True).account_active is True
+    deactivate_account(sc)
+    assert snapshot(with_account=True).account_active is False
+    reactivate_account(sc)
+    assert snapshot(with_account=True).account_active is True

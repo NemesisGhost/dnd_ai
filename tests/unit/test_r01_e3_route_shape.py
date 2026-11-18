@@ -3,7 +3,9 @@
 `POST /campaigns/{campaign_id}/integration/foundry/combat-sync` is finalized with family `engine_claim_work`. The
 handler finalizes the request plan (the early check), ends the request transaction, then calls the command. The command
 takes the operation's session advisory lock on ONE connection and runs a claim and a work transaction on it, each in its
-own `_planned_transaction` (a post-write plan whose final check is the last statement before COMMIT). The route has no
+own `_planned_transaction` (a post-write plan whose final check is the last statement before COMMIT), and a failed work
+is recorded by a third one (the fail transaction, E3-D5). Every set of requirements starts with the active-account check
+(`account.active`). The route has no
 reservation, so it is in no deferred-reservation registry.
 """
 
@@ -85,6 +87,11 @@ def test_the_handler_finalizes_the_request_plan_then_ends_the_transaction_then_c
     end = next(line for line, n in calls if n == "end_request_transaction")
     call = next(line for line, n in calls if n == "apply_foundry_combat_sync")
     assert finalize < end < call
+    # E3-D5: the request's own plan also judges the account, registered before it is finalized
+    assert names.count("active_account_requirement") == 1
+    account = next(line for line, n in calls if n == "active_account_requirement")
+    require = next(line for line, n in calls if n == "require")
+    assert require <= account < finalize
     uses = [
         n.lineno
         for n in ast.walk(function)
@@ -110,7 +117,7 @@ def test_the_command_runs_exactly_a_claim_and_a_work_planned_transaction_on_the_
             for item in n.items
         )
     ]
-    assert len(planned) == 2  # claim, work
+    assert len(planned) == 3  # claim, work, and (E3-D5) the fail transaction
     source = ast.unparse(function)
     # the one connection of the call: no second connection, no `authorized_transaction` (it opens its own)
     assert source.count("engine.connect()") == 1
@@ -119,7 +126,7 @@ def test_the_command_runs_exactly_a_claim_and_a_work_planned_transaction_on_the_
     assert (
         source.count(".commit(") == 1
     )  # only the advisory lock's own statement; C and W commit in their context
-    # only the fail step opens a plain transaction on the lock connection, and it comes after the work block
+    # no plain transaction is left on the lock connection: the fail step is planned too, so its bookkeeping is judged
     plain = [
         n
         for n in ast.walk(function)
@@ -131,9 +138,15 @@ def test_the_command_runs_exactly_a_claim_and_a_work_planned_transaction_on_the_
             for item in n.items
         )
     ]
-    assert len(plain) == 1
-    claim, work = sorted(planned, key=lambda w: w.lineno)
-    assert claim.end_lineno is not None and claim.end_lineno < work.lineno < plain[0].lineno
+    assert plain == []
+    claim, work, fail = sorted(planned, key=lambda w: w.lineno)
+    assert claim.end_lineno is not None and claim.end_lineno < work.lineno
+    assert work.end_lineno is not None and work.end_lineno < fail.lineno  # F follows W's rollback
+    # F is reached only when W's own final check did not refuse
+    assert "if not work.final_refused" in source
+    assert (
+        "fail.final_refused" in source
+    )  # and F's own refusal replaces the domain error for the caller
 
 
 def test_the_planned_transaction_finalizes_last_and_never_closes_the_connection() -> None:
@@ -178,10 +191,11 @@ def test_the_factory_returns_fresh_requirement_objects_on_every_call() -> None:
         principal=principal, actor_user_id=user, campaign_id=campaign
     )
     first, second = factory(), factory()
-    assert len(first) == len(second) == 1
-    assert first[0] is not second[0]
+    assert len(first) == len(second) == 2
+    assert all(a is not b for a, b in zip(first, second, strict=True))
+    assert first[0].name == "account.active" and first[0].account is True  # E3-D5, judged first
     assert (
-        first[0].name == "route.canon.edit"
+        first[1].name == "route.canon.edit"
     )  # the capability that authorizes the sync (not `integration.manage`)
 
 
@@ -210,13 +224,13 @@ def test_the_factory_carries_the_foundry_binding_and_scope_and_the_archived_refu
         actor_user_id=user,
         campaign_id=campaign,
     )
-    assert foundry()[0].name == "route.canon.edit.foundry"
+    assert foundry()[1].name == "route.canon.edit.foundry"
     session = MagicMock(spec=AuthenticatedPrincipal)
     session.auth_method = "oidc"
     plain = integration_api.combat_sync_requirements(
         principal=session, actor_user_id=user, campaign_id=campaign
     )
-    assert plain()[0].name == "route.canon.edit"
+    assert plain()[1].name == "route.canon.edit"
 
 
 def test_the_factory_is_built_from_the_route_requirement_with_canon_edit_and_no_archived_campaigns() -> (
@@ -227,3 +241,35 @@ def test_the_factory_is_built_from_the_route_requirement_with_canon_edit_and_no_
     assert integration_api._INTEGRATION_MANAGE_CAPABILITY == "canon.edit"
     assert "allow_archived_campaign=False" in source
     assert "_foundry_facts(principal, campaign_id, _COMBAT_SYNC_SCOPE)" in source
+
+
+def test_the_account_requirement_is_the_only_one_that_reads_the_account_and_refuses_with_a_404() -> (
+    None
+):
+    from datetime import UTC, datetime
+
+    from dnd_ai.api.access import active_account_requirement
+    from dnd_ai.api.errors import NotFoundError
+    from dnd_ai.domain.access import AuthoritySnapshot
+
+    requirement = active_account_requirement()
+    assert requirement.account is True and requirement.world_id is None and not requirement.reveal
+    now = datetime.now(UTC)
+
+    def snapshot(active: bool | None) -> AuthoritySnapshot:
+        return AuthoritySnapshot(
+            t_auth=now, isolation="read committed", access=None, account_active=active
+        )
+
+    assert requirement.predicate(snapshot(True)) is True
+    for undeclared_or_inactive in (False, None):
+        fresh = active_account_requirement()
+        assert fresh.predicate(snapshot(undeclared_or_inactive)) is False
+        assert isinstance(fresh.refusal(), NotFoundError)
+    # the route requirement does not declare the account, so only account.active makes the snapshot read it
+    other = integration_api.combat_sync_requirements(
+        principal=MagicMock(spec=AuthenticatedPrincipal, auth_method="oidc"),
+        actor_user_id=uuid.uuid4(),
+        campaign_id=uuid.uuid4(),
+    )()
+    assert [r.account for r in other] == [True, False]

@@ -1413,16 +1413,27 @@ def apply_foundry_combat_sync(
             # Step 3: fail. Only reached once step 2 has fully rolled back, and not when step 2's final
             # authorization check refused (R01 E3, decision E3-D2): nothing durable for a lapsed request.
             if not work.final_refused:
+                fail = _PlannedState()
                 try:
-                    with lock_connection.begin():
+                    with _planned_transaction(
+                        lock_connection,
+                        actor_user_id=actor_user_id,
+                        campaign_id=campaign_id,
+                        requirements=requirements,
+                        state=fail,
+                    ):
                         _fail_sync_job(
                             lock_connection, sync_job_id=sync_job_id, error_message=str(exc)
                         )
-                except Exception:
+                except Exception as fail_exc:
+                    if fail.final_refused:
+                        # R01 E3-D5: the failure bookkeeping is itself judged. A lapse refuses it: nothing
+                        # is recorded (the job stays `in_progress`, retryable), and the caller gets the
+                        # refusal, not the domain error, which an unauthorized caller must not see.
+                        raise fail_exc from None
                     # A failure recording the failure must never replace the original domain
                     # exception — the caller needs to see what step 2 actually raised, not a
                     # secondary bookkeeping error.
-                    pass
             raise
 
         return ApplyFoundryCombatSyncResult(

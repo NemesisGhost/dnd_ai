@@ -526,6 +526,8 @@ class Requirement:
     gm_subject: uuid.UUID | None = None
     #: R01 E2: `(party_id, character_id)` whose party perspective the snapshot must evaluate in its own statement.
     perspective: tuple[uuid.UUID, uuid.UUID] | None = None
+    #: R01 E3-D5: whether the snapshot must carry the caller's account lifecycle (`AuthoritySnapshot.account_active`).
+    account: bool = False
 
 
 @dataclass(frozen=True)
@@ -1112,6 +1114,7 @@ class AuthorizationPlan:
                 with_reveal=any(r.reveal for r in self._requirements),
                 subject_gm_membership_id=next(iter(gm_subjects)) if gm_subjects else None,
                 perspective=next(iter(perspectives)) if perspectives else None,
+                with_account=any(r.account for r in self._requirements),
                 as_of=FRESH_INSTANT,
             )
         finally:

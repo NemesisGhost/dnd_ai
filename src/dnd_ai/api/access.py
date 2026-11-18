@@ -217,6 +217,19 @@ def route_capability_requirement(
     return judged_requirement(name, decide, world_id=world_id if world_capability else None)
 
 
+def active_account_requirement() -> Requirement:
+    """R01 E3-D5: the caller's account must be `active` at the final check. An inactive (or vanished) account gets the
+    non-disclosing 404 the route gives a caller with no access. Opt-in: the snapshot reads the account lifecycle only
+    when a requirement declares it, and takes no row lock. Judged fresh per transaction: build one per plan."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        if snapshot.account_active is not True:
+            return NotFoundError()
+        return None
+
+    return judged_requirement("account.active", decide, account=True)
+
+
 class RecordAuthoringResponse(BaseModel):
     """The per-record eligibility fields every record read model carries
     (`dnd_ai.domain.record_authoring.RecordAuthoring`)."""

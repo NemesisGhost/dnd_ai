@@ -214,7 +214,12 @@ from dnd_ai.domain.authorization import AuthorizationPlan, Requirement
 from dnd_ai.queries.integration import InvalidSyncStateTargetError, get_sync_state_view
 
 from ._shared import timeline_world_id
-from .access import _foundry_facts, require_campaign_capability, route_capability_requirement
+from .access import (
+    _foundry_facts,
+    active_account_requirement,
+    require_campaign_capability,
+    route_capability_requirement,
+)
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import end_request_transaction, get_connection, get_engine, get_idempotency_key
@@ -579,6 +584,7 @@ def combat_sync_requirements(
 
     def factory() -> list[Requirement]:
         return [
+            active_account_requirement(),
             route_capability_requirement(
                 capability_code=_INTEGRATION_MANAGE_CAPABILITY,
                 allow_archived_campaign=False,
@@ -586,7 +592,7 @@ def combat_sync_requirements(
                 world_id=None,
                 actor_user_id=actor_user_id,
                 foundry=_foundry_facts(principal, campaign_id, _COMBAT_SYNC_SCOPE),
-            )
+            ),
         ]
 
     return factory
@@ -630,6 +636,7 @@ def apply_foundry_combat_sync_endpoint(
 
     # R01 E3: the request transaction is the early check, now finalized before it ends. The command then judges its
     # claim and its work transaction (and so every replay) with a final check of their own.
+    plan.require(connection, active_account_requirement())
     plan.finalize(connection)
     end_request_transaction(request)
 
