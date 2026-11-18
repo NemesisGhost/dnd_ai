@@ -32,27 +32,27 @@ implement it.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Connection
 
 from dnd_ai.commands.reference_corpus import (
     CitedPassage,
     PassageInput,
+    _grant_source_to_campaign_impl,
+    _ingest_reference_passages_impl,
     _register_source_document_impl,
     _remove_source_document_impl,
-    grant_source_to_campaign,
-    ingest_reference_passages,
-    retrieve_cited_passages,
-    revoke_source_campaign_grant,
+    _retrieve_cited_passages_impl,
+    _revoke_source_campaign_grant_impl,
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authorization import AuthorizationPlan
 
-from .access import require_campaign_capability
+from .access import active_account_requirement, require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
-from .deps import end_request_transaction, get_connection, get_engine
+from .deps import get_connection
 from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["reference-corpus"])
@@ -212,16 +212,17 @@ def register_source_document_endpoint(
     status_code=201,
 )
 def ingest_reference_passages_endpoint(
-    request: Request,
     campaign_id: uuid.UUID,  # noqa: ARG001
     source_document_id: uuid.UUID,
     body: IngestReferencePassagesRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_MANAGE_CAPABILITY))],  # noqa: ARG001
-    engine: Annotated[Engine, Depends(get_engine)],
+    plan: _Plan,
+    connection: Annotated[Connection, Depends(get_connection)],
 ) -> IngestReferencePassagesResponse:
-    end_request_transaction(request)
-    passage_ids = ingest_reference_passages(
-        engine,
+    # R01 E4: in the request transaction. Early check (dependency), the work, the response, then the final check last.
+    plan.require(connection, active_account_requirement())
+    passage_ids = _ingest_reference_passages_impl(
+        connection,
         source_document_id=source_document_id,
         passages=tuple(
             PassageInput(
@@ -235,7 +236,9 @@ def ingest_reference_passages_endpoint(
             for p in body.passages
         ),
     )
-    return IngestReferencePassagesResponse(reference_passage_ids=list(passage_ids))
+    response = IngestReferencePassagesResponse(reference_passage_ids=list(passage_ids))
+    plan.finalize(connection)  # R01: the last statement
+    return response
 
 
 @router.post(
@@ -244,22 +247,24 @@ def ingest_reference_passages_endpoint(
     status_code=201,
 )
 def grant_source_to_campaign_endpoint(
-    request: Request,
     campaign_id: uuid.UUID,
     source_document_id: uuid.UUID,
     body: GrantSourceToCampaignRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_MANAGE_CAPABILITY))],
-    engine: Annotated[Engine, Depends(get_engine)],
+    plan: _Plan,
+    connection: Annotated[Connection, Depends(get_connection)],
 ) -> GrantSourceToCampaignResponse:
-    end_request_transaction(request)
-    grant_id = grant_source_to_campaign(
-        engine,
+    plan.require(connection, active_account_requirement())
+    grant_id = _grant_source_to_campaign_impl(
+        connection,
         source_document_id=source_document_id,
         campaign_id=campaign_id,
         is_house_rule=body.is_house_rule,
         granted_by_user_id=access.user_id,
     )
-    return GrantSourceToCampaignResponse(reference_source_campaign_id=grant_id)
+    response = GrantSourceToCampaignResponse(reference_source_campaign_id=grant_id)
+    plan.finalize(connection)  # R01: the last statement
+    return response
 
 
 @router.delete(
@@ -267,14 +272,20 @@ def grant_source_to_campaign_endpoint(
     status_code=204,
 )
 def revoke_source_campaign_grant_endpoint(
-    request: Request,
-    campaign_id: uuid.UUID,  # noqa: ARG001
+    campaign_id: uuid.UUID,
     reference_source_campaign_id: uuid.UUID,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_MANAGE_CAPABILITY))],  # noqa: ARG001
-    engine: Annotated[Engine, Depends(get_engine)],
+    plan: _Plan,
+    connection: Annotated[Connection, Depends(get_connection)],
 ) -> None:
-    end_request_transaction(request)
-    revoke_source_campaign_grant(engine, reference_source_campaign_id=reference_source_campaign_id)
+    plan.require(connection, active_account_requirement())
+    # R01 E4 (F-E4-1): bound to the route campaign; another campaign's grant id is an unknown id (204, no write)
+    _revoke_source_campaign_grant_impl(
+        connection,
+        reference_source_campaign_id=reference_source_campaign_id,
+        campaign_id=campaign_id,
+    )
+    plan.finalize(connection)  # R01: the last statement
 
 
 @router.delete(
@@ -313,20 +324,26 @@ def remove_source_document_endpoint(
     status_code=200,
 )
 def retrieve_cited_passages_endpoint(
-    request: Request,
     campaign_id: uuid.UUID,
     body: RetrieveCitedPassagesRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability(_VIEW_CAPABILITY))],
-    engine: Annotated[Engine, Depends(get_engine)],
+    plan: _Plan,
+    connection: Annotated[Connection, Depends(get_connection)],
 ) -> RetrieveCitedPassagesResponse:
-    end_request_transaction(request)
-    passages = retrieve_cited_passages(
-        engine,
+    # R01 E4: the retrieval and its log in the request transaction. Each source was judged by the retrieval
+    # statement itself (one snapshot); the final check judges the route authority, last. A refusal rolls the log
+    # back and the response below is never returned, so no passage is disclosed.
+    plan.require(connection, active_account_requirement())
+    passages = _retrieve_cited_passages_impl(
+        connection,
         campaign_id=campaign_id,
         query_text=body.query_text,
         requested_by_user_id=access.user_id,
+        context_request_id=None,
         limit=body.limit,
     )
-    return RetrieveCitedPassagesResponse(
+    response = RetrieveCitedPassagesResponse(
         passages=[CitedPassageResponse.from_domain(p) for p in passages]
     )
+    plan.finalize(connection)  # R01: the last statement
+    return response

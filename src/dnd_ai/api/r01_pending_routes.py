@@ -12,17 +12,14 @@ exclusions** (`R01_EXCLUDED_WORLD_ROUTES`): neither pending nor finalized, never
 by R01, and their plan lookup fails closed. Routes outside R01's bound (account, authentication,
 Foundry pairing, timeline routes) are in no set."""
 
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
 #: (method, route path template) -> manifest family, for every pending route.
 # fmt: off
-R01_PENDING_ROUTES: Final = MappingProxyType(
+R01_PENDING_ROUTES: Final[Mapping[tuple[str, str], str]] = MappingProxyType(
     {
-        ("DELETE", "/campaigns/{campaign_id}/reference-corpus/grants/{reference_source_campaign_id}"): "engine_early_commit",
-        ("POST", "/campaigns/{campaign_id}/reference-corpus/query"): "engine_early_commit",
-        ("POST", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/grant"): "engine_early_commit",
-        ("POST", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/passages"): "engine_early_commit",
     }
 )
 # fmt: on
@@ -33,6 +30,7 @@ R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
     {
         ("DELETE", "/campaigns/{campaign_id}/foundry/connections/{foundry_connection_id}"),
         ("DELETE", "/campaigns/{campaign_id}/foundry/devices/{foundry_device_id}"),
+        ("DELETE", "/campaigns/{campaign_id}/reference-corpus/grants/{reference_source_campaign_id}"),
         ("DELETE", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}"),
         ("POST", "/campaigns/{campaign_id}/access-group-memberships/{access_group_membership_id}/remove"),
         ("POST", "/campaigns/{campaign_id}/access-groups"),
@@ -194,7 +192,10 @@ R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("POST", "/campaigns/{campaign_id}/quests/{quest_id}/resume"),
         ("POST", "/campaigns/{campaign_id}/quests/{quest_id}/suspend"),
         ("POST", "/campaigns/{campaign_id}/reactivate"),
+        ("POST", "/campaigns/{campaign_id}/reference-corpus/query"),
         ("POST", "/campaigns/{campaign_id}/reference-corpus/sources"),
+        ("POST", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/grant"),
+        ("POST", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/passages"),
         ("POST", "/campaigns/{campaign_id}/relationships/{relationship_id}/evolve"),
         ("POST", "/campaigns/{campaign_id}/resource-grants"),
         ("POST", "/campaigns/{campaign_id}/resource-grants/{resource_grant_id}/revoke"),

@@ -17,6 +17,7 @@ from tests.r01_manifest import (
     E1_ROUTES,
     E2_ROUTES,
     E3_ROUTES,
+    E4_ROUTES,
     MANIFEST_PATH,
     build_manifest,
     render,
@@ -112,7 +113,9 @@ def test_route_capability_only_routes_are_exactly_the_pinned_findings() -> None:
         for r in _committed()
         if r["family"] == "route_capability_only"
     }
-    assert found == ROUTE_CAPABILITY_ONLY
+    assert (
+        found == ROUTE_CAPABILITY_ONLY | E4_ROUTES
+    )  # R01 E4: the four corpus routes joined the family
 
 
 def test_early_commit_routes_are_exactly_the_engine_routes() -> None:
@@ -122,7 +125,7 @@ def test_early_commit_routes_are_exactly_the_engine_routes() -> None:
         if r["family"] == "engine_early_commit"
     }
     # R01 E1 moved the proposal-review route out of the early-commit family (plan 6.45): seven remain.
-    assert found == ENGINE_EARLY_COMMIT - E1_ROUTES - E2_ROUTES - E3_ROUTES
+    assert found == ENGINE_EARLY_COMMIT - E1_ROUTES - E2_ROUTES - E3_ROUTES - E4_ROUTES == set()
     assert {
         (str(r["method"]), str(r["path"]))
         for r in _committed()

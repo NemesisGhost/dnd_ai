@@ -132,7 +132,7 @@ def test_post_write_routes_write_none_of_the_readers_tables_except_the_reviewed_
         bad = (written & AUTHORITY_READER_TABLES) - REVIEWED_POST_WRITE_TABLES
         if bad:
             offenders.append(f"{record['method']} {record['path']}: {sorted(bad)}")
-    assert routes == 152, "the post-write families changed size; review this test"
+    assert routes == 156, "the post-write families changed size; review this test"
     assert offenders == []
 
 

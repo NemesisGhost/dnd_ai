@@ -559,9 +559,14 @@ def test_the_guard_is_installed_once_per_engine(one: Engine, g: Gate) -> None:
 
 
 def test_a_pending_route_gets_a_pending_plan_the_guard_admits(
-    scratch: Engine, one: Engine, g: Gate
+    scratch: Engine, one: Engine, g: Gate, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from dnd_ai.api import r01_route_plans
     from dnd_ai.api.r01_route_plans import begin_route_plan
+
+    # R01 E4: no production route is pending any more, so the mechanism is exercised through a TEST-ONLY pending route.
+    test_only = ("POST", "/campaigns/{campaign_id}/test-only-pending")
+    monkeypatch.setattr(r01_route_plans, "R01_PENDING_ROUTES", {test_only: "engine_early_commit"})
 
     connection = one.connect()
     connection.begin()
@@ -569,7 +574,7 @@ def test_a_pending_route_gets_a_pending_plan_the_guard_admits(
         plan = begin_route_plan(
             connection,
             method="POST",
-            route_path="/campaigns/{campaign_id}/reference-corpus/query",  # still pending (an engine route)
+            route_path=test_only[1],
             actor_user_id=g.o1_user_id,
             campaign_id=g.campaign_id,
         )

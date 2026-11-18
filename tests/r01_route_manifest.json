@@ -9679,16 +9679,16 @@
  {
   "audit": false,
   "command_markers": {
-   "dnd_ai.commands.reference_corpus.revoke_source_campaign_grant": []
+   "dnd_ai.commands.reference_corpus._revoke_source_campaign_grant_impl": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.reference_corpus.revoke_source_campaign_grant": [
+   "dnd_ai.commands.reference_corpus._revoke_source_campaign_grant_impl": [
     "ai.reference_source_campaigns"
    ]
   },
   "commands": [
-   "dnd_ai.commands.reference_corpus.revoke_source_campaign_grant"
+   "dnd_ai.commands.reference_corpus._revoke_source_campaign_grant_impl"
   ],
   "dependencies": [
    {
@@ -9700,15 +9700,14 @@
     "world_capability": null
    }
   ],
-  "early_commit": true,
-  "family": "engine_early_commit",
+  "early_commit": false,
+  "family": "route_capability_only",
   "handler": "dnd_ai.api.reference_corpus.revoke_source_campaign_grant_endpoint",
   "idempotency": [],
   "method": "DELETE",
   "path": "/campaigns/{campaign_id}/reference-corpus/grants/{reference_source_campaign_id}",
   "precheck_markers": [],
   "route_markers": [
-   "early_commit",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"
@@ -9718,17 +9717,17 @@
  {
   "audit": false,
   "command_markers": {
-   "dnd_ai.commands.reference_corpus.retrieve_cited_passages": []
+   "dnd_ai.commands.reference_corpus._retrieve_cited_passages_impl": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.reference_corpus.retrieve_cited_passages": [
+   "dnd_ai.commands.reference_corpus._retrieve_cited_passages_impl": [
     "ai.reference_retrieval_results",
     "ai.reference_retrievals"
    ]
   },
   "commands": [
-   "dnd_ai.commands.reference_corpus.retrieve_cited_passages"
+   "dnd_ai.commands.reference_corpus._retrieve_cited_passages_impl"
   ],
   "dependencies": [
    {
@@ -9740,15 +9739,14 @@
     "world_capability": null
    }
   ],
-  "early_commit": true,
-  "family": "engine_early_commit",
+  "early_commit": false,
+  "family": "route_capability_only",
   "handler": "dnd_ai.api.reference_corpus.retrieve_cited_passages_endpoint",
   "idempotency": [],
   "method": "POST",
   "path": "/campaigns/{campaign_id}/reference-corpus/query",
   "precheck_markers": [],
   "route_markers": [
-   "early_commit",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"
@@ -9836,16 +9834,16 @@
  {
   "audit": false,
   "command_markers": {
-   "dnd_ai.commands.reference_corpus.grant_source_to_campaign": []
+   "dnd_ai.commands.reference_corpus._grant_source_to_campaign_impl": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.reference_corpus.grant_source_to_campaign": [
+   "dnd_ai.commands.reference_corpus._grant_source_to_campaign_impl": [
     "ai.reference_source_campaigns"
    ]
   },
   "commands": [
-   "dnd_ai.commands.reference_corpus.grant_source_to_campaign"
+   "dnd_ai.commands.reference_corpus._grant_source_to_campaign_impl"
   ],
   "dependencies": [
    {
@@ -9857,15 +9855,14 @@
     "world_capability": null
    }
   ],
-  "early_commit": true,
-  "family": "engine_early_commit",
+  "early_commit": false,
+  "family": "route_capability_only",
   "handler": "dnd_ai.api.reference_corpus.grant_source_to_campaign_endpoint",
   "idempotency": [],
   "method": "POST",
   "path": "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/grant",
   "precheck_markers": [],
   "route_markers": [
-   "early_commit",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"
@@ -9875,16 +9872,16 @@
  {
   "audit": false,
   "command_markers": {
-   "dnd_ai.commands.reference_corpus.ingest_reference_passages": []
+   "dnd_ai.commands.reference_corpus._ingest_reference_passages_impl": []
   },
   "command_scope_markers": [],
   "command_writes": {
-   "dnd_ai.commands.reference_corpus.ingest_reference_passages": [
+   "dnd_ai.commands.reference_corpus._ingest_reference_passages_impl": [
     "ai.reference_passages"
    ]
   },
   "commands": [
-   "dnd_ai.commands.reference_corpus.ingest_reference_passages"
+   "dnd_ai.commands.reference_corpus._ingest_reference_passages_impl"
   ],
   "dependencies": [
    {
@@ -9896,15 +9893,14 @@
     "world_capability": null
    }
   ],
-  "early_commit": true,
-  "family": "engine_early_commit",
+  "early_commit": false,
+  "family": "route_capability_only",
   "handler": "dnd_ai.api.reference_corpus.ingest_reference_passages_endpoint",
   "idempotency": [],
   "method": "POST",
   "path": "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}/passages",
   "precheck_markers": [],
   "route_markers": [
-   "early_commit",
    "reader:access_context",
    "reader:world_authority",
    "reader:world_capability"

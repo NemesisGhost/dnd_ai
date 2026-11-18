@@ -686,6 +686,19 @@ E3_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {("POST", _CAMPAIGN + "/integration/foundry/combat-sync")}
 )
 
+#: R01 E4 migrates the four reference-corpus engine routes (ingest, grant, revoke, query) into their request transaction:
+#: dependency, the command on the request connection, the response built, then the final check last. They stop being
+#: `early_commit`, so `classify()` returns `route_capability_only` (the S4b family) and no pending route remains.
+_CORPUS = _CAMPAIGN + "/reference-corpus"
+E4_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CORPUS + "/sources/{source_document_id}/passages"),
+        ("POST", _CORPUS + "/sources/{source_document_id}/grant"),
+        ("DELETE", _CORPUS + "/grants/{reference_source_campaign_id}"),
+        ("POST", _CORPUS + "/query"),
+    }
+)
+
 #: The five world routes, an explicit **planned exclusion** from campaign-scoped R01 work (owner decision 4, plan
 #: 6.21.1; S5-F bookkeeping). Neither finalized nor pending, and not migrated or accepted: their plan lookup fails
 #: closed (`dnd_ai.api.r01_route_plans`). Their unkeyed-window follow-up is recorded in `docs/BACKLOG.md`.
@@ -724,6 +737,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | E1_ROUTES
     | E2_ROUTES
     | E3_ROUTES
+    | E4_ROUTES
 )
 
 #: R01 O-2 (design 1.3): the two revelation routes reserve **after** their own campaign `KEY SHARE`
@@ -816,12 +830,13 @@ def render_pending_routes(records: list[dict[str, Any]]) -> str:
         "by R01, and their plan lookup fails closed. Routes outside R01's bound (account, authentication,",
         'Foundry pairing, timeline routes) are in no set."""',
         "",
+        "from collections.abc import Mapping",
         "from types import MappingProxyType",
         "from typing import Final",
         "",
         "#: (method, route path template) -> manifest family, for every pending route.",
         "# fmt: off",
-        "R01_PENDING_ROUTES: Final = MappingProxyType(",
+        "R01_PENDING_ROUTES: Final[Mapping[tuple[str, str], str]] = MappingProxyType(",
         "    {",
     ]
     for method, path, family in pending:

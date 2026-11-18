@@ -31,7 +31,7 @@ from fastapi.routing import APIRoute
 from dnd_ai.api.access import FoundryRouteFacts, route_capability_requirement
 from dnd_ai.api.app import create_app
 from dnd_ai.api.errors import ForbiddenError, NotFoundError
-from tests.r01_manifest import _S4B_ROUTES, MANIFEST_PATH, _iter_api_routes
+from tests.r01_manifest import _S4B_ROUTES, E4_ROUTES, MANIFEST_PATH, _iter_api_routes
 from tests.unit.test_r01_s2_route_shape import USER, _access, _decide, _snapshot
 
 pytestmark = pytest.mark.unit
@@ -126,7 +126,9 @@ def test_the_s4b_inventory_resolves_to_21_handlers() -> None:
 def test_the_s4b_inventory_is_the_manifests_route_capability_only_family() -> None:
     records = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     family = {(r["method"], r["path"]) for r in records if r["family"] == "route_capability_only"}
-    assert family == set(_S4B_ROUTES)
+    assert (
+        family == set(_S4B_ROUTES) | E4_ROUTES
+    )  # R01 E4's four corpus routes classify the same way
 
 
 @pytest.mark.parametrize("route", sorted(_S4B_ROUTES))

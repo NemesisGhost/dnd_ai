@@ -64,6 +64,7 @@ from tests.r01_manifest import (
     E1_ROUTES,
     E2_ROUTES,
     E3_ROUTES,
+    E4_ROUTES,
     MANIFEST_PATH,
     MIGRATED_ROUTES,
     OUTSIDE_R01,
@@ -119,9 +120,10 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
     the 5 world routes are the explicit planned exclusions (neither finalized nor pending) and the 8 engine routes stay pending."""
     # R01 E1 (plan 6.45): the proposal-review route moved from pending to finalized: 180 / 7 / 5.
     # R01 E2 (plan 6.48): the two AI provider routes moved the same way: 182 / 5 / 5; R01 E3: the Foundry combat
-    # sync did too: 183 / 4 / 5.
-    assert len(R01_FINALIZED_ROUTES) == 183
-    assert len(R01_PENDING_ROUTES) == 4 and len(R01_EXCLUDED_WORLD_ROUTES) == 5
+    # sync did too: 183 / 4 / 5; R01 E4 (plan 6.54) the four reference-corpus routes: 187 / 0 / 5.
+    assert len(R01_FINALIZED_ROUTES) == 187
+    assert len(R01_PENDING_ROUTES) == 0 and len(R01_EXCLUDED_WORLD_ROUTES) == 5
+    assert set(R01_FINALIZED_ROUTES) >= E4_ROUTES and len(E4_ROUTES) == 4
     assert set(R01_FINALIZED_ROUTES) >= E3_ROUTES and len(E3_ROUTES) == 1
     assert set(R01_FINALIZED_ROUTES) >= E1_ROUTES and len(E1_ROUTES) == 1
     assert set(R01_FINALIZED_ROUTES) >= E2_ROUTES and len(E2_ROUTES) == 2
@@ -143,6 +145,7 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
         | E1_ROUTES
         | E2_ROUTES
         | E3_ROUTES
+        | E4_ROUTES
     }
     assert {
         path.rsplit("/campaigns/{campaign_id}/characters/{character_id}/", 1)[-1] for _, path in s2
@@ -201,6 +204,10 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
     assert {method for method, _ in R01_FINALIZED_ROUTES} == {"POST", "DELETE"}
     assert {route for route in R01_FINALIZED_ROUTES if route[0] == "DELETE"} == {
         ("DELETE", "/campaigns/{campaign_id}/reference-corpus/sources/{source_document_id}"),
+        (
+            "DELETE",
+            "/campaigns/{campaign_id}/reference-corpus/grants/{reference_source_campaign_id}",
+        ),  # R01 E4
         ("DELETE", "/campaigns/{campaign_id}/foundry/connections/{foundry_connection_id}"),
         ("DELETE", "/campaigns/{campaign_id}/foundry/devices/{foundry_device_id}"),
     }
@@ -210,7 +217,9 @@ def test_the_pending_counts_by_family_are_pinned() -> None:
     """8 distinct pending routes, the engine routes (S5-F: the five world routes moved to the explicit exclusion set; was 13: 192 at S1 less S2's six, S3's 71, S4's 54, S4b's 21, S5-D's 5, S5-E1's 3, S5-E2's 5, S5-E3's 1, S5-E4's 5, S5-E5's 6 and S5-E6's 2). The manifest
     has 192 inside records: S5-E5 removed the duplicated `@router.post` of the members route (B-4), so no
     (method, path) is registered twice any more. No route-capability-only route is pending any more."""
-    assert dict(Counter(R01_PENDING_ROUTES.values())) == {"engine_early_commit": 4}
+    assert (
+        dict(Counter(R01_PENDING_ROUTES.values())) == {}
+    )  # R01 E4: nothing is pending in production
     records = Counter(str(r["family"]) for r in _inside())
     assert records["access_management"] == 32, (
         "S5-E5 removed the duplicated members decorator (B-4)"
@@ -232,11 +241,10 @@ def test_routes_without_a_scope_helper_are_pinned_by_route() -> None:
         assert route not in R01_PENDING_ROUTES, route
         assert route in R01_FINALIZED_ROUTES, route
     assert ROUTE_CAPABILITY_ONLY == S4B_ROUTES
-    for route in ENGINE_EARLY_COMMIT - E1_ROUTES - E2_ROUTES - E3_ROUTES:
-        assert R01_PENDING_ROUTES[route] == "engine_early_commit", route
+    assert not (ENGINE_EARLY_COMMIT - E1_ROUTES - E2_ROUTES - E3_ROUTES - E4_ROUTES)
     for route in (
-        E1_ROUTES | E2_ROUTES | E3_ROUTES
-    ):  # R01 E1, E2 and E3: migrated, no longer pending
+        E1_ROUTES | E2_ROUTES | E3_ROUTES | E4_ROUTES
+    ):  # R01 E1, E2, E3 and E4: migrated, no longer pending
         assert route not in R01_PENDING_ROUTES and route in R01_FINALIZED_ROUTES, route
     assert len(ROUTE_CAPABILITY_ONLY) == 21
     assert len(ENGINE_EARLY_COMMIT) == 8
@@ -250,18 +258,24 @@ def test_pending_routes_are_not_presented_as_protected() -> None:
     assert route_is_pending("POST", resource_grants) is False
     groups = "/campaigns/{campaign_id}/access-groups"  # S5-E5: migrated
     delegations = "/campaigns/{campaign_id}/reveal-delegations"  # S5-E6: migrated
-    synthesis = "/campaigns/{campaign_id}/reference-corpus/query"  # still pending (an engine route)
+    synthesis = (
+        "/campaigns/{campaign_id}/reference-corpus/query"  # R01 E4: migrated, nothing is pending
+    )
     assert route_is_pending("POST", groups) is False
     assert route_is_pending("POST", delegations) is False
-    assert route_is_pending("POST", synthesis) is True
-    assert route_is_pending("post", synthesis) is True
+    assert route_is_pending("POST", synthesis) is False
+    assert route_is_pending("post", synthesis) is False
     assert route_is_pending("POST", "/campaigns/{campaign_id}/events") is False  # S4b
     assert route_is_pending("POST", "/admin/accounts") is False  # outside R01's bound
     assert ("POST", end) in R01_FINALIZED_ROUTES
     assert ("POST", resource_grants) in R01_FINALIZED_ROUTES
     assert ("POST", groups) in R01_FINALIZED_ROUTES
     assert ("POST", delegations) in R01_FINALIZED_ROUTES
-    assert ("POST", synthesis) not in R01_FINALIZED_ROUTES
+    assert ("POST", synthesis) in R01_FINALIZED_ROUTES
+    assert (
+        dict(R01_PENDING_ROUTES) == {}
+    )  # the production pending set is empty; the mechanism is covered by
+    # tests/unit/test_r01_e4_route_shape.py and the plan-guard module through a TEST-ONLY pending route
     assert route_is_pending("POST", "/campaigns/{campaign_id}/ownership-transfer") is False  # S5-E2
 
 

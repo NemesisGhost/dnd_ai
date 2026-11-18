@@ -175,7 +175,10 @@ def test_a_registered_finalized_route_gets_a_keyed_post_write_plan(
 def test_a_registered_route_that_is_pending_or_pre_write_is_unclassified(
     recorder: type[_Recorder], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    pending = next(iter(r01_pending_routes.R01_PENDING_ROUTES))
+    # R01 E4: the production pending set is empty, so the pending case uses a TEST-ONLY pending route
+    pending = ("POST", "/campaigns/{campaign_id}/test-only-pending")
+    monkeypatch.setattr(r01_pending_routes, "R01_PENDING_ROUTES", {pending: "engine_early_commit"})
+    monkeypatch.setattr(r01_route_plans, "R01_PENDING_ROUTES", {pending: "engine_early_commit"})
     keyed = next(iter(r01_pre_write_routes.R01_KEYED_PRE_WRITE_ROUTES))
     unkeyed = next(iter(r01_pre_write_routes.R01_UNKEYED_PRE_WRITE_ROUTES))
     for key in (pending, keyed, unkeyed):
