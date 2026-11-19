@@ -822,6 +822,15 @@ When appropriate, the UI can explain:
 
 Explanations are themselves filtered; they must not reveal a hidden intermediary.
 
+**Delivered (P15-C01-S02).** The explanation surface is the access manager's: the Access page's per-member
+explanation (`access.manage`, not the GM role), with revelation sources labelled "Revelation" and the member
+list's read-only **Revealed characters** section. A player or observer sees S01's tier wording only, at every
+character tier: no source, kind or count, and the portal sends them no request to the access endpoints. The member
+list and the open explanations are read again together on the next request (any Access change, or **Refresh
+access**), the list first and each open explanation after it, as two independent reads rather than one snapshot;
+there are no live updates. A read that failed is not announced as refreshed, an explanation that failed to reload
+says so and shows nothing from before, and Refresh access returns focus to the member's explanation toggle.
+
 ## 9. Search, lists, and non-disclosure
 
 - Search operates over an authorization-filtered index or query.

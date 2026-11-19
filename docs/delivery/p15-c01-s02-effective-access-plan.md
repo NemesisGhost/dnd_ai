@@ -1,0 +1,363 @@
+# D/P15-C01-S02 implementation plan: explain effective access
+
+**Status:** Opus plan prepared 2026-11-19; T01 implemented 2026-11-19, Luna review pending (see the [implementation record](#113-implementation-record)). Work-register row: [D/P15-C01-S02](work-register.md#p15-c01-s02), task [T01](work-register.md#p15-c01-s02-t01). Parent PR: [D/P15-C01](work-register.md#p15-c01).
+
+**Baseline.** Read at `cdfdf21b8efa91172372906bd676cfb2636d5c4c` ("P15-C01-S01: validate workspace breadcrumb names") on `phase15/completion`. The working tree held only Luna's uncommitted S01 final review record ([S01 plan §11.8](p15-c01-s01-public-tier-plan.md#118-l-1-final-independent-review-luna-2026-11-19)) and its register status cells. Both are preserved. While this plan was being written, those two edits were committed outside this session as `d6615b93d1aaa0e7fba8b08f84c224df178e6e41` ("docs: record P15-C01-S01 final review"). That commit is documentation only, so the implementation head the plan was read against is still `cdfdf21`. No repository-path `AGENTS.md` exists.
+
+**What establishes each statement.** Source reading at that baseline. No probe was run, and no application, test, schema or backend file changed. Statements marked "by reading" were not executed.
+
+**Contract sources.** [ACCESS_CONTROL §3q](../api/ACCESS_CONTROL.md#3q-effective-access-explanation-delivered-checkpoint-13) (the explanation, including its revelation paragraph), the A3b record in [shared-characters](shared-characters.md#a3b-implementation-record-2026-11-09) ("The portal does not render either yet (A6)"), the A6 row of that design's slice table, [portal behavior §8.3 and §9](../reference/portal-behavior.md#83-effective-access-explanation), the [S01 plan](p15-c01-s01-public-tier-plan.md) and the [grading rubric](grading.md).
+
+---
+
+## 1. Verified current behavior
+
+### 1.1 Which audience receives source information
+
+| Caller | What the backend exposes about *why* | Where |
+|---|---|---|
+| `access.manage` holder (campaign owner; any custom role holding it) | Every capability a selected member holds, each with its sources: `role`, `character_relationship`, `resource_grant`, `access_group`, `revelation`. It also lists active denials. A source is `{kind, label, target_display_name}`. | `GET /campaigns/{id}/members/{membership_id}/effective-access` (`api/access_overview.py`, `queries/effective_access.py`) |
+| Same | Per member: `roles`, `character_relationships`, `grants` (allow and deny), and since A3b **`revelations`** `[{character_id, character_display_name, audience_kind_code, audience_kind_display_name}]` | `GET /campaigns/{id}/access-overview` (`RevelationSummaryResponse`) |
+| Any other member (player, observer) | **No source information.** The character read gives only `view_tier` and `sections`. The bootstrap gives campaign-wide `roles`, `capabilities` and `character_perspectives`. None of these says which source grants a tier for a given character. | `GET /campaigns/{id}/characters/{id}`, `GET /auth/session` |
+
+Properties of the explanation, by reading the resolver:
+
+- It applies the same "currently true" filters as `resolve_access_context`, so it never lists a source the resolver would not honour. Revelations come from `LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL`, the resolver's own query.
+- A revelation is listed under both `character.discover` and `character.view_public_profile`. Its `label` is the audience-kind display name (`Member`, `Access group`, `Campaign, current members`, `Campaign, current and future members`), and `target_display_name` is the character's canonical name. It never carries the revelation id, reason, creator, group name or other audience. Two revelations are two entries.
+- Characters are identified **only by canonical name**. The explanation carries no `character_id`.
+- Denials are separate (`capability_code`, `target_type`, `target_display_name`). A source is still listed when a deny overrides it for one target.
+- An unknown or ended membership, or a caller without `access.manage`, gets the same non-disclosing 404 or 403.
+
+### 1.2 The portal at the baseline
+
+| File | Behavior |
+|---|---|
+| [`types/effectiveAccess.ts`](../../portal/src/types/effectiveAccess.ts) | Mirrors the explanation DTO. The `kind` comment omits `"revelation"`. |
+| [`components/EffectiveAccessPanel.tsx`](../../portal/src/components/EffectiveAccessPanel.tsx) | `SOURCE_KIND_LABELS` maps four kinds and has no `revelation` entry. By reading, a revelation therefore renders through the `humanizeCode` fallback as "Revelation: Access group (Mira)", which works by accident rather than by contract. Each row's disclosure owns its own `isOpen` state, and `EffectiveAccessContent` mounts (and fetches) only while that row is open. Denials render the raw `capability_code`. |
+| [`hooks/useEffectiveAccess.ts`](../../portal/src/hooks/useEffectiveAccess.ts) | Snapshot keyed on campaign, membership and request version. Superseded or aborted answers are ignored, 401 triggers session `reload()`, 403/404 becomes `unavailable`, and anything else becomes a retryable `error`. `no-store`. |
+| [`types/accessOverview.ts`](../../portal/src/types/accessOverview.ts) `CampaignAccessMember` | **No `revelations` field.** `api/accessOverview.ts` casts the JSON, so the server's `revelations` arrive but are never typed or rendered. |
+| [`pages/AccessPage.tsx`](../../portal/src/pages/AccessPage.tsx) | Each member card has Roles, Character access, Direct resource access (deny grants included, with display names), then `EffectiveAccessPanel`. Nothing about revelations. |
+| [`pages/CampaignAccessPage.tsx`](../../portal/src/pages/CampaignAccessPage.tsx), [`hooks/useAccessOverview.ts`](../../portal/src/hooks/useAccessOverview.ts), `AccessOverviewBoundary` | Every mutation's `onChanged` sets the campaign-scoped live-region announcement and calls the overview `retry()`. The retry moves the boundary to `loading` (no retained overview), which unmounts `AccessPage`, so **every open explanation closes and its data is dropped**. Reopening re-fetches. There is no refresh control in the success state. |
+| [`components/CharactersBrowser.tsx`](../../portal/src/components/CharactersBrowser.tsx), [`hooks/useWorldEntities.ts`](../../portal/src/hooks/useWorldEntities.ts) | The player list. Its state is per mount: returning from a detail page remounts and re-reads. A same-campaign filter or page change shows the previous page as `refreshing`, which is the same caller's last authorized answer. A campaign change clears it. Card `summary` is the server's D5-c projection. |
+| S01 surfaces (`CharacterBoundary`, `CharacterDetailPage`, `CharacterSheetRoutePage`, `WorldRecordWorkspace`) | Tier-only wording: "Only this character's public profile is available to you." at the public tier and "The full sheet is not available to you." at summary. **No source wording anywhere on player surfaces** (`grep` for "Revelation", "revealed", "shared with you" in `portal/src/pages` and `components/characters` finds none outside the Access and authoring code). |
+
+### 1.3 Reconciliation as it stands
+
+- **Access page, a change made on the page.** The list and every explanation are consistent afterwards, because each open explanation is unmounted and must be reopened. Reopening is a fresh read. Nothing stale can be shown, but the explanation the GM was looking at closes on every change.
+- **Access page, a change made elsewhere** (the HTTP API, which is the only revelation writer until [D/P15-C02-S02](work-register.md#p15-c02-s02), or another tab). Explanations opened afterwards are newer than the member list above them, so they can disagree, for example a list showing a relationship the explanation no longer cites. The page offers only a full browser reload to bring the list current.
+- **Player list and detail.** Each read stands alone. A detail read after revocation shows S01's tier or the non-disclosing unavailable page. Back remounts the list and re-reads it. No polling or push exists, and none is introduced.
+
+### 1.4 Transitions (verified by reading, unchanged by this slice)
+
+- `RouteSessionProvider` remounts per campaign.
+- `CampaignLayout` keys the outlet on campaign and selected perspective, so the Access page and every hook under it remount.
+- A 401 reloads the session.
+- Both access hooks drop superseded and aborted answers.
+- Losing `access.manage` turns the next overview read into 403, so the boundary shows `unavailable` and no member or explanation content remains.
+
+### 1.5 Contract gaps (exact)
+
+- **G-1. No caller-scoped explanation for a non-`access.manage` caller.** No route tells a player which source admits them to a character. The only signal is the tier, and the client must not infer a source from it: the public tier means "revelation only" today, but that is a resolver rule the client would be recreating. Under the boundaries for this slice, nothing about sources is shown to such a caller. *Smallest disposition:* record it as a follow-up candidate, not part of D/P15-C01. If the owner wants it, it needs its own backend design first: a caller-scoped read filtered under §8.3 ("must not reveal a hidden intermediary"), deciding whether a player may see a grant's free-text `reason`, a group's name, or an audience kind. No DTO field is proposed here.
+- **G-2. Explanation sources name characters, not ids.** The client cannot reliably match an explanation source to an overview row (duplicate canonical names are possible). *Disposition:* no backend change. S02 does not correlate the two reads. It keeps them consistent by refreshing them together (§2), not by matching.
+
+Neither gap blocks the supported outcome in §2.
+
+### 1.6 Inherited observations (not new slice obligations)
+
+- **O-1.** Explanation denials render the raw `capability_code`, and a whole-character deny shows `target_type` `entity` ("campaign.view — Entity (Mira)"). Deny display and reconciliation belong to [D/P15-C02-S04-T02](work-register.md#p15-c02-s04). Informational (0) and left unchanged here.
+- **O-2.** The overview and explanation name characters regardless of the access manager's own character denies (for example a self-deny). This is existing backend behavior of the administrative audience, which already enumerates every assignable character. S02 adds no new name source: the overview's `revelations` names are the same canonical names that `assignable_characters` already carries. Informational (0); S04's self-deny cases are the place to revisit it.
+- **O-3.** After any overview reload, keyboard focus is not returned to the control that triggered it. This is existing behavior for every Access mutation; the live-region announcement is the existing mitigation. It is recorded for [ax](work-register.md#ax). S02 adds no new focus mechanism (§11.1 rule).
+- **O-4.** The disclosure heading "Why {member} can see this" does not change when a denial is listed. It is existing copy, unchanged here.
+
+## 2. Supported outcome
+
+After T01:
+
+1. **Revelation sources are explained by contract.** The explanation labels `revelation` sources explicitly ("Revelation"), alongside the four existing kinds. Each source renders as `<kind label>: <label> (<target_display_name>)`, with no other field. An unknown future kind still renders through the humanized fallback.
+2. **The member list shows revealed characters.** Each member card gains a read-only **Revealed characters** section listing `character_display_name — audience_kind_display_name` per entry, in server order. Duplicates are not merged and the section has no controls. It renders no `character_id` or audience-kind code. When the list is empty it shows "No revealed characters."
+3. **List and explanation refresh together.** An open explanation is never older than the member list it sits in:
+   - The open/closed state of each member's explanation is held above the overview boundary, scoped to the campaign, so it survives an overview reload.
+   - Every overview reload, whether from a mutation on the page or from the new **Refresh access** control, unmounts each open explanation during `loading` and remounts it after the new overview succeeds. That forces a fresh explanation read.
+   - An explanation whose member is absent from the new overview is not rendered, and its open state is pruned.
+   - A campaign change or a perspective remount starts with every explanation closed.
+4. **Independent sources survive visibly.** When one source is revoked and another still admits the member, the refreshed list and the refreshed explanation both show the survivor and neither shows the revoked source.
+5. **Player surfaces stay source-free.** No player page renders any source kind, label or count, at any tier or across tier changes. S01's tier wording and normalized rendering are unchanged.
+
+## 3. Scope, exclusions and prerequisites
+
+**Prerequisites (met at baseline).**
+
+- D/P15-C01 entry criteria: [a4](work-register.md#a4) merged and [r01](work-register.md#r01) owner accepted.
+- No additional slice gate.
+- S01 passed independent review at `cdfdf21`, and S02 builds on that head. S02 does not depend on S01's unfinished browser, ax or owner obligations.
+- [a5c](work-register.md#a5c) is a separate review-only obligation and does not gate S02.
+
+**In scope (T01, `portal/` and `docs/` only).** These are listed in §4.
+
+**Excluded (owner in parentheses).**
+
+- Revelation list, create and revoke controls ([D/P15-C02-S02](work-register.md#p15-c02-s02)).
+- Reveal delegation ([S03](work-register.md#p15-c02-s03)).
+- Deny management and deny display wording, O-1 ([S04](work-register.md#p15-c02-s04)).
+- The copy UI ([copy-ui](work-register.md#copy-ui)), the audience preview ([preview](work-register.md#preview)) and any player-profile editing ([profile-authority](work-register.md#profile-authority)).
+- Any player-facing source explanation (G-1).
+- Polling, push, focus-restoration machinery (O-3), and any backend, schema, OpenAPI or Foundry change.
+- Links from revealed-character entries to the character.
+
+**Stop rule.** If the overview or explanation response at the base does not match §1.1, Sonnet stops and reports the request, the exact body and the blocked outcome, without changing backend code. Mismatches include absent `revelations` and a different revelation label shape.
+
+## 4. Affected files and interfaces
+
+**Types.**
+
+- `portal/src/types/accessOverview.ts`: add `AccessRevelationSummary {character_id, character_display_name, audience_kind_code, audience_kind_display_name}` and `revelations?: AccessRevelationSummary[]` on `CampaignAccessMember`.
+  - It is optional only so that existing fixtures compile. The A3b server always sends it, and an absent value renders as empty.
+  - `character_id` and `audience_kind_code` are typed for keys only, never as text, following the file's existing `target_id`/`user_id` comments.
+- `portal/src/types/effectiveAccess.ts`: add `"revelation"` to the `kind` comment.
+
+**Rendering.**
+
+- `components/EffectiveAccessPanel.tsx`:
+  - `SOURCE_KIND_LABELS.revelation = "Revelation"`.
+  - The panel becomes **controlled**: `isOpen` and `onToggle` props replace the local state. The unmount-on-close data rule is kept.
+  - Inside the open content's success state there is a **Refresh access** button, which calls a new `onRefresh` prop. The button is absent in the loading, unavailable and error states; the error state keeps its existing Retry, which re-reads the explanation only.
+- `pages/AccessPage.tsx`:
+  - A **Revealed characters** `h3` section after Direct resource access, with no controls.
+  - It passes the open state and `onToggle` from props into `EffectiveAccessPanel`.
+  - It wires `onRefresh` to `onChanged("Access information refreshed.")`, the existing announcement-and-retry path.
+- `pages/CampaignAccessPage.tsx`:
+  - Owns `openExplanations: {campaignId, ids: ReadonlySet<string>}`, derived as empty when the campaign does not match. This is the same scoping pattern as `announcement`.
+  - Passes it down, and prunes ids absent from the latest overview on each successful render (derived, not by effect, where practical).
+
+**Documentation in the same commit.**
+
+- `docs/api/ACCESS_CONTROL.md` §3q "Portal:" paragraph:
+  - revelation sources are labelled "Revelation";
+  - the overview's `revelations` render as a read-only **Revealed characters** list;
+  - open explanations survive an overview reload by re-reading, and **Refresh access** reloads both.
+  - It also states that a non-`access.manage` caller receives no source information (G-1).
+- `docs/reference/portal-behavior.md` §8.3, one short paragraph:
+  - the delivered explanation surface is the access manager's;
+  - players see tier wording only;
+  - list and explanation are refreshed together on the next request, with no live updates.
+- This plan's implementation record (§11.3).
+
+**Test files.**
+
+- Extend `components/EffectiveAccessPanel.test.tsx`, `pages/AccessPage.test.tsx`, `pages/CampaignAccessPage.test.tsx` and `api/accessOverview.test.ts` (only if fixtures there need the field).
+- Add `pages/CampaignAccessPage.effectiveAccess.integration.test.tsx` for the reconciliation cases.
+- Add the player-side cases to `App.characterRecord.test.tsx`.
+- Existing assertions may change only where a test drove the panel's former local state, or where a fixture gains `revelations`. Report any other changed existing assertion as a finding.
+
+## 5. Task commits
+
+The adopted sizing is kept: **one task commit, T01**, "Render authorized source labels and reconcile list/detail after revocation".
+
+The label, the list section and the refresh-together rule are one reviewable behavior. Splitting the controlled panel from the refresh wiring would leave a commit in which an overview reload either loses or retains explanations inconsistently. Splitting labels from reconciliation would leave the revelation list visible with no proof that it agrees with the explanation after revocation.
+
+## 6. Acceptance cases
+
+Mocked servers return exact §1.1 shapes. Each case checks both the DOM and the request log. "Markers" are distinctive values in keys the DTO does not define (`character_revelation_id`, `reason`, `created_by`, `group_name`), placed in an otherwise valid body.
+
+| # | Case | Expected |
+|---|---|---|
+| E1 | Explanation with revelation sources (two revelations of different kinds for Mira) | Under both conferred capabilities: "Revelation: Access group (Mira)" and "Revelation: Member (Mira)" as two entries each. The label comes from `SOURCE_KIND_LABELS`: removing the fallback must not change the text (unit) |
+| E2 | Unknown future kind `"future_source"` | Renders "Future Source: …" without throwing |
+| E3 | Marker keys in explanation sources and overview revelations | No marker renders. No `character_id` or `audience_kind_code` text renders |
+| E4 | Overview member with revelations / with `[]` / with the key absent | List shows `Mira — Access group` entries in server order, with duplicates kept / "No revealed characters." / same as `[]`. No button or link inside the section |
+| E5 | **Independent-source survival, change made on the page.** Mira holds a viewer relationship and an access-group revelation, and her explanation is open. Revoke the relationship through the existing control | One revoke request, then overview GET, then explanation GET, which is issued only after the overview succeeds. Afterwards: Character access no longer lists Mira; Revealed characters still lists Mira; the reopened explanation shows only Revelation sources for Mira; "Character access removed." is announced; the disclosure is still open |
+| E6 | **Independent-source survival, change made elsewhere.** Mira has a relationship and a revelation; the server state changes so the revelation is revoked; Refresh access | Overview and explanation re-read in that order. Revealed characters is empty, the relationship remains in both, and "Access information refreshed." is announced |
+| E7 | Last source revoked | No Mira entry in either read. If the member then holds no capability, the existing "holds no capability" text shows |
+| E8 | Revelation plus a whole-character deny on the same member | Explanation shows the revelation sources and the existing denial line. Overview shows the deny under Direct resource access. No new wording (O-1, O-4) |
+| E9 | Stale content during reload | While the overview is `loading` after a mutation or a refresh, no explanation text or source label from before is in the DOM |
+| E10 | Superseded explanation read: the explanation GET from before a refresh resolves after the refresh's reads | Its answer never renders |
+| E11 | Member removed elsewhere, then Refresh access | The card is gone and no explanation renders for it. Opening another member's explanation works normally, and the pruned id does not reopen if the member reappears in a later read |
+| E12 | Caller loses `access.manage` (overview 403 on refresh) | The existing unavailable presentation shows, with no member, revelation or explanation content |
+| E13 | 401 on overview or explanation | Session reload is invoked and no access content renders |
+| E14 | Campaign change with explanations open | The new campaign shows every explanation closed, and no explanation GET is sent for it until one is opened |
+| E15 | Multiple rows open | Each row's explanation is independent. Closing one unmounts only that one, and its content leaves the DOM |
+| E16 | **Player non-disclosure across tiers.** A revelation-only player goes public → summary (grant added) → public (grant revoked) → unavailable (revelation revoked), using Try again between reads | Each read renders S01's tier only. No "Revelation", "Access group", "Member", "shared", "revealed" or source count text appears at any step. No request goes to `/effective-access` or `/access-overview` |
+| E17 | **Player list/detail after revocation.** List shows Mira (revealed). Open Mira; the revelation is revoked server-side; Try again; then Back | Detail shows the non-disclosing unavailable page with the breadcrumb label dropped. Back re-reads the list, and the card is absent from the new answer. The list's URL state is kept |
+| E18 | Player list card after a tier change (D5-c) | After a grant is added, a fresh list read shows the server's live summary on the card; after it is revoked, the released summary. The client never chooses which |
+| E19 | Existing Access and character suites | Pass, with changes only as allowed in §4 |
+
+## 7. Verification
+
+**Automated, required for the T01 commit.**
+
+- From `portal/` in PowerShell (Vitest does not run from Git Bash here, per S01): `npm test`, `npm run lint`, `npm run build`.
+- From the root: `uv run python scripts/check_documentation.py` and `git diff --check`.
+
+No backend file changes, so `ruff`, `mypy`, `alembic check` and the shard runner are not required. A change outside `portal/` and `docs/` is out of scope: stop and report.
+
+Report first runs and reruns separately. Record focused files, total counts and any flaky rerun with its output. Include **one mutation probe**: make `CampaignAccessPage` stop carrying open state across reload, or render the explanation before the overview succeeds. E5 or E9 must fail. Restore the file and record SHA-256 before and after.
+
+**Proportionality.** `tests/database/test_api_effective_access.py`, `test_api_access_overview.py` and the A3b revelation-discovery suite already prove which sources exist and when they disappear. The portal tests prove only that each answer is rendered as itself, that the two reads are refreshed together, and that player surfaces stay source-free. They do not re-derive authorization.
+
+## 8. Browser, accessibility and owner obligations (separate events)
+
+None of these is claimed by T01 or its review.
+
+1. **[browser](work-register.md#browser)** at the integrated head, on namespaced throwaway fixtures with ports 8001/5174, never the owner's servers or campaign. Revelations and grants are created and revoked through the HTTP API.
+   - **GM persona:** E5 through the UI; E6 by revoking a revelation through the API, then Refresh access; E8 with a whole-character deny.
+   - **Player persona:** E16 and E17 with hard refreshes.
+   - Record status codes, network order (overview before explanation) and rendered text.
+2. **[ax](work-register.md#ax).**
+   - `aria-expanded` is correct after a reload.
+   - The Revealed characters `h3` is in reading order.
+   - Announcements are spoken for both a mutation and Refresh access.
+   - Record O-3 focus behavior after reload as observed.
+   - Narrow viewport and zoom reflow of the new section.
+3. **Owner.** Scoped acceptance stays at [actor-a](work-register.md#actor-a), after D/P15-C01 and D/P15-C02 merge.
+
+## 9. Intermediate states and read recovery
+
+- **One commit, so there is no intermediate repository state.** Before T01, the overview's `revelations` are unrendered and every explanation closes on reload. After T01 both are rendered and kept consistent.
+- **No writes are added.** Refresh access is a read. Existing mutations are unchanged, so no idempotency concern arises.
+- **Read recovery.**
+  - An explanation error keeps its existing Retry, which re-reads the explanation only.
+  - An overview error keeps the boundary's existing retry.
+  - Neither retains content from an earlier read.
+  - The window between the overview read and the explanation read is accepted under the "next request" contract and is not reconciled further (G-2).
+
+## 10. Decisions
+
+None blocks Sonnet if the recommendation is taken. D-1 is the one the owner should explicitly confirm.
+
+- **D-1. Audience of "explain effective access."** The backend explains sources only to `access.manage` holders (§1.1).
+  - *Recommendation:* S02 delivers the access manager's explanation (revelation labels, revealed-characters list, refresh-together). Player surfaces keep S01's tier wording and show no sources.
+  - The player-self explanation is recorded as gap G-1 and goes to a follow-up candidate outside D/P15-C01.
+  - Choosing otherwise requires a backend design and a new register item, not a change to this slice.
+- **D-2. Reconciliation mechanism.**
+  - *Recommendation:* hold open state above the overview boundary, and add one **Refresh access** read control routed through the existing announcement-and-retry path.
+  - *Alternative:* keep today's close-on-reload behavior and add no refresh. That is also never stale, but it cannot show survival without a manual reopen, and it leaves out-of-page changes reconcilable only by a full browser reload.
+- **D-3. Copy.** *Recommendation:*
+  - section **Revealed characters**;
+  - entry `Mira — Access group`;
+  - empty text "No revealed characters.";
+  - source kind **Revelation**;
+  - control **Refresh access**;
+  - announcement "Access information refreshed."
+
+  All of this is copy only and reversible.
+
+## 11. Handoffs
+
+### 11.1 Sonnet implementation instructions
+
+1. Start on `phase15/completion` at the commit that records this plan. Record that SHA as the base and record `git status --short`. Preserve unrelated work.
+2. Re-check §1.1 and §1.2 against the source at the base (the DTOs in `api/access_overview.py`, the four portal files). If an assumption fails, stop and report.
+3. Implement §4 as one commit, in this order:
+   1. types;
+   2. the panel label and controlled props, with tests E1–E3 and E15;
+   3. the Revealed characters section (E4);
+   4. lifted open state and Refresh access (E5–E14);
+   5. player cases E16–E18;
+   6. the two doc paragraphs.
+4. **Rules.**
+   - Never render a field outside `kind`, `label` and `target_display_name` for a source, or outside the two display names for a revelation entry.
+   - Never derive, infer or count sources on a player surface.
+   - Never correlate explanation sources with overview rows.
+   - Never keep explanation content mounted while the overview is loading.
+   - Add no polling, timers, push, focus machinery, links or controls beyond Refresh access.
+   - Do not touch S01's normalizer, tier rendering or breadcrumb publishers.
+   - Do not change backend, Foundry or migration files.
+   - Use existing class names and components. Add no CSS unless a reflow defect requires it.
+5. Run §7, keeping first runs and reruns separate. Commit as `P15-C01-S02-T01: explain revelation sources and refresh access together`, followed by the attribution lines. Do not push.
+6. Append to §11.3: the base SHA, the T01 head (read with `git log --grep`), the commands with results and counts, the mutation probe, any deviation from §4 with its reason, and any changed existing assertion. Update the S02 and T01 register status cells to "Implemented; Luna review pending".
+
+### 11.2 Luna independent review
+
+- **Boundary.** Base = the commit that records this plan (the parent of T01). Head = T01, or the last correcting commit. Review the whole range.
+- **Required evidence.**
+  1. Confirm the new types equal `RevelationSummaryResponse` and `EffectiveAccessSourceResponse` at the head, and that no other field is rendered.
+  2. Confirm by reading that no player surface renders a source and that no player route requests `/effective-access` or `/access-overview`.
+  3. Confirm that an explanation never renders while the overview is loading, and that its GET follows the overview's success.
+  4. Run `npm test`, `npm run lint`, `npm run build`, the doc check and `git diff --check`, reporting first runs and reruns separately.
+  5. Map E1–E19 to tests, with at least one independent mutation probe (for example, keep explanations mounted during loading, or drop the `revelation` label entry while asserting the exact text). Restore it and record SHA-256.
+  6. Check that the §3 exclusions were not entered, and that S01 files changed only where §4 names them.
+- **Verdict.** Use the [rubric](grading.md#severity-and-checkpoint-disposition), grading each finding separately. Distinguish new findings from O-1 to O-4 and G-1/G-2, which are inherited or recorded here. §8 events are not part of this verdict.
+
+### 11.3 Implementation record
+
+Recorded by Sonnet, 2026-11-19. Real-browser, accessibility, integrated-head CI, checkpoint-merge and owner events (§8) are not claimed here.
+
+**Base, plan commit and head.**
+
+- Pre-implementation base: `d6615b93d1aaa0e7fba8b08f84c224df178e6e41` ("docs: record P15-C01-S01 final review"), on `phase15/completion`. S01's reviewed production head is `cdfdf21`; `d6615b9` is documentation only. Before work, `git status --short` showed only this plan (untracked) and the register edits (modified). Both were preserved and are in the T01 commit. No `AGENTS.md`.
+- **This plan had no commit of its own.** It is committed together with T01 in one commit titled `P15-C01-S02-T01: explain revelation sources and refresh access together`; read it with `git log --oneline -1 --grep "P15-C01-S02-T01"`. Its SHA is not written inside itself and is reported in the handoff. There is no separate plan commit.
+- **Luna review range:** base `d6615b93d1aaa0e7fba8b08f84c224df178e6e41`, head = the T01 commit (or the last correcting commit). That range contains the plan, the register changes and the implementation. Nothing was pushed.
+
+**Source assumptions (§1, stop rule).** Re-read at the base: `RevelationSummaryResponse` (`character_id`, `character_display_name`, `audience_kind_code`, `audience_kind_display_name`) and `EffectiveAccessSourceResponse` (`kind`, `label`, `target_display_name`) in `src/dnd_ai/api/access_overview.py` equal the portal types; the overview carries `revelations` for every member. The stop rule was not triggered. Scope choices were taken as the plan recommends: the explanation is shown to `access.manage` holders only (not equated with the GM role), "Revealed characters", "Revelation" and "Refresh access". G-1 and G-2 keep their dispositions; no backend change.
+
+**What was implemented (`portal/` and `docs/` only).**
+
+- Types: `AccessRevelationSummary`; `revelations?` on `CampaignAccessMember` (optional only for older fixtures; absent renders as none); the `kind` comment names `revelation`.
+- `EffectiveAccessPanel`: `SOURCE_KIND_LABELS.revelation = "Revelation"`; the panel is controlled (`isOpen`, `onToggle`, `onRefresh`) and exposes `data-explain-toggle={membershipId}`; a **Refresh access** button appears only beside a loaded explanation (not in loading, unavailable or error; error keeps Retry, which re-reads only the explanation).
+- `AccessPage`: a read-only **Revealed characters** section (`Mira — Access group`, server order, duplicates kept, no control, no id or code; "No revealed characters." when empty or absent). Member cards are controlled `<details>` so an expanded card survives a reload (see deviation 2).
+- New `hooks/useAccessDisclosure.ts`: open cards and open explanations held as sets of membership ids, scoped to the campaign (another campaign reads as empty); only ids, never access data.
+- `CampaignAccessPage`: owns the disclosure above the boundary; `OverviewSettled`, rendered only inside a successful overview, prunes ids absent from the new list and confirms a pending refresh; `handleRefreshAccess` and `handleRefreshSettled`.
+- Docs: ACCESS_CONTROL §3q "Portal (P15-C01-S02)" paragraph (including G-1), portal-behavior §8.3 paragraph, the register rows, and this record.
+
+**How refresh correctness is met (by construction, then by test).**
+
+- A reload moves the boundary to `loading`, which unmounts every explanation (`EffectiveAccessContent`); its fetch is aborted by the existing hook cleanup. An explanation can therefore never be older than the list beside it, and each open explanation is read again only after the list read succeeded (E5, E6, E9 assert the request order).
+- Superseded and aborted answers are dropped by the existing hooks (`controller.signal.aborted`, request-version snapshot). A late answer from before a reload (E10) and a late answer for an explanation that was closed (E15) never render.
+- No old content is retained anywhere, so no stale-state notice is needed: while the list loads the page says "Loading access"; a failed list shows the boundary's error or unavailable page with no member, revelation or explanation content (E12, E13).
+- **Refresh is announced only after the list has been read again.** `Access list refreshed.` is set when the overview succeeds, not when the button is pressed, so a failed list read is never announced as refreshed. An explanation that then fails shows its own error with Retry and nothing from before; the announcement says only that the list was refreshed, which is true. Retry re-reads the explanation only (partial-failure test).
+- A member absent from the new list is pruned (card and explanation ids), so they do not reopen if they reappear (E11).
+- Campaign changes: the disclosure reads as empty for another campaign (E14); `CampaignLayout`'s existing keyed remount still applies.
+- **Focus.** The Refresh control is unmounted by the reload, so on success focus returns to that member's explanation toggle, or to the status line (now `tabIndex={-1}`) if the member is gone. This is only for Refresh access; mutations keep the existing O-3 behavior. If the list read fails, the boundary's own error page replaces the content and focus is on the page body, not on a stale element.
+- Not promised: same-snapshot consistency between the two reads, and no inference of source identity from display names (the portal never correlates an explanation source with an overview row).
+
+**Deviations from §4 (each with its reason).**
+
+1. **Announcement copy and timing.** §2/§6 and D-3 give "Access information refreshed." announced through the existing announce-and-retry path, i.e. at the click. The owner instruction for this task requires that a failed read is not presented as refreshed, so the text is `Access list refreshed.` and it is announced only after the list read succeeds. The mutation announcements are unchanged.
+2. **Member cards are controlled `<details>`.** The plan keeps explanation state above the boundary but did not say that the member card containing the explanation is itself closed by the reload (an uncontrolled `<details>` remounts closed), which would hide an "open" explanation. The card's open state is held beside it in the same hook. This also keeps cards open across mutation reloads, which is a visible behavior change for all Access changes.
+3. **Focus return and `tabIndex={-1}` on the status line** (Refresh access only), required by the instruction that refresh not leave focus on an unmounted control; §11.1 had said no focus machinery.
+4. **`AccessPage` props** `disclosure` and `onRefreshAccess` are optional; absent, it keeps its own disclosure and announces through `onChanged`. Production always passes them. This keeps the existing `AccessPage` tests unchanged.
+5. **New files** beyond §4's list: `hooks/useAccessDisclosure.ts` (the held state) and the player cases were added to `App.characterRecord.test.tsx` as planned.
+
+**Existing assertions changed.** `EffectiveAccessPanel.test.tsx` is rewritten to drive the now-controlled panel through a small stateful harness (this is the allowed "test drove the panel's former local state" change); its four original assertions are unchanged. No other existing assertion was changed. `AccessPage.test.tsx` and `App.characterRecord.test.tsx` only gained cases.
+
+**Acceptance coverage.**
+
+| Case | Where |
+|---|---|
+| E1, E2, E3 | `EffectiveAccessPanel.test.tsx` (label "Revelation" twice per capability; unknown kind; marker keys), `AccessPage.test.tsx` (overview markers) |
+| E4 | `AccessPage.test.tsx` "Revealed characters" (entries, empty, absent key, no control or link) |
+| E5, E9 | `CampaignAccessPage.effectiveAccess.integration.test.tsx`: revoke while an explanation is open; no explanation text and no explanation read while the list loads; order revoke → list → explanation; card and disclosure still open; announcement |
+| E6, E7 | same file: change made elsewhere, Refresh access, list before explanation, announcement only after the list, focus on the toggle, then the last source gone |
+| E8 | same file: revelation beside a whole-character deny, existing wording |
+| E10 | same file: an explanation answered after a list reload is never rendered |
+| E11 | same file: member removed elsewhere, then reappearing; no read and no reopening |
+| E12 | same file: 403 on refresh (no content, no announcement); 500 then retry (announced only on success) |
+| E13 | same file: 401 on an explanation and on the overview each reload the session and render no content |
+| E14 | same file: another campaign starts closed and sends no explanation read |
+| E15 | `EffectiveAccessPanel.test.tsx` (independent rows) and the integration file (closing prevents a late answer from restoring it) |
+| E16, E17, E18 | `App.characterRecord.test.tsx` "player surfaces stay source-free": public → summary → public → unavailable with no source words and no request to `/effective-access` or `/access-overview`; list/detail after revocation; list card summary after a tier change |
+| E19 | the full existing suite |
+| partial failure (owner instruction) | integration file: explanation fails after a successful list, Retry re-reads only the explanation |
+
+**Verification (portal/ PowerShell; root for the last two).**
+
+| Run | Result |
+|---|---|
+| Focused during work | `EffectiveAccessPanel`, `AccessPage`: 92 passed. First integration run: 4 of 11 failed, all test-side (a card looked up before the reload had rendered it; the card not opened as a person does). Fixed in the tests; rerun 11, then 12 passed after the 401 split. `App.characterRecord`: 47 passed |
+| Mutation probe | AccessPage ignores the held disclosure (`heldDisclosure ?? ownDisclosure` → `ownDisclosure`): 6 of 12 integration tests failed (E5/E9, E6/E7, E10, E11, E12 retry, partial failure). `AccessPage.tsx` SHA-256 before and after `D5837DFDDDDC9BA050B9A6B97A2988FA03F023E920A10FEDC9CD8F2A7DDE0573`; restored |
+| `npm test`, first run | 428 files, 5269 tests, all passed |
+| `npm run lint`, first run | failed: one unused helper in the new integration test (`idx`) |
+| `npm run build`, first run | failed on the same unused helper (TS6133) |
+| Fix and rerun | `npm run lint` passed; `npm run build` passed (existing chunk-size warning); the integration file passed again (12) |
+| `uv run python scripts/check_documentation.py` | passed |
+| `git diff --check` | clean (run before the commit; see the handoff for the staged check) |
+
+After the fix, `npm test` was run again in full: 428 files, 5269 tests, all passed (second full run). `git diff --check` was also clean on the final working tree and on the staged diff before the commit.
+
+**Remaining limitations.**
+
+- `humanizeCode("revelation")` already yields "Revelation", so the explicit `SOURCE_KIND_LABELS.revelation` entry is the contract but is not distinguishable by output; E1 asserts the text, and the probe above is on the refresh behavior instead.
+- The two reads remain independent observations (G-2); an explanation can disagree with the list for the moment between them.
+- A reload still moves focus to the page body for mutations (O-3), and after a failed list read.
+- No player-side source explanation exists (G-1). O-1 to O-4 are unchanged and stay recorded separately.
+- Browser, accessibility, integrated-head CI, checkpoint merge and owner acceptance remain pending. C02 and A5c were not started.

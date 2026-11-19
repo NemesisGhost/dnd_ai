@@ -1,9 +1,11 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useParams, useSearchParams } from "react-router"
 import { AccessOverviewBoundary } from "../components/AccessOverviewBoundary"
 import { AccessTabNav } from "../components/AccessTabNav"
 import { AudiencePreviewPanel } from "../components/AudiencePreviewPanel"
 import { useSession } from "../context/SessionContext"
+import { useAccessDisclosure } from "../hooks/useAccessDisclosure"
+import type { AccessDisclosure } from "../hooks/useAccessDisclosure"
 import { canPreviewAudience as canPreviewAudienceFor } from "../utils/canPreviewAudience"
 import { AccessPage } from "./AccessPage"
 import PlaceholderPage from "./PlaceholderPage"
@@ -20,6 +22,34 @@ interface RoleChangeAnnouncement {
 // messaging deliberately" and "does not retain stale Access records merely
 // to keep an announcement visible" both hold identically regardless of
 // which control produced the message.
+
+// Rendered only while the overview is loaded, so it mounts exactly when a read has succeeded:
+//   - an open card or explanation whose member is not in this answer is forgotten, so it cannot
+//     reappear if the member does later;
+//   - a pending "Refresh access" is confirmed (announced, focus returned) only now.
+function OverviewSettled({
+    memberIds,
+    disclosure,
+    refresh,
+    onRefreshSettled,
+}: {
+    memberIds: string[]
+    disclosure: AccessDisclosure
+    refresh: { membershipId: string } | null
+    onRefreshSettled: (membershipId: string) => void
+}) {
+    const key = memberIds.join("|")
+    useEffect(() => {
+        disclosure.prune(new Set(key === "" ? [] : key.split("|")))
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- `disclosure.prune` is stable per campaign.
+    }, [key])
+    useEffect(() => {
+        if (refresh !== null) onRefreshSettled(refresh.membershipId)
+        // Only on mount: a read that succeeded is what confirms a refresh.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+    return null
+}
 
 export function CampaignAccessPage() {
     const { campaignId } =
@@ -43,6 +73,14 @@ export function CampaignAccessPage() {
     // live region, regardless of what else unmounts alongside it.
     const [announcement, setAnnouncement] =
         useState<RoleChangeAnnouncement | null>(null)
+    const announcementRef = useRef<HTMLParagraphElement | null>(null)
+    // Which member cards and explanations are open, by membership id, held here (above the boundary)
+    // so they survive the overview's reload. Ids only: no access data is held outside the boundary.
+    const disclosure = useAccessDisclosure(campaignId ?? "")
+    // A "Refresh access" asked for and not yet answered by a successful overview read: the member
+    // whose control asked, for returning focus once the list is back.
+    const [pendingRefresh, setPendingRefresh] =
+        useState<{ campaignId: string; membershipId: string } | null>(null)
 
     if (campaignId === undefined) {
         return (
@@ -99,6 +137,29 @@ export function CampaignAccessPage() {
         setAnnouncement(null)
     }
 
+    // "Refresh access" reloads the member list and, because the list unmounts every explanation while
+    // it loads, every open explanation with it. Nothing is announced yet: "refreshed" is said only
+    // once the list has actually been read again (handleRefreshSettled), never for a failed read.
+    function handleRefreshAccess(retry: () => void, membershipId: string): void {
+        setAnnouncement(null)
+        setPendingRefresh({ campaignId: activeCampaignId, membershipId })
+        retry()
+    }
+
+    function handleRefreshSettled(membershipId: string): void {
+        setPendingRefresh(null)
+        setAnnouncement({ campaignId: activeCampaignId, message: "Access list refreshed." })
+        // The control that asked was unmounted by the reload: return focus to the same member's
+        // explanation toggle, or to the status line when that member is gone.
+        const toggle = Array.from(document.querySelectorAll<HTMLElement>("[data-explain-toggle]")).find(
+            (element) => element.dataset.explainToggle === membershipId,
+        )
+        ;(toggle ?? announcementRef.current)?.focus()
+    }
+
+    const refreshForThisCampaign =
+        pendingRefresh !== null && pendingRefresh.campaignId === activeCampaignId ? pendingRefresh : null
+
     return (
         <>
             <AccessTabNav campaignId={activeCampaignId} />
@@ -107,6 +168,8 @@ export function CampaignAccessPage() {
                 className="campaign-access-page__announcement"
                 role="status"
                 aria-live="polite"
+                ref={announcementRef}
+                tabIndex={-1}
             >
                 {announcementMessage}
             </p>
@@ -114,6 +177,12 @@ export function CampaignAccessPage() {
             <AccessOverviewBoundary campaignId={activeCampaignId}>
                 {(overview, retry) => (
                     <>
+                        <OverviewSettled
+                            memberIds={overview.members.map((member) => member.campaign_membership_id)}
+                            disclosure={disclosure}
+                            refresh={refreshForThisCampaign}
+                            onRefreshSettled={handleRefreshSettled}
+                        />
                         <AccessPage
                             campaignId={activeCampaignId}
                             overview={overview}
@@ -122,6 +191,10 @@ export function CampaignAccessPage() {
                                 handleRoleChanged(retry, message)
                             }
                             onMutationStart={handleMutationStart}
+                            disclosure={disclosure}
+                            onRefreshAccess={(membershipId) =>
+                                handleRefreshAccess(retry, membershipId)
+                            }
                         />
                         {canPreviewAudience && (
                             <AudiencePreviewPanel

@@ -1,4 +1,4 @@
-import { useId, useState } from "react"
+import { useId } from "react"
 import { useEffectiveAccess } from "../hooks/useEffectiveAccess"
 import { humanizeCode } from "../utils/humanize"
 
@@ -7,6 +7,7 @@ const SOURCE_KIND_LABELS: Record<string, string> = {
     character_relationship: "Character access",
     resource_grant: "Direct grant",
     access_group: "Group grant",
+    revelation: "Revelation",
 }
 
 function sourceKindLabel(kind: string): string {
@@ -16,6 +17,7 @@ function sourceKindLabel(kind: string): string {
 interface EffectiveAccessContentProps {
     campaignId: string
     campaignMembershipId: string
+    onRefresh: () => void
 }
 
 // Mounted only while its own disclosure is open — see
@@ -25,8 +27,10 @@ interface EffectiveAccessContentProps {
 // disclosure is opened instead, satisfying this checkpoint's own "the
 // panel clears when the selected member changes or the panel closes, so
 // protected data cannot linger" security invariant without any explicit
-// reset effect.
-function EffectiveAccessContent({ campaignId, campaignMembershipId }: EffectiveAccessContentProps) {
+// reset effect. The same rule makes a reload of the access list re-read the
+// explanation: the list unmounts every explanation while it loads, so a new one
+// always starts at "loading" and is never an older answer shown beside a newer list.
+function EffectiveAccessContent({ campaignId, campaignMembershipId, onRefresh }: EffectiveAccessContentProps) {
     const { state, retry } = useEffectiveAccess(campaignId, campaignMembershipId)
 
     if (state.status === "loading") {
@@ -89,6 +93,14 @@ function EffectiveAccessContent({ campaignId, campaignMembershipId }: EffectiveA
                     </ul>
                 </>
             )}
+
+            {/* A read, offered only beside a loaded explanation: it reloads the member list and every
+                open explanation together. */}
+            <p>
+                <button type="button" onClick={onRefresh}>
+                    Refresh access
+                </button>
+            </p>
         </>
     )
 }
@@ -97,6 +109,11 @@ interface EffectiveAccessPanelProps {
     campaignId: string
     campaignMembershipId: string
     memberDisplayName: string
+    // Whether this member's explanation is open, and how to toggle it, are owned above the access
+    // list so they survive its reload (hooks/useAccessDisclosure).
+    isOpen: boolean
+    onToggle: () => void
+    onRefresh: () => void
 }
 
 // The GM-facing "why can this person see this?" explanation (docs/
@@ -111,8 +128,10 @@ export function EffectiveAccessPanel({
     campaignId,
     campaignMembershipId,
     memberDisplayName,
+    isOpen,
+    onToggle,
+    onRefresh,
 }: EffectiveAccessPanelProps) {
-    const [isOpen, setIsOpen] = useState(false)
     const headingId = useId()
 
     return (
@@ -120,7 +139,8 @@ export function EffectiveAccessPanel({
             <button
                 type="button"
                 aria-expanded={isOpen}
-                onClick={() => setIsOpen((currentIsOpen) => !currentIsOpen)}
+                data-explain-toggle={campaignMembershipId}
+                onClick={onToggle}
             >
                 {isOpen ? "Hide access explanation" : "Explain access"}
             </button>
@@ -131,6 +151,7 @@ export function EffectiveAccessPanel({
                     <EffectiveAccessContent
                         campaignId={campaignId}
                         campaignMembershipId={campaignMembershipId}
+                        onRefresh={onRefresh}
                     />
                 </section>
             )}

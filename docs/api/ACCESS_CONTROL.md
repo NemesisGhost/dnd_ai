@@ -1033,6 +1033,20 @@ satisfies `UI_DESIGN.md` §6.4's "Effective-access explanation" screen and
 §8.3, but not §16's full preview line on its own — §3r below covers the
 spoiler-checking half of that (D-1, Option B here, Option C there).
 
+Portal (P15-C01-S02): a `revelation` source is labelled "Revelation" (`Revelation: Access group
+(Mira)`), like the other kinds, from the source's `kind`, `label` and `target_display_name` and no other
+field. Each member card on the Access page lists the overview's `revelations` read-only under
+**Revealed characters** (`Mira — Access group`, in server order, duplicates kept, no control and no id
+or audience-kind code; "No revealed characters." when empty). Which member cards and explanations are
+open is held above the overview boundary by membership id, so they survive an overview reload. A reload
+(after any mutation, or **Refresh access** beside a loaded explanation) unmounts every explanation while
+the list loads and re-reads each open one only after the list answered; nothing from before is shown
+meanwhile. The two reads are independent observations, not one snapshot, and the portal never matches
+an explanation source to an overview row (sources name characters, not ids). A failed list read, or a
+failed explanation read, is not announced as refreshed. A member who is absent from the new list is
+forgotten, so they do not reopen if they return. A caller without `access.manage` receives no source
+information and the portal shows none (gap G-1, recorded in the S02 plan).
+
 ## 3r. Per-resource audience preview (delivered, checkpoint 15)
 
 ```

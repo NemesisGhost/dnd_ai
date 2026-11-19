@@ -61,6 +61,17 @@ export interface GrantableResourceCapability {
     target_type: string
 }
 
+// A live character revelation that reaches a member: the character and the audience kind it reaches
+// them through, as a source of its own (the server's RevelationSummaryResponse). Only the two display
+// names are ever rendered; `character_id` and `audience_kind_code` are identity/keys only. No
+// revelation id, reason, creator or other audience is carried.
+export interface AccessRevelationSummary {
+    character_id: string
+    character_display_name: string
+    audience_kind_code: string
+    audience_kind_display_name: string
+}
+
 export interface CampaignAccessMember {
     campaign_membership_id: string
     // Identity only, never rendered as page text — used only to detect
@@ -81,6 +92,9 @@ export interface CampaignAccessMember {
     roles: AccessRoleSummary[]
     character_relationships: AccessCharacterRelationshipSummary[]
     grants: AccessResourceGrantSummary[]
+    // Optional only so fixtures that predate it compile: the server always sends it, and an absent
+    // value renders as no revelations.
+    revelations?: AccessRevelationSummary[]
 }
 
 export interface AccessGroupMemberSummary {

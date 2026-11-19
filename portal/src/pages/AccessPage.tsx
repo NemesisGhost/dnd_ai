@@ -18,6 +18,8 @@ import { RevokeCharacterRelationship } from "../components/RevokeCharacterRelati
 import { RevokeMemberRole } from "../components/RevokeMemberRole"
 import { RevokeResourceGrant } from "../components/RevokeResourceGrant"
 import { useSession } from "../context/SessionContext"
+import { useAccessDisclosure } from "../hooks/useAccessDisclosure"
+import type { AccessDisclosure } from "../hooks/useAccessDisclosure"
 import { humanizeCode } from "../utils/humanize"
 import type {
     AccessGroupSummary,
@@ -47,6 +49,8 @@ interface MemberAccessCardProps {
     preselectCharacterId: string | null
     onChanged: (message: string) => void
     onMutationStart: () => void
+    disclosure: AccessDisclosure
+    onRefreshAccess: (campaignMembershipId: string) => void
 }
 
 function MemberAccessCard({
@@ -60,10 +64,14 @@ function MemberAccessCard({
     preselectCharacterId,
     onChanged,
     onMutationStart,
+    disclosure,
+    onRefreshAccess,
 }: MemberAccessCardProps) {
     const rolesHeadingId = useId()
     const relationshipsHeadingId = useId()
     const grantsHeadingId = useId()
+    const revelationsHeadingId = useId()
+    const membershipId = member.campaign_membership_id
 
     const roleSummary = member.roles
         .map((role) => role.display_name)
@@ -80,7 +88,11 @@ function MemberAccessCard({
     )
 
     return (
-        <details className="access-member-card">
+        <details
+            className="access-member-card"
+            open={disclosure.isCardOpen(membershipId)}
+            onToggle={(event) => disclosure.setCardOpen(membershipId, event.currentTarget.open)}
+        >
             <summary>
                 <strong>{member.display_name}</strong>
                 <span>{member.status_display_name}</span>
@@ -258,10 +270,32 @@ function MemberAccessCard({
                     />
                 </section>
 
+                <section aria-labelledby={revelationsHeadingId}>
+                    <h3 id={revelationsHeadingId}>Revealed characters</h3>
+
+                    {(member.revelations ?? []).length > 0 ? (
+                        <ul>
+                            {(member.revelations ?? []).map((revelation, index) => (
+                                <li
+                                    key={`${revelation.character_id}:${revelation.audience_kind_code}:${index}`}
+                                >
+                                    {revelation.character_display_name} —{" "}
+                                    {revelation.audience_kind_display_name}
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p>No revealed characters.</p>
+                    )}
+                </section>
+
                 <EffectiveAccessPanel
                     campaignId={campaignId}
-                    campaignMembershipId={member.campaign_membership_id}
+                    campaignMembershipId={membershipId}
                     memberDisplayName={member.display_name}
+                    isOpen={disclosure.isExplanationOpen(membershipId)}
+                    onToggle={() => disclosure.toggleExplanation(membershipId)}
+                    onRefresh={() => onRefreshAccess(membershipId)}
                 />
 
                 <p className="access-member-card__joined">
@@ -467,6 +501,11 @@ interface AccessPageProps {
     preselectCharacterId?: string | null
     onChanged: (message: string) => void
     onMutationStart: () => void
+    // Which member cards and explanations are open, held above the overview boundary so they survive
+    // a reload of this list. A page rendered without them (a test) keeps its own.
+    disclosure?: AccessDisclosure
+    // Reloads this list and every open explanation together, for the member whose control asked.
+    onRefreshAccess?: (campaignMembershipId: string) => void
 }
 
 export function AccessPage({
@@ -475,7 +514,12 @@ export function AccessPage({
     preselectCharacterId = null,
     onChanged,
     onMutationStart,
+    disclosure: heldDisclosure,
+    onRefreshAccess,
 }: AccessPageProps) {
+    const ownDisclosure = useAccessDisclosure(campaignId)
+    const disclosure = heldDisclosure ?? ownDisclosure
+    const refreshAccess = onRefreshAccess ?? (() => onChanged("Access information refreshed."))
     const { state: sessionState } = useSession()
     const campaignName =
         sessionState.status === "authenticated"
@@ -531,6 +575,8 @@ export function AccessPage({
                                 preselectCharacterId={preselectCharacterId}
                                 onChanged={onChanged}
                                 onMutationStart={onMutationStart}
+                                disclosure={disclosure}
+                                onRefreshAccess={refreshAccess}
                             />
                         </li>
                     ))}

@@ -736,3 +736,120 @@ describe("Character record: public tier", () => {
         expect(screen.queryByRole("heading", { name: "Public profile" })).toBeNull()
     })
 })
+
+// S02: the explanation of WHY a character is visible belongs to the access manager. A player's
+// surfaces show S01's tier wording only: no source, kind or count, at any tier, and no request to
+// either access endpoint.
+describe("Character record: player surfaces stay source-free (S02)", () => {
+    const PC = "/campaigns/mundivita/characters/pc-1"
+    const SOURCE_WORDS = /Revelation|Access group|Revealed|revealed|shared with you|Group grant|Character access:|Direct grant/
+    const answers = (...bodies: Array<object>) => {
+        let next = 0
+        server.on("GET", PC, () => {
+            const item = bodies[Math.min(next++, bodies.length - 1)]
+            return "status" in item ? (item as { status: number; body: unknown }) : { body: item }
+        })
+    }
+    const accessRequests = () => server.calls.filter((c) => /effective-access|access-overview/.test(c.path))
+    const reopen = async (router: { navigate: (to: string) => Promise<void> }) => {
+        await act(async () => {
+            await router.navigate("/app/mundivita/characters/all")
+        })
+        await act(async () => {
+            await router.navigate(WORLD)
+        })
+    }
+
+    it("shows only S01's tier at each step of public, summary, public, unavailable, and asks for no source (E16)", async () => {
+        answers(publicBody(), liveBody("summary"), publicBody(), NOT_FOUND)
+        const { router } = openApp(WORLD, ["campaign.view"], NO_PERSPECTIVE)
+        await screen.findByRole("heading", { name: "Public profile" })
+        expect(document.body.textContent).not.toMatch(SOURCE_WORDS)
+
+        await reopen(router)
+        await screen.findByRole("heading", { name: "Overview" })
+        expect(document.body.textContent).not.toMatch(SOURCE_WORDS)
+
+        await reopen(router)
+        await waitFor(() => expect(screen.queryByRole("heading", { name: "Overview" })).toBeNull())
+        await screen.findByRole("heading", { name: "Public profile" })
+        expect(document.body.textContent).not.toMatch(SOURCE_WORDS)
+
+        await reopen(router)
+        await screen.findByRole("heading", { name: "Character unavailable" })
+        expect(document.body.textContent).not.toMatch(SOURCE_WORDS)
+        expect(accessRequests()).toHaveLength(0)
+        expect(server.calls.some((c) => c.method !== "GET")).toBe(false)
+    })
+
+    it("recovers a list and its detail after a revelation is revoked, from the server's answers (E17, E18)", async () => {
+        const card = (summary: string) => ({
+            entity_id: "pc-1",
+            category: "character",
+            entity_type_code: "player_character",
+            name: "Aldric",
+            summary,
+        })
+        let listed = true
+        server.on("GET", /^\/campaigns\/mundivita\/world\/search/, () => ({
+            body: { items: listed ? [card("Released summary")] : [], next_cursor: null },
+        }))
+        answers(publicBody(), NOT_FOUND)
+        const list = "/app/mundivita/characters/all?type=player_character"
+        const { router } = openApp(list, ["campaign.view"], NO_PERSPECTIVE)
+        expect(await screen.findByText("Released summary")).toBeInTheDocument()
+
+        await act(async () => {
+            await router.navigate(SHEET, { state: { charactersReturn: list } })
+        })
+        await screen.findByRole("heading", { name: "Public profile" })
+
+        // The revelation is revoked server-side; the next read of the detail is the answer.
+        listed = false
+        await act(async () => {
+            await router.navigate(WORLD)
+        })
+        await screen.findByRole("heading", { name: "Character unavailable" })
+        expect(document.body.textContent).not.toMatch(/Aldric|Released/)
+
+        await act(async () => {
+            await router.navigate(list)
+        })
+        await waitFor(() => expect(screen.queryByText("Released summary")).toBeNull())
+        expect(screen.queryByRole("link", { name: /Aldric/ })).toBeNull()
+        expect(router.state.location.pathname + router.state.location.search).toBe(list)
+        expect(document.body.textContent).not.toMatch(SOURCE_WORDS)
+        expect(accessRequests()).toHaveLength(0)
+    })
+
+    it("shows the server's live summary on a list card after a grant and the released one after it ends (E18)", async () => {
+        const summaries = ["Live summary of Aldric", "Released summary"]
+        let read = 0
+        server.on("GET", /^\/campaigns\/mundivita\/world\/search/, () => ({
+            body: {
+                items: [
+                    {
+                        entity_id: "pc-1",
+                        category: "character",
+                        entity_type_code: "player_character",
+                        name: "Aldric",
+                        summary: summaries[Math.min(read++, 1)],
+                    },
+                ],
+                next_cursor: null,
+            },
+        }))
+        const list = "/app/mundivita/characters/all?type=player_character"
+        const { router } = openApp(list, ["campaign.view"], NO_PERSPECTIVE)
+        expect(await screen.findByText("Live summary of Aldric")).toBeInTheDocument()
+        await act(async () => {
+            await router.navigate("/app/mundivita/characters/all?type=npc")
+        })
+        await act(async () => {
+            await router.navigate(list)
+        })
+        expect(await screen.findByText("Released summary")).toBeInTheDocument()
+        expect(screen.queryByText("Live summary of Aldric")).toBeNull()
+        expect(accessRequests()).toHaveLength(0)
+    })
+})
