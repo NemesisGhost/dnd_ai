@@ -12,11 +12,11 @@ IDs use parent-qualified hierarchy: `Pnn`, `Pnn-Cnn`, `Pnn-Cnn-Snn`, `Pnn-Cnn-Sn
 | P15 | GM authoring and campaign operations | In progress | P14 | Phase exit remains gated by the accepted 15H contracts and integrated portal journey. |
 | P15-C01 | Runtime authorization and transaction integrity | Complete (bounded R01 scope) | P14 | Owner accepted backend scope at `f21fb23`; preserve evidence and separate nonblocking follow-ups below. |
 | P15-C01-S01 | Accepted R01 authorization scope | Complete | — | Evidence-backed closure retained below. |
-| P15-C01-S02 | Approved R01 residuals | Admitted follow-up | P15-C01-S01 | Track separately; no reopening of accepted scope. |
 | [P15-C01-S01-T01](#r01--runtime-authorization-and-transaction-defects) | R01 accepted backend authorization scope | Complete | — | 187 finalized routes, zero pending, five world routes explicitly excluded; evidence and limits in [R01 detail](#r01--runtime-authorization-and-transaction-defects). |
+| P15-C01-S02 | Approved R01 residuals | Admitted follow-up | P15-C01-S01 | Track separately; no reopening of accepted scope. |
 | [P15-C01-S02-T01](#r01--runtime-authorization-and-transaction-defects) | R01 residual authorization and transaction obligations | Admitted follow-up | P15-C01-S01-T01 | Reproduce/resolve DEF-020/021; disposition F-E4-2 policy and F-E4-3/4 defects; handle approved/deferred F-E4-5 and excluded-route follow-up; retain other named residuals in R01 detail. No Phase 15 or R01 scope reopening implied. |
 | P15-C02 | Character authorization, access groups, and shared actor contracts | In progress | P15-C01-S01-T01 | Reconcile operation-specific deny behavior and complete the accepted P03-A/B/C/S contracts; preserve access and compatibility requirements. |
-| [P15-C02-T01](#r02--character-specific-deny-consistency) | Character-specific deny matrix and approved mismatch corrections (R02 / DEF-016) | Admitted | ? | Record preserve/already-fixed/mismatch/unresolved per operation; implement only approved mismatches and verify the named personas, revocation, and wait cases. |
+| [P15-C02-T01](#r02--character-specific-deny-consistency) | Character-specific deny matrix and approved mismatch corrections (R02 / DEF-016) | Admitted | P15-C02-S03-T01 through P15-C02-S03-T04 (contract definitions; implementation is not a prerequisite) | Record preserve/already-fixed/mismatch/unresolved per operation; implement only approved mismatches and verify the named personas, revocation, and wait cases. |
 | [P15-C02-T02](#r03--access-group-classification-and-duplicate-registration) | Access-group state/race classification (R03 / DEF-017) | Admitted | — | Cover both deactivation orderings, grant behavior, error classification, audit and receipts; DEF-002 duplicate registration is historical/closed. |
 | [P15-C02-T03](defects.md#def-012--recovery-cannot-restore-an-owner-when-a-custom-role-is-the-only-access-manager) | Recovery with custom access-manager roles (DEF-012) | Open policy/design obligation | Before granting `access.manage` to a non-owner role | Define recoverability and stranded-campaign semantics; verify recovery and reporting before enabling such grants. |
 | [P15-C02-S03](shared-characters.md) | P03-A/B/C/S actor, revelation, control, authoring and state contracts | In progress | P15-C01-S01-T01 | Separate accepted design from delivered implementation; per-character access-preserving migration and compatibility gates remain. See [shared-character design](shared-characters.md) and [R19 foundation plan](rules-foundations.md). |
@@ -26,31 +26,35 @@ IDs use parent-qualified hierarchy: `Pnn`, `Pnn-Cnn`, `Pnn-Cnn-Snn`, `Pnn-Cnn-Sn
 | [P15-C02-S03-T04](shared-characters.md) | P03-S campaign mechanical-state isolation | Admitted | P15-C02-S03-T02 before controller state writes | Campaign-key state, origin attribution/effect classification, family-atomic reviewed migration and stopped-writer cutover; keep seeding/copy disabled pending enablement acceptance. |
 | P15-C03 | Membership, travel, and temporal behavior | In progress | P15-C02-S03-T04 for affected refactor integration | Keep half-open membership semantics and branch membership non-inheritance. |
 | [P15-C03-T01](#r04--effective-time-membership-and-travel) | DEF-007 integrated membership acceptance | Admitted acceptance | — | Exercise join/leave boundaries, no-clock/branch behavior, all affected readers/selectors, denies and independent authorities; source implementation alone does not close acceptance. |
-| [P15-C03-T02](#r04--effective-time-membership-and-travel) | U1 travel-at-time policy and command/preview alignment (R04) | Policy unresolved; implementation admitted after decision | P15-C03-T01 | Decide action-time versus campaign-Now fallback and preview-change behavior; then resolve once, share predicate, revalidate at commit, and cover temporal boundaries/concurrency. Existing recommendation is not approval. |
+| [P15-C03-T02](#r04--effective-time-membership-and-travel) | Travel-at-time membership policy (R04b) | Policy unresolved | ? | Decide action-time versus campaign-Now fallback, preview-change behavior and eligible membership instant; recommendation is not approval. |
+| [P15-C03-T03](#r04--effective-time-membership-and-travel) | Travel command and preview implementation (R04b) | Policy-gated; implementation admitted after decision | P15-C03-T01; P15-C03-T02 | Resolve time once, share the membership predicate, expose a server-authoritative preview at the requested time, revalidate at commit, and report preview changes. |
 | P15-C04 | Shared save, error, and recovery behavior | Admitted | — | Repair only evidenced deviations; preserve confirmed-write receipts while clearing inaccessible data. See [R05 detail](#r05--save-error-and-recovery-consistency). |
 | [P15-C04-T01](#r05--save-error-and-recovery-consistency) | Recovery adoption and Knowledge/startup preference repairs (R05) | Admitted | — | Verify confirmed/unread/unknown outcomes and owner-bound retries; fix Knowledge reread and matching startup-preference confirmation; migrate each form with its domain work. No generic token persistence. |
 | [P15-C04-T02](#r05--save-error-and-recovery-consistency) | Reuse Batch 1/P01/P07 interaction pilots | Pilot behavior implemented; adoption/acceptance pending | P15-C04-T01 where shared recovery applies | Reuse encounter-audience, item-save feedback and record-time dialog outcomes in their owning workflows; verify shared adoption and integrated/browser/owner acceptance without rebuilding pilots. |
 | P15-C05 | Campaign Home, events, and world workflows | Admitted | P15-C02-S03-T04 for mechanical event projection | Implement only reproduced defects and admitted usability outcomes. |
+| [P15-C05-T04](defects.md#def-008--a-future-dated-organization-status-is-immediately-displayed-as-now) | Future-dated organization status projection (DEF-008) | Policy unresolved | — | Decide effective-clock projection versus latest-recorded labeling, then retest G7/TC-36. |
 | P15-C05-S01 | Campaign event projection | Admitted | P15-C02-S03-T04 for mechanical event projection | Reproduce before changing the audience-safe projection. |
-| P15-C05-S02 | Platform Users administration | Admitted | — | Stage changes with explicit outcomes and recovery. |
-| P15-C05-S03 | World sharing | Admitted | — | Search remains policy-gated. |
 | [P15-C05-S01-T01](#r06--campaign-event-tiles-and-details) | Event tile/detail context (R06) | Admitted, reproduction first | P15-C02-S03-T04 where effects are shown | Reproduce route/persona/data; use audience-safe explanation DTO; do not expose private reasons or add member-safe fields without separate admission. |
+| P15-C05-S02 | Platform Users administration | Admitted | — | Stage changes with explicit outcomes and recovery. |
 | [P15-C05-S02-T01](#r07--platform-users-administration) | Platform Users role editing workflow (R07) | Admitted | — | Separate creation/list navigation; stage role deltas with honest per-operation outcomes and authoritative reconciliation; preserve activation/reset secret handling. |
+| [P15-C05-S02-T02](#r07--platform-users-administration) | Atomic system-role replacement API (R07b) | Proposal only; not admitted | Separate API, atomicity and retry-semantics design and owner admission | Keep the staged UI on per-role operations with honest outcomes; do not imply atomic Save. |
+| P15-C05-S03 | World sharing | Admitted | — | Search remains policy-gated. |
 | [P15-C05-S03-T01](#r08--world-sharing) | World sharing workflow (R08) | Admitted UI refinement; picker policy unresolved | — | Improve current panels; admit search only after discoverability fields, bounds, paging and non-disclosure policy are decided. |
+| [P15-C05-S03-T02](#r08--world-sharing) | World-sharing account-search policy (R08a) | Policy unresolved | ? | Decide eligible searchers, discoverable accounts and fields, minimum input, bounds/paging and non-disclosure before admitting an account picker. Existing sharing panels proceed independently. |
 | [P15-C05-S04](#r09--smaller-layout-list-and-form-repairs) | Smaller layout/list/form repairs (R09) | Admitted, split by outcome | — | Preserve filters and navigation context; keep unrelated first-100-world limitation deferred. |
 | [P15-C05-S04-T01](#r09--smaller-layout-list-and-form-repairs) | Worlds active-plus-archived selection | Admitted | — | Union eligible visible worlds without duplicates; preserve URL/Back state and picker eligibility. |
 | [P15-C05-S04-T02](#r09--smaller-layout-list-and-form-repairs) | Planned-session default ordering | Admitted | — | Sort by scheduled timestamp, nulls last, deterministic ties; preserve explicit user sort. |
 | [P15-C05-S04-T03](#r09--smaller-layout-list-and-form-repairs) | Dungeon-area scalar authoring fields | Admitted | — | Add supported summary/dimensions/environment fields with existing validation and round-trip behavior. |
-| [P15-C05-T04](defects.md#def-008--a-future-dated-organization-status-is-immediately-displayed-as-now) | Future-dated organization status projection (DEF-008) | Policy unresolved | — | Decide effective-clock projection versus latest-recorded labeling, then retest G7/TC-36. |
 | P15-C06 | Session operation and quest workflows | Admitted | P15-C02-S03-T04 for mechanical consequences | Keep session execution references distinct from proposed preparation links. |
-| P15-C06-S01 | Run Session operation | Admitted | — | Reproduce navigation symptom before changing focus behavior. |
-| P15-C06-S02 | Invitation roles | Policy unresolved | — | Decide role eligibility before storage/API implementation. |
-| [P15-C06-S01-T01](#r10--run-session-navigation-and-width) | Run Session log handoff and layout (R10) | Admitted, browser reproduction first | — | Explicit log action focuses/scrolls even when already selected; preserve drafts, normal history, and read-only behavior. |
-| [P15-C06-S02-T01](#r11--campaign-roles-in-invitations) | Invitation role assignment (R11 / DEF-010 adjacent) | Policy unresolved; implementation admitted after decision | — | Decide eligible role classes/custom/owner roles; then store nullable campaign role intent and assign atomically under current authority. Keep one-time-token recovery separate. |
 | [P15-C06-T03](defects.md#def-010--leaving-the-invitations-page-can-abandon-an-accepted-issue-response-and-lose-the-one-time-token) | One-time invitation issue response ownership and recovery (DEF-010 / P02 F-1) | Open design obligation | — | Guard and own the issue operation; decide revoke/reissue and duplicate handling; clear on logout, owner/session/authority loss. Keep tokens out of generic receipt persistence. |
+| P15-C06-S01 | Run Session operation | Admitted | — | Reproduce navigation symptom before changing focus behavior. |
+| [P15-C06-S01-T01](#r10--run-session-navigation-and-width) | Run Session log handoff and layout (R10) | Admitted, browser reproduction first | — | Explicit log action focuses/scrolls even when already selected; preserve drafts, normal history, and read-only behavior. |
+| P15-C06-S02 | Invitation roles | Policy unresolved | — | Decide role eligibility before storage/API implementation. |
+| [P15-C06-S02-T01](#r11--campaign-roles-in-invitations) | Invitation role assignment (R11 / DEF-010 adjacent) | Policy unresolved; implementation admitted after decision | — | Decide eligible role classes/custom/owner roles; then store nullable campaign role intent and assign atomically under current authority. Keep one-time-token recovery separate. |
 | [P15-C06-S03](#r12--time-entry-and-duration-arithmetic) | Time entry and duration arithmetic (R12) | Partly admitted; arithmetic policy unresolved | — | Improve current input first; before arithmetic schema/API work decide eligible anchors, precision, boundaries, negative durations and provenance. |
 | [P15-C06-S03-T01](#r12--time-entry-and-duration-arithmetic) | Time-entry interaction using current model | Admitted | — | Deliver specified interaction improvement without changing calendar semantics or advancing Now. |
-| [P15-C06-S03-T02](#r12--time-entry-and-duration-arithmetic) | Duration arithmetic contract and implementation | Proposal pending policy/admission | P15-C06-S03-T01 | Define exact eligible calendar anchors and server-recomputed preview before implementation; narrative/partial anchors must not be treated as exact. |
+| [P15-C06-S03-T02](#r12--time-entry-and-duration-arithmetic) | Duration arithmetic policy and contract (R12b) | Policy unresolved | ? | Decide eligible anchors, precision, same-calendar assumptions, negative/before durations, boundaries, collisions and stored provenance before schema/API work. |
+| [P15-C06-S03-T03](#r12--time-entry-and-duration-arithmetic) | Duration arithmetic implementation and acceptance (R12c) | Policy-gated; admitted after contract | P15-C06-S03-T01; P15-C06-S03-T02 | Implement only the accepted arithmetic contract; recompute preview at commit and verify calendar boundaries, precision, collisions and concurrent allocation. |
 | [P15-C06-S04](#r13--quest-objective-authoring) | Quest objective and outcome workflows | Admitted with capability boundaries | — | Preserve progressed-quest structural lock and distinguish authored descriptions from applied state. |
 | [P15-C06-S04-T01](#r13--quest-objective-authoring) | Quest objective action placement (R13a) | Admitted | — | Separate disclosure/content from management actions; preserve focus and existing objective behavior. |
 | [P15-C06-S04-T02](#r13--quest-objective-authoring) | Missing manual objective categories (R13b) | Proposal pending inventory | — | Admit only if an actual missing category is demonstrated; `other` already exists and manual categories are not evaluators. |
@@ -60,8 +64,8 @@ IDs use parent-qualified hierarchy: `Pnn`, `Pnn-Cnn`, `Pnn-Cnn-Snn`, `Pnn-Cnn-Sn
 | [P15-C06-S05-T02](#r14--guided-quest-outcome-review) | Persistent outcome choice / automatic consequence engine | Deferred proposal | P15-C02-S03-T04 and separate domain/API decision | No new state or reward writes until explicit admission and P03-S-compatible design. |
 | P15-C07 | Knowledge and location discovery | Admitted | — | Preserve lifecycle, audience and hidden-ancestor boundaries. |
 | P15-C07-S01 | Knowledge author browsing | Admitted | P15-C04-T01 | Use existing authorized queries and recovery contract. |
-| P15-C07-S02 | Location hierarchy browsing | Admitted | — | Add bounded child discovery over existing containment. |
 | [P15-C07-S01-T01](#r15--unpublished-knowledge-author-browsing) | Unpublished Knowledge author browsing (R15) | Admitted | P15-C04-T01 for recovery integration | Add explicit author/publication filter through existing authorized queries; filter before counts/paging; keep lifecycle and perspective distinct. |
+| P15-C07-S02 | Location hierarchy browsing | Admitted | — | Add bounded child discovery over existing containment. |
 | [P15-C07-S02-T01](#r16--location-hierarchy) | Bounded location hierarchy browsing (R16) | Admitted | — | Authorized child navigation/search with hidden-chain truncation and deterministic paging; reuse existing containment and reparent commands. |
 | P15-C08 | Session preparation links | Proposal only | — | No general link model admitted; preserve existing execution associations. |
 | P15-C08-S01 | Cross-domain preparation-link model | Proposal only | Separate scope/authorization decision | Decide target kinds, scope, cardinality, visibility and provenance before admission. |
@@ -80,15 +84,52 @@ IDs use parent-qualified hierarchy: `Pnn`, `Pnn-Cnn`, `Pnn-Cnn-Snn`, `Pnn-Cnn-Sn
 | P17 | Standalone-product acceptance and self-hosted packaging | Planned | P15-C09-S01-T01; P16 exit for full loop | Browser/accessibility, deploy/upgrade, backup/restore and final-head CI evidence in the planned verification record. |
 | P18 | Session intelligence and controlled import | Planned | Manual authoring paths P14–P16; P17 standalone gate for milestone order | Immutable owned sources, reviewable proposals and promotion through existing commands; no direct domain-table writes. |
 | P19 | Rules-aware character, creature and encounter expansion | Planned; limited foundations may proceed | P15-C02-S03; P17 gates full delivery | Keep P19-C01 architecture decisions and isolated P19-C03/C04 infrastructure distinct from P19-C05 user-facing delivery; see [rules foundations](rules-foundations.md). |
-| [P19-C01](rules-foundations.md) | Architecture and contracts (R19-P0) | Admitted design work | — | Accept creature-model and rules/source-authorization decisions and stable interfaces before dependent infrastructure. |
+| [P19-C01](rules-foundations.md) | Architecture and contracts (R19-P0) | Accepted architecture; checkpoint gate pending | ? | ADRs 0021-0023 are accepted; R19-P0 completion awaits primary-PC acknowledgment of ADR 0021. Implementation remains unbuilt. |
+| [P19-C01-S01](rules-foundations.md) | Accepted R19 architecture decisions | Complete | ? | ADRs 0021, 0022 and 0023 were accepted by the owner on 2026-11-06 as reviewed at `2ca4648`; acceptance is architecture, not implementation. |
+| [P19-C01-S01-T01](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) | ADR 0021 acceptance | Complete | ? | Owner accepted the reviewed shared-actor architecture on 2026-11-06; primary-PC acknowledgment remains a separate gate. |
+| [P19-C01-S01-T02](../adr/0022-creature-templates-combatants-and-promotion.md) | ADR 0022 acceptance | Complete | ? | Owner accepted the reviewed creature-model architecture on 2026-11-06; implementation remains unbuilt. |
+| [P19-C01-S01-T03](../adr/0023-rules-engine-calculation-validation-and-source-authorization.md) | ADR 0023 acceptance | Complete | ? | Owner accepted the reviewed rules-engine architecture on 2026-11-06; implementation remains unbuilt. |
+| [P19-C01-S02](rules-foundations.md) | R19-P0 checkpoint acknowledgment | Gate pending | P19-C01-S01-T01 | The primary PC must acknowledge ADR 0021; the ADR is accepted and is not awaiting re-acceptance. |
+| [P19-C01-S02-T01](rules-foundations.md) | Primary-PC acknowledgment of ADR 0021 | Gate pending | P19-C01-S01-T01 | Record the primary PC's acknowledgment; do not conflate this checkpoint gate with ADR acceptance. |
 | P19-C02 | Shared actor foundation (R19-P1) | Pending Phase 15 delivery | P15-C02-S03 | Phase 15 owns this contract; Phase 19 does not duplicate the actor model. |
 | [P19-C03](rules-foundations.md) | Rules definition foundation (R19-P2) | Planned; isolated compatible work may proceed | P19-C01 | Additive source-aware definitions/versioning; user-facing selection waits for P19-C05. |
+| [P19-C03-S01](rules-foundations.md) | Rules source provenance and packages | Planned; prioritized | P19-C01-S01-T03 | Build source/package provenance and the seed evidence inventory; rights remain unknown until documented clearance or replacement. |
+| [P19-C03-S01-T01](rules-foundations.md) | Source provenance and package metadata (R19-P2a) | Planned; prioritized | P19-C01-S01-T03 | Implement additive package metadata and its read API; complete the seed rights inventory and keep uncleared material out of distribution. |
+| [P19-C03-S02](rules-foundations.md) | Campaign rules configuration | Planned | P19-C01-S01-T03 | Versioned options and campaign rules, split between read/configuration work and behavior-changing build enforcement. |
+| [P19-C03-S02-T01](rules-foundations.md) | Option policy tables and reads (R19-P2b-1) | Planned; isolated reads may merge | P19-C04-S02-T01 | Add policy/configuration storage and authorized reads; package-level entries also depend on P19-C03-S01-T01. |
+| [P19-C03-S02-T02](rules-foundations.md) | Build-command option enforcement (R19-P2b-2) | Policy accepted; behavior-change gate pending | P19-C03-S02-T01; P15-C02-S03-T03 where build commands overlap | Require build-command owner sign-off; sequence after the P03-C cutover when `character_builds.py` is in flight; enable only after behavior-change acceptance. |
+| [P19-C03-S03](rules-foundations.md) | Campaign house rules | Planned | P19-C01-S01-T03 | Add versioned campaign overrides under the accepted authority policy. |
+| [P19-C03-S03-T01](rules-foundations.md) | House-rules configuration (R19-P2c) | Planned | P19-C04-S01-T01; P19-C03-S02-T01 | Add schema and reads after the neutral core and option-policy read foundation; commands enforce the accepted OD-10 authority. |
+| [P19-C03-S04](rules-foundations.md) | Creature-template definitions | Planned; independent of option enforcement | P19-C01-S01-T02 | Add GM-authorized templates; portal exposure waits for the full-delivery gate. |
+| [P19-C03-S04-T01](rules-foundations.md) | Creature templates (R19-P2d) | Planned | P19-C04-S01-T01; P19-C03-S01-T01 | Implement template definitions through the GM API; this work is independent of P19-C03-S02. |
+| [P19-C03-S04-T02](rules-foundations.md) | Template option target (R19-P2d-x) | Planned; integration | P19-C03-S02-T01; P19-C03-S04-T01 | Add the creature-template option target only after option policy and template definitions merge; build-command enforcement remains a separate gate. |
 | [P19-C04](rules-foundations.md) | Deterministic mechanics foundation (R19-P3) | Planned; isolated compatible work may proceed | P19-C01 | Limited deterministic calculation/preview; explicit unsupported indicators; user-facing features wait for P19-C05. |
-| [P19-C05](roadmap.md#12-phase-19--rules-aware-character-creature-and-encounter-expansion) | Full Phase 19 delivery (R19-P4) | Planned; gated | P17; P19-C02–P19-C04 | User-facing rules/content/creature/encounter delivery after standalone gate. |
+| [P19-C04-S01](rules-foundations.md) | Neutral calculation core | Planned; may begin | P19-C01-S01-T03 | Deterministic, ruleset-neutral core and fixtures; no database dependency. |
+| [P19-C04-S01-T01](rules-foundations.md) | Engine core and fixtures (R19-P3a) | Planned; may begin | P19-C01-S01-T03 | Implement the pure calculation core and supported percentile fixture. |
+| [P19-C04-S02](rules-foundations.md) | Context loader, catalog and GM support | Planned after the core | P19-C04-S01-T01 | Add campaign-scoped reads and GM-only explanation/support endpoints. |
+| [P19-C04-S02-T01](rules-foundations.md) | Context loader and GM endpoints (R19-P3b) | Planned | P19-C04-S01-T01 | Implement the loader, catalog, explanation and support APIs; no portal or non-GM exposure before the projection gate. |
+| [P19-C04-S03](rules-foundations.md) | Conditions and overrides | Planned | P19-C04-S02-T01; P19-C03-S03-T01 for override reads | Add conditions and campaign overrides within the accepted integrity and authority contracts. |
+| [P19-C04-S03-T01](rules-foundations.md) | Conditions and overrides (R19-P3c) | Planned | P19-C04-S02-T01; P19-C03-S03-T01 for override reads | Implement the GM endpoint and calculation behavior; keep unsupported inputs explicit. |
+| [P19-C04-S04](rules-foundations.md) | Build drafts, review and activation | Planned; partly behavior-gated | P19-C04-S02-T01; P15-C02-S03-T03 | Separate non-materializing draft lifecycle from approval/materialization and activation behavior. |
+| [P19-C04-S04-T01](rules-foundations.md) | Build drafts (R19-P3d-1) | Planned | P19-C04-S02-T01; P19-C01-S01-T01 | Implement draft creation, validation, submission, withdrawal and rejection without materialization. |
+| [P19-C04-S04-T02](rules-foundations.md) | Approval, materialization and activation gate (R19-P3d-2) | Behavior-change gate pending | P19-C04-S04-T01; P15-C02-S03-T03; P15-C02-S03-T04 G1 writer cutover | Require build-command owner sign-off, owner acceptance of the activation behavior change, and completed P03-C / P03-S gates before enabling. |
+| [P19-C04-S05](rules-foundations.md) | Equipment truth and audience modes | Planned; projection-gated | P19-C04-S03-T01; P15-C02-S03-T01 | Separate GM equipment truth from non-GM projection. |
+| [P19-C04-S05-T01](rules-foundations.md) | Equipment truth (R19-P3e-T) | Planned; item-owner sign-off | P19-C04-S03-T01 | Add GM endpoint after item-domain owner sign-off. |
+| [P19-C04-S05-T02](rules-foundations.md) | Audience mode (R19-P3e-A) | Projection gate pending | P19-C04-S05-T01; P15-C02-S03-T01; P15-C02-S03-T02 for controllers | Enable non-GM mechanics reads only after P03-A projection tier and the applicable P03-B controller contract are accepted. |
+| [P19-C04-S06](rules-foundations.md) | Contract freeze | Planned | P19-C04-S04-T02; P19-C04-S05-T02 | Freeze schemas and contracts after accepted implementation gates; Phase 16 consumption requires consumer review. |
+| [P19-C04-S06-T01](rules-foundations.md) | Rules contract freeze (R19-P3f) | Planned | P19-C04-S04-T02; P19-C04-S05-T02 | Freeze the rules result, manifest and validation schemas and pass the Phase 16 consumer review. |
+| [P19-C05](rules-foundations.md) | Full Phase 19 delivery | Planned; gated | P17; P19-C02; P19-C03; P19-C04 | User-facing rules/content/creature/encounter delivery after the standalone-product gate. |
+| [P19-C05-S01](rules-foundations.md) | Template-basis builds and persistent creatures (R19-P4a) | Planned; Phase 17 gated | P17; P19-C03-S04-T01; P19-C04-S04-T02; P15-C02-S03-T02; P15-C02-S03-T03 | Implement only after Phase 17 and the shared actor/control/build contracts. |
+| [P19-C05-S02](rules-foundations.md) | Encounter combatants and promotion (R19-P4b) | Planned; Phase 17 gated | P17; P19-C05-S01; Phase 15 encounter-command owner review | Implement ADR 0022 encounter integration, combatant state and promotion; do not revive the P03-S-owned damage-token repair. |
+| [P19-C05-S03](rules-foundations.md) | Advancement and structured prerequisites (R19-P4c) | Planned; Phase 17 gated | P17; P19-C04-S04-T02; P19-C04-S06-T01; P16 | Implement after the player-authoring, review and rules-contract gates. |
+| [P19-C05-S04](rules-foundations.md) | Content packages and operator installation (R19-P4d) | Planned; rights/Phase 17 gated | P17; P19-C03-S01-T01 | Install only with documented clearance or replacement of uncleared seed content. |
+| [P19-C05-S05](rules-foundations.md) | Encounter analysis (R19-P4e) | Planned; Phase 17 gated | P17; P19-C05-S01; P19-C05-S02; P19-C04-S05-T02 | GM-only, manifest-stamped analysis after creature and audience foundations. |
+| [P19-C05-S06](rules-foundations.md) | Portal workflows (R19-P4f) | Planned; Phase 17 gated | P17; P19-C03; P19-C04; P19-C05-S01 through P19-C05-S05 | Build user-facing selection only after the required foundations. |
+| [P19-C05-S07](rules-foundations.md) | Phase 19 acceptance (R19-P4g) | Planned; Phase 17 gated | P17; P19-C05-S01 through P19-C05-S06 | Complete the Phase 19 verification and acceptance criteria after all preceding scope. |
 | P20 | Grounded assistance and structured NPC scenes | Planned | P15–P19 audience/authoring contracts as specified in roadmap | Verify provider and local-model paths, gates and purpose-specific context before enabling surfaces. |
 | P20-C01 | Provider and feature-gate verification | Planned | P17 | Provider and request-gate evidence before enabling each surface. |
-| P20-C02 | Interaction audience policy | Policy unresolved | — | Resolve C4 semantics and cover direct/indirect readers. |
 | P20-C01-T01 | Provider, local-model and feature-gate verification (Fable C2/C3) | Planned | P17; P20 surface gates | Correct runtime dependency packaging, verify real-provider/local-model paths, and decide/enforce request-level feature semantics before enabling surfaces. |
+| P20-C02 | Interaction audience policy | Policy unresolved | — | Resolve C4 semantics and cover direct/indirect readers. |
 | P20-C02-T01 | Interaction audience policy (Fable C4) | Policy unresolved | — | Decide whether `is_visible_to_players` is enforced, replaced or narrowed; verify direct and indirect projections before claiming disclosure behavior. |
 | P21 | Integrations and adapters | Planned | Stable commands; Phase 17 standalone gate | Finish licensed Foundry acceptance and add optional adapters without alternate sources of truth. |
 | P22 | Hosted offering and demonstrated-need expansion | Deferred | Stable self-hosted product and demonstrated demand | No admitted implementation; revisit only on demonstrated need. |
@@ -102,17 +143,51 @@ This is traceability, not a second work register. Review IDs remain unchanged in
 | R01 | P15-C01-S01-T01; P15-C01-S02-T01 | Accepted bounded scope is complete; only separately listed residuals remain. Historical F/S/E slice names and evidence are preserved. |
 | Batch 1 / P01 / P07 pilots | P15-C04-T02 | Encounter-audience, item-save feedback and record-time dialog pilots exist; shared adoption and acceptance remain. |
 | Context-navigation CNC-1–3 and owner-evidence/pending-state repairs | P15-C09-S03-T01 for residual browser evidence | Implemented through `6cdc68b`; review outcome at `bdd541b` was PASS WITH NONBLOCKING VERIFICATION LIMITATION. Preserve the stated browser and owner-evidence limits. |
-| R02 / DEF-016 | P15-C02-T01 | Operation-by-operation deny reconciliation. |
+| R02 / DEF-016 | P15-C02-T01 | Operation-by-operation deny matrix and approved mismatch corrections. |
 | R03 / DEF-002, proposed DEF-017 | P15-C02-T02 | DEF-002 closed; DEF-017 remains a distinct race/classification obligation. |
-| R04 / DEF-007, U1 | P15-C03-T01; P15-C03-T02 | Membership acceptance and travel policy/implementation are separate. |
+| R04 / DEF-007, U1 | P15-C03-T01; P15-C03-T02; P15-C03-T03 | R04a is membership acceptance; R04b is split into its unresolved travel-time policy and separately gated implementation. |
+| R02b | P15-C02-T01 | Later deny-scope corrections remain part of the operation matrix; implement only approved mismatches. |
+| R04a | P15-C03-T01 | Integrated effective-time membership acceptance. |
+| R04b | P15-C03-T02; P15-C03-T03 | Policy decision first; command/preview implementation is separately gated on that decision. |
+| R07b | P15-C05-S02-T02 | Atomic role replacement is a distinct proposal, not part of the admitted staged UI. |
+| R08a | P15-C05-S03-T02 | Account discoverability/search policy gate; existing sharing panels proceed independently. |
+| R12a | P15-C06-S03-T01 | Time-entry interaction using the current model. |
+| R12b | P15-C06-S03-T02 | Duration arithmetic policy and contract. |
+| R12c | P15-C06-S03-T03 | Duration arithmetic implementation after the contract is accepted. |
+| ADR 0021-0023 / R19-P0 | P19-C01-S01-T01; P19-C01-S01-T02; P19-C01-S01-T03; P19-C01-S02-T01 | The ADRs are accepted; only the primary-PC acknowledgment gate remains for R19-P0. |
+| R19-P1 | P19-C02 | Shared actor foundation remains Phase 15 scope. |
+| R19-P2 | P19-C03 | Rules definitions parent. |
+| R19-P2a | P19-C03-S01-T01 | Provenance/package task. |
+| R19-P2b | P19-C03-S02 | Option-policy reads parent. |
+| R19-P2b-1 | P19-C03-S02-T01 | Isolated option-policy reads. |
+| R19-P2b-2 | P19-C03-S02-T02 | Build-command enforcement with separate owner and P03 gates. |
+| R19-P2c | P19-C03-S03-T01 | Versioned house-rules configuration. |
+| R19-P2d | P19-C03-S04-T01 | Template definitions. |
+| R19-P2d-x | P19-C03-S04-T02 | Template option-target integration. |
+| R19-P3 | P19-C04 | Mechanics foundation parent. |
+| R19-P3a | P19-C04-S01-T01 | Neutral core task. |
+| R19-P3b | P19-C04-S02-T01 | Context loader, catalog, explanation and GM endpoints. |
+| R19-P3c | P19-C04-S03-T01 | Conditions and overrides. |
+| R19-P3d-1 | P19-C04-S04-T01 | Draft lifecycle. |
+| R19-P3d-2 | P19-C04-S04-T02 | Behavior-gated approval/materialization. |
+| R19-P3e-T | P19-C04-S05-T01 | Equipment truth. |
+| R19-P3e-A | P19-C04-S05-T02 | Audience projection with applicable P03 gates. |
+| R19-P3f | P19-C04-S06-T01 | Contract freeze and Phase 16 consumer review. |
+| R19-P4a | P19-C05-S01 | Phase 17-gated full-delivery slice. |
+| R19-P4b | P19-C05-S02 | Phase 17-gated full-delivery slice. |
+| R19-P4c | P19-C05-S03 | Phase 17-gated full-delivery slice. |
+| R19-P4d | P19-C05-S04 | Phase 17-gated full-delivery slice. |
+| R19-P4e | P19-C05-S05 | Phase 17-gated full-delivery slice. |
+| R19-P4f | P19-C05-S06 | Phase 17-gated full-delivery slice. |
+| R19-P4g | P19-C05-S07 | Phase 17-gated full-delivery slice. |
 | R05 / P01 | P15-C04-T01 | Shared recovery foundation/adoption; already delivered helper behavior is not rebuilt. |
 | R06 / P04 | P15-C05-S01-T01 | Event projection and audience-safe explanation work. |
-| R07 / P05 | P15-C05-S02-T01 | Platform Users administration. |
-| R08 / P06 | P15-C05-S03-T01 | Existing sharing panels; account search remains policy-gated. |
+| R07 / P05 | P15-C05-S02-T01 | Staged per-role workflow; does not imply atomic replacement. |
+| R08 / P06 | P15-C05-S03-T01 | Existing world-sharing panels; independent of account-search policy. |
 | R09 / P08 | P15-C05-S04 and its three task IDs | Split by independent outcomes, no blanket layout rewrite. |
 | R10 / P09 | P15-C06-S01-T01 | Run Session operation. |
 | R11 / P10 / DEF-010 | P15-C06-S02-T01 | Role intent is separate from one-time invitation-token recovery. |
-| R12 / P11 | P15-C06-S03 and its two task IDs | Input improvement versus unresolved arithmetic contract. |
+| R12 / P11 | P15-C06-S03-T01; P15-C06-S03-T02; P15-C06-S03-T03 | Input improvement, arithmetic policy and gated implementation are separate. |
 | R13 / P12 | P15-C06-S04 and its three task IDs | UX admitted; category/evaluator work is proposal/deferred. |
 | R14 / P13 | P15-C06-S05-T01; P15-C06-S05-T02 | Guided review admitted; persistent outcomes/consequences deferred. |
 | R15 / P14 | P15-C07-S01-T01 | Author browsing; not a world-only workspace. |
@@ -277,7 +352,7 @@ The local R01 plan, readiness assessment and E4 design notes have been reconcile
 
 **Application impact:** every clock, event, temporal membership, branch boundary and historical state relies on these keys. Treating arbitrary narrative gaps as elapsed minutes would introduce false chronology across domains.
 
-**Remaining work:** R12a is a specified interaction improvement using current inputs/picker/dialog. For R12b/c, define eligible anchors, precision, same-calendar assumptions, negative/before durations, boundaries, collisions and stored provenance before schema/API changes. Recommended initial arithmetic supports only explicitly eligible calendar anchors and fixed minutes/hours/days; ambiguous/partial/narrative anchors must not silently become exact. Server recomputes the preview at commit.
+**Remaining work:** R12a is a specified interaction improvement using current inputs/picker/dialog. For P15-C06-S03-T02/T03, define eligible anchors, precision, same-calendar assumptions, negative/before durations, boundaries, collisions and stored provenance before schema/API changes. Recommended initial arithmetic supports only explicitly eligible calendar anchors and fixed minutes/hours/days; ambiguous/partial/narrative anchors must not silently become exact. Server recomputes the preview at commit.
 
 **Acceptance:** month/year boundaries within the existing calendar model, invalid inputs, precision propagation, stale preview/anchor selection and concurrent allocation. Creating a point never advances Now. Variable days, month/year duration arithmetic and unusual calendar semantics remain separately admitted work.
 
@@ -366,12 +441,12 @@ Check for later accepted decisions first; do not reopen settled choices.
 
 | Decision | Recommended starting boundary | What waits for it |
 |---|---|---|
-| Character deny scope beyond D8 | Preserve D8; derive controller/authoring behavior from accepted P03 contracts, then decide only unresolved operation rows. | R02b's unresolved corrections, not unrelated UI work. |
-| Travel membership time | Recorded action time; omitted time resolves campaign Now once. Revalidation determines the committed traveler set. | R04b, not R04a acceptance. Preview-change UX must be specified. |
-| Staged system roles | Honest per-role operations and reconciliation; no claim of atomic Save. | R07b. An atomic replacement endpoint is separately scoped. |
-| World picker privacy | Bounded, world-sharing-authorized eligible search with minimal fields. Explicitly choose which accounts can be discovered. | R08a only; existing sharing panels can proceed. |
+| Character deny scope beyond D8 | Preserve D8; derive controller/authoring behavior from accepted P03 contracts, then decide only unresolved operation rows. | P15-C02-T01 approved mismatch corrections, not unrelated UI work. |
+| Travel membership time | Recorded action time; omitted time resolves campaign Now once. Revalidation determines the committed traveler set. | P15-C03-T02 policy, followed by P15-C03-T03 implementation; P15-C03-T01 acceptance is separate. Preview-change UX must be specified. |
+| Staged system roles | Honest per-role operations and reconciliation; no claim of atomic Save. | P15-C05-S02-T01 is admitted per-role staging; P15-C05-S02-T02 atomic replacement remains a separate proposal. |
+| World picker privacy | Bounded, world-sharing-authorized eligible search with minimal fields. Explicitly choose which accounts can be discovered. | P15-C05-S03-T02 is the search-policy gate; P15-C05-S03-T01 sharing panels can proceed. |
 | Invitation roles | Nullable legacy intent; additive campaign role; current inviter authority at first acceptance. Specify custom/owner-role eligibility. | R11 schema/API implementation. |
-| Time arithmetic | Current entry model first; exact eligible calendar anchors and fixed durations before broader calendars. | R12b/c; entry UI can proceed when specified. |
+| Time arithmetic | Current entry model first; exact eligible calendar anchors and fixed durations before broader calendars. | P15-C06-S03-T02 policy and P15-C06-S03-T03 implementation; P15-C06-S03-T01 entry UI proceeds independently. |
 | New capabilities | Defer evaluators, automatic consequences, member-safe reason storage and general session links unless already admitted. | R13c, expanded R14, R06c, R17. Manual categories also need an actual missing-category requirement. |
 
 ## Focused follow-up evidence and dispositions
