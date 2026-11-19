@@ -38,6 +38,7 @@ from dnd_ai.commands.world_relationships import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.relationship_authoring import (
     MAX_PARTICIPANTS,
     MIN_PARTICIPANTS,
@@ -52,7 +53,7 @@ from dnd_ai.domain.relationship_authoring import (
     TypePairing,
     pairs_for,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.relationship_authoring import (
     Participant,
     RelationshipAuthoringView,
@@ -65,6 +66,7 @@ from dnd_ai.queries.relationship_authoring import (
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._shared import timeline_world_id
@@ -73,6 +75,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["relationship-authoring"])
 
@@ -86,6 +89,7 @@ _PrivateRead = Annotated[
     Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
 ]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -255,7 +259,9 @@ def _run(
     command: Callable[[], RelationshipResult],
     created: bool = False,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> Any:
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -264,6 +270,7 @@ def _run(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -296,6 +303,7 @@ def _run(
     response = _view_json(view, changed=result.changed)
     status = 201 if created else 200
     finish_campaign_idempotency(connection, idem, status_code=status, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status, content=response) if created else response
 
 
@@ -442,6 +450,7 @@ def get_endpoint(relationship_id: uuid.UUID, access: _PrivateRead, connection: _
 def create_endpoint(
     body: CreateRelationshipRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -464,7 +473,9 @@ def create_endpoint(
             description=body.description,
             started_world_time_id=body.started_world_time_id,
             typed=_typed_from(body),
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -473,6 +484,7 @@ def update_endpoint(
     relationship_id: uuid.UUID,
     body: UpdateRelationshipRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -495,7 +507,9 @@ def update_endpoint(
             started_world_time_id=body.started_world_time_id,
             typed=_typed_from(body),
             change_note=body.change_note,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -504,6 +518,7 @@ def end_endpoint(
     relationship_id: uuid.UUID,
     body: EndRelationshipRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -522,7 +537,9 @@ def end_endpoint(
             relationship_id=relationship_id,
             expected_row_version=body.expected_row_version,
             ended_world_time_id=body.ended_world_time_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -531,12 +548,14 @@ def change_office_endpoint(
     relationship_id: uuid.UUID,
     body: ChangeOfficeRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
     """End the stint and start its successor in one transaction; answers with the successor."""
     payload = {"relationship_id": str(relationship_id), **body.model_dump(mode="json")}
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -545,6 +564,7 @@ def change_office_endpoint(
         command_name="change_membership_office",
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -558,6 +578,7 @@ def change_office_endpoint(
         role=body.role,
         rank=body.rank,
         is_public=body.is_public,
+        plan=plan,
     )
     for result in (outcome.ended, outcome.successor):
         record_change_log(
@@ -585,6 +606,7 @@ def change_office_endpoint(
         raise NotFoundError()
     response = _view_json(view, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 
@@ -593,6 +615,7 @@ def _lifecycle_endpoint(name: str, command: Callable[..., RelationshipResult]) -
         relationship_id: uuid.UUID,
         body: VersionRequest,
         access: _Access,
+        plan: _Plan,
         connection: _Conn,
         idempotency_key: _Key,
         correlation_id: _Corr,
@@ -610,7 +633,9 @@ def _lifecycle_endpoint(name: str, command: Callable[..., RelationshipResult]) -
                 actor_user_id=access.user_id,
                 relationship_id=relationship_id,
                 expected_row_version=body.expected_row_version,
+                plan=plan,
             ),
+            plan=plan,
         )
 
     endpoint.__name__ = f"{name}_relationship_endpoint"
@@ -626,6 +651,7 @@ def perspective_endpoint(
     relationship_id: uuid.UUID,
     body: PerspectiveRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -651,5 +677,7 @@ def perspective_endpoint(
             obligation=body.obligation,
             emotional_tone=body.emotional_tone,
             private_interpretation=body.private_interpretation,
+            plan=plan,
         ),
+        plan=plan,
     )

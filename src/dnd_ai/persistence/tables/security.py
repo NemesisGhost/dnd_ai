@@ -990,7 +990,12 @@ idempotent_requests = Table(
     Column(
         "campaign_id",
         UUID(),
-        ForeignKey("campaign.campaigns.campaign_id", ondelete="CASCADE"),
+        ForeignKey(
+            "campaign.campaigns.campaign_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="IMMEDIATE",
+        ),
         nullable=False,
     ),
     Column(

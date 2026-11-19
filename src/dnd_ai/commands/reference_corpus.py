@@ -280,6 +280,34 @@ def ingest_reference_passages(
         )
 
 
+def _grant_source_to_campaign_impl(
+    connection: Connection,
+    *,
+    source_document_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    is_house_rule: bool = False,
+    granted_by_user_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """The actual work of `grant_source_to_campaign()`, on a connection the caller already has open (R01 E4: the
+    route runs it on the request connection, then the final authorization check)"""
+    grant_id = connection.execute(
+        text("""
+            INSERT INTO ai.reference_source_campaigns
+                (source_document_id, campaign_id, is_house_rule, granted_by_user_id)
+            VALUES (:source, :campaign, :house_rule, :granted_by)
+            RETURNING reference_source_campaign_id
+        """),
+        {
+            "source": source_document_id,
+            "campaign": campaign_id,
+            "house_rule": is_house_rule,
+            "granted_by": granted_by_user_id,
+        },
+    ).scalar()
+    assert isinstance(grant_id, uuid.UUID)
+    return grant_id
+
+
 def grant_source_to_campaign(
     engine: Engine,
     *,
@@ -298,38 +326,50 @@ def grant_source_to_campaign(
     every other same-world/same-ruleset trigger in this codebase is relied
     on rather than duplicated in application code."""
     with engine.begin() as connection:
-        grant_id = connection.execute(
-            text("""
-                INSERT INTO ai.reference_source_campaigns
-                    (source_document_id, campaign_id, is_house_rule, granted_by_user_id)
-                VALUES (:source, :campaign, :house_rule, :granted_by)
-                RETURNING reference_source_campaign_id
-            """),
-            {
-                "source": source_document_id,
-                "campaign": campaign_id,
-                "house_rule": is_house_rule,
-                "granted_by": granted_by_user_id,
-            },
-        ).scalar()
-        assert isinstance(grant_id, uuid.UUID)
-        return grant_id
+        return _grant_source_to_campaign_impl(
+            connection,
+            source_document_id=source_document_id,
+            campaign_id=campaign_id,
+            is_house_rule=is_house_rule,
+            granted_by_user_id=granted_by_user_id,
+        )
+
+
+def _revoke_source_campaign_grant_impl(
+    connection: Connection,
+    *,
+    reference_source_campaign_id: uuid.UUID,
+    campaign_id: uuid.UUID | None = None,
+) -> None:
+    """The actual work of `revoke_source_campaign_grant()`, on a connection the caller already has open.
+    R01 E4 (finding F-E4-1): with `campaign_id` the `UPDATE` is bound to that campaign, so a grant id that belongs
+    to another campaign behaves exactly like an unknown id: no row matches, nothing is written, and the route
+    still answers 204. `campaign_id=None` is the unscoped mode of direct (administrative or test) callers."""
+    connection.execute(
+        text("""
+            UPDATE ai.reference_source_campaigns
+            SET revoked_at = now()
+            WHERE reference_source_campaign_id = :grant AND revoked_at IS NULL
+              AND (CAST(:campaign AS uuid) IS NULL OR campaign_id = :campaign)
+        """),
+        {"grant": reference_source_campaign_id, "campaign": campaign_id},
+    )
 
 
 def revoke_source_campaign_grant(
-    engine: Engine, *, reference_source_campaign_id: uuid.UUID
+    engine: Engine,
+    *,
+    reference_source_campaign_id: uuid.UUID,
+    campaign_id: uuid.UUID | None = None,
 ) -> None:
     """Revoke (not delete) a campaign's retrieval grant — the row remains
     for audit history; `ux_reference_source_campaigns_active`'s partial
     uniqueness allows re-granting afterward."""
     with engine.begin() as connection:
-        connection.execute(
-            text("""
-                UPDATE ai.reference_source_campaigns
-                SET revoked_at = now()
-                WHERE reference_source_campaign_id = :grant AND revoked_at IS NULL
-            """),
-            {"grant": reference_source_campaign_id},
+        _revoke_source_campaign_grant_impl(
+            connection,
+            reference_source_campaign_id=reference_source_campaign_id,
+            campaign_id=campaign_id,
         )
 
 
@@ -397,6 +437,7 @@ def _retrieve_cited_passages_impl(
     if ruleset_version_id is None:
         raise SourceDocumentNotFoundError(f"campaign {campaign_id} not found")
 
+    # R01 E4: the campaign's ruleset is judged INSIDE this statement (one snapshot with the visibility/grant predicates).
     rows = connection.execute(
         text("""
             SELECT
@@ -411,7 +452,9 @@ def _retrieve_cited_passages_impl(
                AND rsc.campaign_id = :campaign
                AND rsc.revoked_at IS NULL
             WHERE sd.status = 'active'
-              AND sd.ruleset_version_id = :ruleset_version
+              AND sd.ruleset_version_id = (
+                    SELECT c.ruleset_version_id FROM campaign.campaigns c WHERE c.campaign_id = :campaign
+                  )
               AND (sd.visibility = 'general' OR rsc.reference_source_campaign_id IS NOT NULL)
               AND p.content_tsv @@ websearch_to_tsquery('english', :query)
             GROUP BY p.reference_passage_id, p.source_document_id, sd.title, p.chapter,
@@ -421,7 +464,6 @@ def _retrieve_cited_passages_impl(
         """),
         {
             "campaign": campaign_id,
-            "ruleset_version": ruleset_version_id,
             "query": query_text,
             "limit": limit,
         },

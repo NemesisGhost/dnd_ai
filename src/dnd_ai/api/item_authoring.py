@@ -43,6 +43,7 @@ from dnd_ai.commands.item_operations import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.item_runtime import ORIGIN_NOTES_MAX_LENGTH, QUANTITY_MAX
 from dnd_ai.queries.inventory import get_inventory_view
 from dnd_ai.queries.item_authoring import (
@@ -59,6 +60,7 @@ from dnd_ai.queries.party_membership_period import resolve_membership_clock
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import audit_content_write
@@ -68,6 +70,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 from .world_explorer import item_origin_notes_visible
 
 router = APIRouter(tags=["items"])
@@ -76,6 +79,7 @@ _AUTHORING = "/campaigns/{campaign_id}/authoring/items"
 _RUNTIME = "/campaigns/{campaign_id}/items/{item_instance_id}"
 _Access = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -262,7 +266,9 @@ def _authoring_write(
     created: bool,
     reason: str | None,
     command: Callable[[], Any],
+    plan: AuthorizationPlan,
 ) -> Any:
+    require_authoring_decisions(connection, plan, access, world_capability=None)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -271,6 +277,7 @@ def _authoring_write(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -288,6 +295,7 @@ def _authoring_write(
     response = _view_json(_load_view(connection, access, result.entity_id), changed=result.changed)
     status = 201 if created else 200
     finish_campaign_idempotency(connection, idem, status_code=status, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status, content=response) if created else response
 
 
@@ -295,6 +303,7 @@ def _authoring_write(
 def create_item_endpoint(
     body: CreateItemRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -316,7 +325,9 @@ def create_item_endpoint(
             summary=body.summary,
             item_definition_id=body.item_definition_id,
             origin_notes=body.origin_notes,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -325,6 +336,7 @@ def update_item_endpoint(
     item_instance_id: uuid.UUID,
     body: UpdateItemRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -349,7 +361,9 @@ def update_item_endpoint(
             origin_notes=body.origin_notes,
             keep_origin_notes=_origin_notes_hidden(connection, access, item_instance_id),
             change_note=body.change_note,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -366,6 +380,7 @@ def _operate(
     correlation_id: str | None,
     payload: dict[str, Any],
     command: Callable[[], ItemOperationResult],
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -375,6 +390,7 @@ def _operate(
         command_name=command_name,
         payload={"item_instance_id": str(item_instance_id), **payload},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -399,6 +415,7 @@ def _operate(
         "operation": result.operation,
     }
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 
@@ -416,6 +433,7 @@ def award_endpoint(
     item_instance_id: uuid.UUID,
     body: AwardRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -437,7 +455,9 @@ def award_endpoint(
             quantity=body.quantity,
             set_owner=body.set_owner,
             **_common(body),
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -447,6 +467,7 @@ def _simple_route(path: str, name: str, command: Callable[..., ItemOperationResu
         item_instance_id: uuid.UUID,
         body: OperationBase,
         access: _Access,
+        plan: _Plan,
         connection: _Conn,
         idempotency_key: _Key,
         correlation_id: _Corr,
@@ -465,7 +486,9 @@ def _simple_route(path: str, name: str, command: Callable[..., ItemOperationResu
                 actor_user_id=access.user_id,
                 item_instance_id=item_instance_id,
                 **_common(body),
+                plan=plan,
             ),
+            plan=plan,
         )
 
 
@@ -475,6 +498,7 @@ def _amount_route(path: str, name: str, command: Callable[..., ItemOperationResu
         item_instance_id: uuid.UUID,
         body: AmountRequest,
         access: _Access,
+        plan: _Plan,
         connection: _Conn,
         idempotency_key: _Key,
         correlation_id: _Corr,
@@ -494,7 +518,9 @@ def _amount_route(path: str, name: str, command: Callable[..., ItemOperationResu
                 item_instance_id=item_instance_id,
                 amount=body.amount,
                 **_common(body),
+                plan=plan,
             ),
+            plan=plan,
         )
 
 
@@ -512,6 +538,7 @@ def attune_endpoint(
     item_instance_id: uuid.UUID,
     body: AttuneRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -531,7 +558,9 @@ def attune_endpoint(
             item_instance_id=item_instance_id,
             character_id=body.character_id,
             **_common(body),
+            plan=plan,
         ),
+        plan=plan,
     )
 
 

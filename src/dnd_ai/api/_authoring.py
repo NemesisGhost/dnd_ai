@@ -20,10 +20,15 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Connection
 
+from dnd_ai.commands._content import register_authoring_requirements
+from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.data_classification import replay_body
 
+from ._shared import timeline_world_id
 from .idempotency import (
     IdempotentReplay,
+    IdempotentReservation,
     begin_actor_idempotent_request,
     begin_idempotent_request,
     complete_actor_idempotent_request,
@@ -33,6 +38,77 @@ from .idempotency import (
 
 class BaseAuthoringRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+def require_authoring_decisions(
+    connection: Connection,
+    plan: AuthorizationPlan,
+    access: AccessContext,
+    *,
+    world_capability: str | None,
+) -> None:
+    """Register the route's definition-authoring decisions (campaign `canon.edit`, then
+    `world_capability`) on the plan **before** the idempotency start (R01 plan 6.6, R-D4).
+
+    A replay finalizes the plan before the command runs, so every decision the command would register
+    must already be in it, or a caller who lost the world capability would be handed the stored receipt.
+    `world_capability` is the one the route's command passes to `lock_authoring_scope`: `None` only for
+    the campaign-originated records (player-character identity, item instances). The only statement is
+    the unlocked world lookup; no row lock is taken. The command later registers the same requirements
+    once (`register_authoring_requirements` skips what is present)."""
+    register_authoring_requirements(
+        connection,
+        plan,
+        actor_user_id=access.user_id,
+        campaign_id=access.campaign_id,
+        world_id=timeline_world_id(connection, access.timeline_id),
+        world_capability=world_capability,
+    )
+
+
+def _judge_replay(connection: Connection, plan: AuthorizationPlan | None) -> None:
+    """R-D4: judge the plan's requirements, then finalize it, before a stored receipt leaves."""
+    if plan is not None:
+        plan.finalize(connection)
+
+
+def begin_planned_idempotent_request(
+    connection: Connection,
+    *,
+    plan: AuthorizationPlan | None,
+    actor_user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    idempotency_key: str,
+    command_name: str,
+    payload: dict[str, Any],
+    correlation_id: str | None,
+) -> IdempotentReservation | IdempotentReplay:
+    """`begin_idempotent_request` for a keyed request of a route that may be registered for the reservation
+    deferral (R01 O-2, AM-1): the one place the two reservation paths of the 129 opted-in routes (this module's
+    `start_campaign_idempotency` and `entity_lifecycle`) meet.
+
+    A **keyed post-write plan** (`plan.keyed_post_write`, opened by `begin_route_plan` for a registered
+    route only) defers the reservation's campaign foreign key **before** the
+    reservation, at the top-level transaction and before any row lock, then binds the server's recorded outcome
+    right after it. The reservation therefore no longer takes the campaign row `FOR KEY SHARE` ahead of the
+    request's role rows and membership: the plan's `lock_campaign_evidence` takes it at the scope's own campaign
+    position, which every access writer already precedes (design 2.2). Any other plan (or none) reserves exactly as
+    before. Call it only for a keyed request: an unkeyed request reserves nothing and defers nothing."""
+    deferring = plan is not None and plan.keyed_post_write
+    if plan is not None and deferring:
+        plan.defer_reservation_campaign_fk(connection)
+    outcome = begin_idempotent_request(
+        connection,
+        actor_user_id=actor_user_id,
+        campaign_id=campaign_id,
+        idempotency_key=idempotency_key,
+        command_name=command_name,
+        payload=payload,
+        correlation_id=correlation_id,
+    )
+    if plan is not None and deferring:
+        plan.bind_reservation(connection, outcome)
+    return outcome
 
 
 @dataclass
@@ -101,16 +177,24 @@ def start_campaign_idempotency(
     command_name: str,
     payload: dict[str, Any],
     correlation_id: str | None,
+    plan: AuthorizationPlan | None = None,
 ) -> CampaignIdempotency:
     """The campaign-scoped twin of `start_actor_idempotency` (content authoring
     has a campaign). No key means no deduplication. The fingerprint covers the
     command name and the normalized payload (route target ids and
     `expected_row_version` included), so the same key with a different body is
-    the existing idempotency conflict, never a silent replay."""
+    the existing idempotency conflict, never a silent replay.
+
+    `plan` (R01 plan section 6.6, R-D4): a migrated route passes its `AuthorizationPlan`. A replay is
+    answered after the key-lock wait, so the stored receipt is returned only after the plan's
+    registered requirements hold in a fresh snapshot: a refusal raises the route's own error and
+    returns nothing from the receipt, and the replay then finalizes the plan (a replay writes no row, so
+    no statement follows). A route not yet migrated passes none and behaves as before."""
     if idempotency_key is None:
         return CampaignIdempotency()
-    outcome = begin_idempotent_request(
+    outcome = begin_planned_idempotent_request(
         connection,
+        plan=plan,
         actor_user_id=actor_user_id,
         campaign_id=campaign_id,
         idempotency_key=idempotency_key,
@@ -119,6 +203,7 @@ def start_campaign_idempotency(
         correlation_id=correlation_id,
     )
     if isinstance(outcome, IdempotentReplay):
+        _judge_replay(connection, plan)
         return CampaignIdempotency(
             replay=JSONResponse(
                 status_code=outcome.response_status_code, content=outcome.response_body

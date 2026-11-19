@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import StaleWriteError, normalize_description
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.data_classification import audit_change
 from dnd_ai.domain.quest_runtime import (
     OBJECTIVE_TARGETS,
@@ -169,10 +170,13 @@ def change_quest_status(
     party_id: uuid.UUID | None = None,
     world_time_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> RuntimeResult:
     starts, new_status, event_type = QUEST_ACTIONS[action]
     details = normalize_description(note)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     _validate_campaign_party(
         connection, campaign_id=campaign_id, party_id=party_id, lock=True, require_active=True
     )
@@ -247,10 +251,13 @@ def set_objective_status(
     party_id: uuid.UUID | None = None,
     world_time_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> RuntimeResult:
     starts, event_type = OBJECTIVE_TARGETS[new_status]
     details = normalize_description(note)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     _validate_campaign_party(
         connection, campaign_id=campaign_id, party_id=party_id, lock=True, require_active=True
     )

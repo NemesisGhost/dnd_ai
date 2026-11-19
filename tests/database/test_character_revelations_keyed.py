@@ -20,7 +20,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
-import dnd_ai.api.memberships as memberships_api
 from dnd_ai.api.idempotency import idempotency_key_lock_scope
 from dnd_ai.commands.access_grants import create_resource_grant
 from dnd_ai.commands.character_public_profile import (
@@ -63,7 +62,9 @@ from tests.database.test_character_revelations import (  # noqa: F401 - fixtures
     url,
 )
 from tests.database.test_idempotency_key_lock import _key_lock_state
+from tests.end_audit_failure import fail_end_audit
 from tests.lock_race_support import Budget, LockRace
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -489,6 +490,7 @@ def test_a_refusal_after_the_reservation_leaves_no_receipt_and_the_key_then_work
             actor_user_id=g.o1_user_id,
             expected_row_version=None,
             fields={"public_appearance": "Now released"},
+            plan=fixture_plan(connection, g.campaign_id),
         )
     with postgres_engine.begin() as connection:
         release_character_public_profile(
@@ -498,6 +500,7 @@ def test_a_refusal_after_the_reservation_leaves_no_receipt_and_the_key_then_work
             actor_membership_id=g.o1,
             expected_draft_row_version=1,
             release_note=None,
+            plan=fixture_plan(connection, g.campaign_id),
         )
     again = client_factory_call(client_factory, g.o1_user_id, url(g, c), body, key)
     assert again.status_code == 201, again.text
@@ -618,15 +621,13 @@ def test_xr3_the_first_request_rolls_back_and_the_waiting_create_runs_fresh(
 ) -> None:
     c = rev.character_id
     key = f"xr3-{uuid.uuid4().hex[:8]}"
-    real = memberships_api.record_change_log
 
-    def fail_once(*args: Any, **kwargs: Any) -> Any:
+    def fail_once() -> None:
         if not getattr(fail_once, "failed", False):
             fail_once.failed = True  # type: ignore[attr-defined]
             raise ValueError("the end fails after its reservation")
-        return real(*args, **kwargs)
 
-    monkeypatch.setattr(memberships_api, "record_change_log", fail_once)
+    fail_end_audit(monkeypatch, fail_once)
     hold = _PidHold(
         postgres_engine,
         "SELECT 1 FROM security.membership_roles WHERE membership_role_id = :r FOR SHARE",
@@ -693,6 +694,7 @@ def _create_current(g: Gate, c: uuid.UUID) -> Callable[[Any], Any]:
         target_access_group_id=None,
         reason="Race",
         reserve=lambda: False,
+        plan=fixture_plan(cn, g.campaign_id),
     )
 
 
@@ -770,6 +772,7 @@ def test_a_revoke_and_the_end_of_the_target_meet_at_the_campaign_row_in_either_o
             actor_membership_id=g.o1,
             reason="Race",
             reserve=lambda: False,
+            plan=fixture_plan(cn, g.campaign_id),
         )
 
     # V1: the revoke first, paused holding the campaign `KEY SHARE`; the end waits for the campaign.

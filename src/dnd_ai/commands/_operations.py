@@ -17,6 +17,8 @@ from dataclasses import dataclass
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.authorization import PlanArgument
+
 from ._content import CANON_EDIT, lock_authoring_scope
 
 
@@ -32,16 +34,22 @@ def lock_operation_scope(
     *,
     campaign_id: uuid.UUID,
     actor_user_id: uuid.UUID,
+    plan: PlanArgument,
     capability: str = CANON_EDIT,
 ) -> OperationScope:
     """Lock and re-authorize; return the campaign's world and its own timeline.
-    Raises the same non-disclosing errors as `lock_authoring_scope`."""
+    Raises the same non-disclosing errors as `lock_authoring_scope`. `plan` is required and is
+    forwarded to it (an `AuthorizationPlan`, or the explicit `R01_PENDING` marker)."""
     if capability != CANON_EDIT:
         raise ValueError("operation commands currently authorize through canon.edit")
     # Campaign-state operations (and the campaign-originated world-time points, D8/E1)
     # are authorized by the campaign alone: no world capability is required.
     scope = lock_authoring_scope(
-        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, world_capability=None
+        connection,
+        campaign_id=campaign_id,
+        actor_user_id=actor_user_id,
+        world_capability=None,
+        plan=plan,
     )
     timeline_id = connection.execute(
         text("SELECT timeline_id FROM campaign.campaigns WHERE campaign_id = :c"),

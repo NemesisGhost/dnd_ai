@@ -50,6 +50,10 @@ ORIGIN_AUTHORED = "authored"
 ORIGIN_LEGACY_APPEARANCE = "legacy_appearance"
 ORIGIN_LEGACY_BACKGROUND = "legacy_background"
 LEGACY_ORIGINS = frozenset({ORIGIN_LEGACY_APPEARANCE, ORIGIN_LEGACY_BACKGROUND})
+# A5b (decision D16): text copied from a campaign player profile is restricted exactly as legacy-
+# copied text is, with its own source rule (`domain.player_profiles.may_read_player_profile`).
+ORIGIN_PLAYER_PROFILE = "player_profile"
+RESTRICTED_ORIGINS = frozenset({*LEGACY_ORIGINS, ORIGIN_PLAYER_PROFILE})
 
 # The two supported copy sources (plan section 9.1): the request names the legacy description field,
 # and the target is the draft field of the same name. `notes` is never a source. Each entry is
@@ -304,7 +308,8 @@ def may_read_legacy_source(
 def field_is_restricted(
     *, has_text: bool, is_legacy: bool, watermark: int | None, covering_draft_version: int | None
 ) -> bool:
-    """A draft field is restricted when it has text, a legacy origin, and no release covers it.
+    """A draft field is restricted when it has text, a copied origin (`is_legacy`: legacy or, from
+    A5b, player profile; the name predates A5b), and no release covers it.
 
     A release covers a field when its `from_draft_row_version` is at or above the field's
     restriction watermark (the draft `row_version` at which the field's content last changed while

@@ -118,10 +118,12 @@ import time
 import uuid
 import weakref
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from sqlalchemy import Connection, Engine, create_engine, text
 
+from dnd_ai.api.access import route_capability_requirement
 from dnd_ai.commands import integration as integration_module
 from dnd_ai.commands.encounters import start_encounter
 from dnd_ai.commands.integration import (
@@ -131,11 +133,18 @@ from dnd_ai.commands.integration import (
     map_external_identifier,
     register_external_system,
 )
+from dnd_ai.domain.authorization import Requirement
 from tests.factories import (
+    lookup_id,
     make_campaign,
+    make_campaign_membership,
     make_character,
     make_character_state,
+    make_membership_role,
+    make_role,
+    make_role_capability,
     make_timeline,
+    make_user,
     make_world,
     make_world_time,
 )
@@ -157,6 +166,41 @@ class Fixture:
             current_hit_points=15,
             maximum_hit_points=15,
         )
+        # R01 E3: every call is scoped to a campaign and judged for an actor holding `canon.edit` in it.
+        self.campaign_id = make_campaign(
+            connection, self.timeline_id, lifecycle_status_code="pending"
+        )
+        self.actor_user_id = make_user(connection, "Foundry Sync Actor")
+        membership = make_campaign_membership(connection, self.campaign_id, self.actor_user_id)
+        self.role_id = make_role(
+            connection, campaign_id=self.campaign_id, code=f"gm_{uuid.uuid4().hex[:8]}"
+        )
+        make_role_capability(
+            connection,
+            self.role_id,
+            lookup_id(connection, "security", "capabilities", "capability_id", "canon.edit"),
+        )
+        make_membership_role(connection, membership, self.role_id)
+
+    def requirements(self) -> list[Requirement]:
+        """A FRESH `canon.edit` route requirement per call (the command calls it once per transaction)."""
+        return [
+            route_capability_requirement(
+                capability_code="canon.edit",
+                allow_archived_campaign=False,
+                world_capability=None,
+                world_id=None,
+                actor_user_id=self.actor_user_id,
+            )
+        ]
+
+    @property
+    def sync_scope(self) -> dict[str, Any]:
+        return {
+            "actor_user_id": self.actor_user_id,
+            "campaign_id": self.campaign_id,
+            "requirements": self.requirements,
+        }
 
 
 @pytest.fixture
@@ -184,9 +228,22 @@ def f(postgres_engine: Engine) -> Iterator[Fixture]:
             ),
             {"t": fixture.timeline_id},
         )
+        for stmt in (
+            "DELETE FROM security.membership_roles WHERE role_id = :r",
+            "DELETE FROM security.role_capabilities WHERE role_id = :r",
+            "DELETE FROM security.roles WHERE role_id = :r",
+        ):
+            cleanup.execute(text(stmt), {"r": fixture.role_id})
+        cleanup.execute(
+            text("DELETE FROM security.campaign_memberships WHERE campaign_id = :c"),
+            {"c": fixture.campaign_id},
+        )
         cleanup.execute(
             text("DELETE FROM campaign.campaigns WHERE timeline_id = :t"),
             {"t": fixture.timeline_id},
+        )
+        cleanup.execute(
+            text("DELETE FROM security.users WHERE user_id = :u"), {"u": fixture.actor_user_id}
         )
         cleanup.execute(
             text("DELETE FROM core.entities WHERE world_id = :w"), {"w": fixture.world_id}
@@ -231,6 +288,7 @@ def test_an_inbound_foundry_combat_payload_updates_persistent_state(
 
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -238,6 +296,7 @@ def test_an_inbound_foundry_combat_payload_updates_persistent_state(
 
     result = apply_foundry_combat_sync(
         postgres_engine,
+        **f.sync_scope,
         external_system_id=system.external_system_id,
         external_operation_id="foundry-combat-1-turn-1",
         encounter_id=start.encounter_id,
@@ -311,36 +370,26 @@ def test_an_inbound_foundry_combat_payload_updates_persistent_state(
 def test_a_foundry_turn_on_a_campaign_owned_encounter_inherits_its_campaign(
     postgres_engine: Engine, f: Fixture
 ) -> None:
-    """apply_foundry_combat_sync() deliberately calls _resolve_combat_turn_impl
-    with no campaign_id, leaving _lock_encounter's ownership *assertion*
-    unscoped (Phase 9's integration.* schema has no campaign to assert
-    against yet — see that function's own docstring). That must not mean
-    the interaction/event rows it creates lose the target encounter's real
-    campaign provenance: the encounter here is campaign-owned, so the
-    interaction.interactions row and the resulting combat_damage_dealt
-    narrative.events row must both carry that same campaign_id, exactly as
-    they would for a campaign-scoped direct caller — a routine Foundry
-    turn must never silently downgrade a campaign-owned encounter's
-    records to campaign_id=NULL."""
+    """R01 E3: apply_foundry_combat_sync() is always scoped to the authorized campaign (the unscoped mode is
+    gone), so the encounter here is campaign-owned and the interaction.interactions row and the resulting
+    combat_damage_dealt narrative.events row must both carry that campaign_id — a routine Foundry turn must never
+    silently downgrade a campaign-owned encounter's records to campaign_id=NULL."""
     system = register_external_system(
         postgres_engine, world_id=f.world_id, system_type="foundry", display_name="Test Foundry"
     )
-    with postgres_engine.begin() as connection:
-        # "pending" sidesteps the active-campaign access-manager retention
-        # invariant (revision 080) — this test doesn't grant access.manage
-        # and doesn't otherwise care about campaign lifecycle.
-        campaign_id = make_campaign(connection, f.timeline_id, lifecycle_status_code="pending")
+    campaign_id = f.campaign_id
 
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
-        campaign_id=campaign_id,
     )
 
     result = apply_foundry_combat_sync(
         postgres_engine,
+        **f.sync_scope,
         external_system_id=system.external_system_id,
         external_operation_id="campaign-provenance-op-1",
         encounter_id=start.encounter_id,
@@ -456,6 +505,7 @@ def test_replaying_the_same_operation_returns_the_original_result_without_duplic
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -474,8 +524,8 @@ def test_replaying_the_same_operation_returns_the_original_result_without_duplic
         "damage_amount": 6,
     }
 
-    first = apply_foundry_combat_sync(postgres_engine, **kwargs)
-    second = apply_foundry_combat_sync(postgres_engine, **kwargs)
+    first = apply_foundry_combat_sync(postgres_engine, **f.sync_scope, **kwargs)
+    second = apply_foundry_combat_sync(postgres_engine, **f.sync_scope, **kwargs)
 
     assert first.replayed is False
     assert second.replayed is True
@@ -502,6 +552,7 @@ def test_concurrent_submissions_of_the_same_operation_apply_damage_exactly_once(
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -516,6 +567,7 @@ def test_concurrent_submissions_of_the_same_operation_apply_damage_exactly_once(
         try:
             results[label] = apply_foundry_combat_sync(
                 postgres_engine,
+                **f.sync_scope,
                 external_system_id=system.external_system_id,
                 external_operation_id="concurrent-op-1",
                 encounter_id=start.encounter_id,
@@ -565,6 +617,7 @@ def test_reusing_an_operation_id_with_a_conflicting_payload_raises(
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -572,6 +625,7 @@ def test_reusing_an_operation_id_with_a_conflicting_payload_raises(
 
     first = apply_foundry_combat_sync(
         postgres_engine,
+        **f.sync_scope,
         external_system_id=system.external_system_id,
         external_operation_id="conflict-op-1",
         encounter_id=start.encounter_id,
@@ -588,6 +642,7 @@ def test_reusing_an_operation_id_with_a_conflicting_payload_raises(
     with pytest.raises(ConflictingSyncPayloadError):
         apply_foundry_combat_sync(
             postgres_engine,
+            **f.sync_scope,
             external_system_id=system.external_system_id,
             external_operation_id="conflict-op-1",
             encounter_id=start.encounter_id,
@@ -621,6 +676,7 @@ def test_a_failed_combat_sync_records_the_failure_and_leaves_domain_state_unchan
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         # Only the attacker joins — the defender is deliberately NOT a
@@ -638,6 +694,7 @@ def test_a_failed_combat_sync_records_the_failure_and_leaves_domain_state_unchan
     with pytest.raises(ValueError, match="is not a participant"):
         apply_foundry_combat_sync(
             postgres_engine,
+            **f.sync_scope,
             external_system_id=system.external_system_id,
             external_operation_id="failing-op-1",
             encounter_id=start.encounter_id,
@@ -704,6 +761,7 @@ def test_retrying_a_failed_operation_id_succeeds_and_adds_a_second_delivery_atte
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         # Only the defender joins — the attacker (the intended actor below)
@@ -725,7 +783,7 @@ def test_retrying_a_failed_operation_id_succeeds_and_adds_a_second_delivery_atte
     }
 
     with pytest.raises(ValueError, match="is not a participant"):
-        apply_foundry_combat_sync(postgres_engine, **kwargs)
+        apply_foundry_combat_sync(postgres_engine, **f.sync_scope, **kwargs)
 
     # Fix the problem (add the attacker as a participant) and retry the
     # exact same operation id.
@@ -738,7 +796,7 @@ def test_retrying_a_failed_operation_id_succeeds_and_adds_a_second_delivery_atte
             {"encounter": start.encounter_id, "entity": f.attacker_id},
         )
 
-    result = apply_foundry_combat_sync(postgres_engine, **kwargs)
+    result = apply_foundry_combat_sync(postgres_engine, **f.sync_scope, **kwargs)
     assert result.replayed is False
     assert result.combat_result.new_hit_points == 10
 
@@ -776,6 +834,7 @@ def test_reusing_a_failed_operations_id_with_a_different_payload_raises_conflict
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id,),
@@ -784,6 +843,7 @@ def test_reusing_a_failed_operations_id_with_a_different_payload_raises_conflict
     with pytest.raises(ValueError, match="is not a participant"):
         apply_foundry_combat_sync(
             postgres_engine,
+            **f.sync_scope,
             external_system_id=system.external_system_id,
             external_operation_id="failed-then-conflicting-op-1",
             encounter_id=start.encounter_id,
@@ -799,6 +859,7 @@ def test_reusing_a_failed_operations_id_with_a_different_payload_raises_conflict
     with pytest.raises(ConflictingSyncPayloadError):
         apply_foundry_combat_sync(
             postgres_engine,
+            **f.sync_scope,
             external_system_id=system.external_system_id,
             external_operation_id="failed-then-conflicting-op-1",
             encounter_id=start.encounter_id,
@@ -838,6 +899,7 @@ def test_a_completion_failure_rolls_back_the_domain_mutation(
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -862,7 +924,7 @@ def test_a_completion_failure_rolls_back_the_domain_mutation(
     }
 
     with pytest.raises(RuntimeError, match="simulated completion-bookkeeping failure"):
-        apply_foundry_combat_sync(postgres_engine, **kwargs)
+        apply_foundry_combat_sync(postgres_engine, **f.sync_scope, **kwargs)
 
     # The domain mutation must have rolled back completely, even though
     # resolve_combat_turn()'s own statements executed without error.
@@ -911,7 +973,7 @@ def test_a_completion_failure_rolls_back_the_domain_mutation(
 
     # Remove the injected failure and retry the exact same operation.
     monkeypatch.undo()
-    result = apply_foundry_combat_sync(postgres_engine, **kwargs)
+    result = apply_foundry_combat_sync(postgres_engine, **f.sync_scope, **kwargs)
     assert result.replayed is False
     assert result.combat_result.new_hit_points == 9
     assert _character_hit_points(postgres_engine, f.timeline_id, f.defender_id) == 9
@@ -964,6 +1026,7 @@ def test_two_different_operations_for_the_same_encounter_complete_independently(
         )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -978,6 +1041,7 @@ def test_two_different_operations_for_the_same_encounter_complete_independently(
         try:
             results[label] = apply_foundry_combat_sync(
                 postgres_engine,
+                **f.sync_scope,
                 external_system_id=system.external_system_id,
                 external_operation_id=operation_id,
                 encounter_id=start.encounter_id,
@@ -1067,6 +1131,7 @@ def test_a_small_pool_does_not_deadlock_a_single_call(postgres_engine: Engine, f
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -1078,6 +1143,7 @@ def test_a_small_pool_does_not_deadlock_a_single_call(postgres_engine: Engine, f
     try:
         result = apply_foundry_combat_sync(
             small_pool_engine,
+            **f.sync_scope,
             external_system_id=system.external_system_id,
             external_operation_id="small-pool-single-op-1",
             encounter_id=start.encounter_id,
@@ -1114,6 +1180,7 @@ def test_two_operations_on_the_same_target_do_not_starve_a_small_pool(
         )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -1132,6 +1199,7 @@ def test_two_operations_on_the_same_target_do_not_starve_a_small_pool(
         try:
             results[label] = apply_foundry_combat_sync(
                 small_pool_engine,
+                **f.sync_scope,
                 external_system_id=system.external_system_id,
                 external_operation_id=operation_id,
                 encounter_id=start.encounter_id,
@@ -1194,6 +1262,7 @@ def test_an_unlock_failure_invalidates_the_connection_and_a_later_call_does_not_
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -1232,7 +1301,7 @@ def test_an_unlock_failure_invalidates_the_connection_and_a_later_call_does_not_
         "damage_amount": 6,
     }
 
-    result = apply_foundry_combat_sync(postgres_engine, **kwargs)
+    result = apply_foundry_combat_sync(postgres_engine, **f.sync_scope, **kwargs)
     assert result.replayed is False
     assert len(invalidate_calls) == 1, "the unlock failure must invalidate the lock connection"
     assert len(close_calls) == 1, (
@@ -1251,7 +1320,7 @@ def test_an_unlock_failure_invalidates_the_connection_and_a_later_call_does_not_
     replay_results: list[ApplyFoundryCombatSyncResult] = []
 
     def _replay() -> None:
-        replay_results.append(apply_foundry_combat_sync(postgres_engine, **kwargs))
+        replay_results.append(apply_foundry_combat_sync(postgres_engine, **f.sync_scope, **kwargs))
 
     thread = threading.Thread(target=_replay)
     thread.start()
@@ -1280,6 +1349,7 @@ def test_a_close_failure_after_confirmed_unlock_does_not_mask_a_domain_exception
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         # Only the attacker joins — the defender (used as actor below) is
@@ -1296,6 +1366,7 @@ def test_a_close_failure_after_confirmed_unlock_does_not_mask_a_domain_exception
     with pytest.raises(ValueError, match="is not a participant"):
         apply_foundry_combat_sync(
             postgres_engine,
+            **f.sync_scope,
             external_system_id=system.external_system_id,
             external_operation_id="close-failure-op-1",
             encounter_id=start.encounter_id,
@@ -1343,6 +1414,7 @@ def test_an_invalidate_failure_falls_back_to_detach_and_a_later_call_does_not_bl
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -1385,7 +1457,7 @@ def test_an_invalidate_failure_falls_back_to_detach_and_a_later_call_does_not_bl
         "damage_amount": 6,
     }
 
-    result = apply_foundry_combat_sync(postgres_engine, **kwargs)
+    result = apply_foundry_combat_sync(postgres_engine, **f.sync_scope, **kwargs)
     assert result.replayed is False
     assert len(detach_calls) == 1, "a failed invalidate() must fall back to detach()"
     assert len(close_calls) == 1, "the connection must still be closed after the detach fallback"
@@ -1428,7 +1500,7 @@ def test_an_invalidate_failure_falls_back_to_detach_and_a_later_call_does_not_bl
     replay_results: list[ApplyFoundryCombatSyncResult] = []
 
     def _replay() -> None:
-        replay_results.append(apply_foundry_combat_sync(postgres_engine, **kwargs))
+        replay_results.append(apply_foundry_combat_sync(postgres_engine, **f.sync_scope, **kwargs))
 
     thread = threading.Thread(target=_replay)
     thread.start()
@@ -1478,6 +1550,7 @@ def test_a_double_failure_after_invalidate_and_detach_fail_quarantines_the_conne
     )
     start = start_encounter(
         postgres_engine,
+        campaign_id=f.campaign_id,
         timeline_id=f.timeline_id,
         world_time_id=f.world_time_id,
         participant_entity_ids=(f.attacker_id, f.defender_id),
@@ -1508,6 +1581,7 @@ def test_a_double_failure_after_invalidate_and_detach_fail_quarantines_the_conne
     try:
         result = apply_foundry_combat_sync(
             postgres_engine,
+            **f.sync_scope,
             external_system_id=system.external_system_id,
             external_operation_id="double-failure-op-1",
             encounter_id=start.encounter_id,

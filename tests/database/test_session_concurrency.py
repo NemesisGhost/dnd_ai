@@ -19,6 +19,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -39,6 +40,7 @@ class Fixture:
             actor_user_id=self.owner,
             title=None,
             scheduled_for=None,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def update(self, connection, title: str, version: int):  # type: ignore[no-untyped-def]
@@ -50,6 +52,7 @@ class Fixture:
             expected_row_version=version,
             title=title,
             scheduled_for=None,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def archive(self, connection, version: int):  # type: ignore[no-untyped-def]
@@ -59,6 +62,7 @@ class Fixture:
             actor_user_id=self.owner,
             session_id=self.session_id,
             expected_row_version=version,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def numbers(self) -> list[int]:
@@ -93,7 +97,12 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
         world = make_authored_world(setup, owner_user_id=owner, name="Session Race World")
         campaign_id = make_authored_campaign(setup, world, name="Session Race Campaign")
         first = schedule_session(
-            setup, campaign_id=campaign_id, actor_user_id=owner, title="One", scheduled_for=None
+            setup,
+            campaign_id=campaign_id,
+            actor_user_id=owner,
+            title="One",
+            scheduled_for=None,
+            plan=fixture_plan(setup, campaign_id),
         )
     yield Fixture(postgres_engine, owner, campaign_id, first.session_id)
     with postgres_engine.begin() as cleanup:

@@ -88,6 +88,10 @@ check_untyped_defs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A test that makes no progress for 10 minutes dumps every thread's stack to stderr (the shard log), once. It never
+# fails or skips the test; the harness deadlines (tests/http_race_support.py) fire long before, with their own
+# diagnostics (tests/deadline_diagnostics.py). Hard-hang backstop only.
+faulthandler_timeout = 600
 # scripts/ has no __init__.py (it's one-off CI/ops scripts, not a package).
 # Its modules are invoked directly (e.g. `uv run python scripts/wait_for_ci.py`),
 # which picks up scripts/ as sys.path[0]. Adding it here lets a test import

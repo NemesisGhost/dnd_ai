@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import normalize_description
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.encounter_operations import (
     EncounterFinishedError,
     EncounterNotReadyError,
@@ -96,9 +97,12 @@ def start_prepared_encounter(
     world_time_id: uuid.UUID | None = None,
     session_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> EncounterOperationResult:
     details = normalize_description(note)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
     status, _ = _lock(connection, scope, encounter_id)
     if status != "pending":
@@ -160,9 +164,12 @@ def abort_encounter(
     world_time_id: uuid.UUID | None = None,
     session_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> EncounterOperationResult:
     details = normalize_description(note)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     validate_session_campaign(connection, campaign_id=campaign_id, session_id=session_id)
     status, _ = _lock(connection, scope, encounter_id)
     if status not in ("pending", "active"):

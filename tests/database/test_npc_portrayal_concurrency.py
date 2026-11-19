@@ -20,6 +20,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -41,6 +42,7 @@ class Fixture:
             npc_id=self.npc_id,
             expected_version=0,
             fields={"voice": voice},
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def versions(self) -> list[int]:
@@ -71,6 +73,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
     yield Fixture(postgres_engine, owner, campaign_id, npc.entity_id)  # type: ignore[arg-type]
     _purge_user_worlds(postgres_engine, owner)

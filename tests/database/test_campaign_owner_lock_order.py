@@ -432,8 +432,11 @@ def test_two_owners_relinquishing_to_each_other_leave_exactly_one_owner(
     client_factory: Callable[[uuid.UUID], TestClient], postgres_engine: Engine, g: Gate
 ) -> None:
     """Parked on the owner template so both requests hold their own owner assignment and the
-    other's membership before either reads the owners; the campaign row then serializes them, and
-    the second re-reads the first's committed result."""
+    other's membership before either reads the owners; the memberships and then the campaign row
+    serialize them. R01 S5-E2 amendment (approved behavior, plan 6.27.4): the second transfer re-reads the
+    first's committed result, sees that the recipient's owner assignment changed and is refused with 409
+    `ownership_transfer_recipient_changed` (it used to assign back and return 200); a retry gives the legacy
+    result. Exactly one owner remains and one audit row was written."""
     urls = _urls(g)
     hold = _lock_owner_template(postgres_engine, g)
     first = _post(
@@ -451,11 +454,11 @@ def test_two_owners_relinquishing_to_each_other_leave_exactly_one_owner(
     _wait_until_waiting(postgres_engine, 2)
     hold.release()
     statuses = sorted([_status(first.join()), _status(second.join())])
-    assert statuses == [200, 200]
+    assert statuses == [200, 409]
 
     assert len(_owners(postgres_engine, g)) == 1
     assert _ended(postgres_engine, g) == set()
-    assert _audit(postgres_engine, g).get("transfer_campaign_ownership") == 2
+    assert _audit(postgres_engine, g).get("transfer_campaign_ownership") == 1
 
 
 def test_two_identical_relinquishing_transfers_apply_once(
@@ -541,10 +544,26 @@ def test_a_role_change_and_a_transfer_by_the_same_owner_serialize(
     _wait_until_waiting(postgres_engine, 2)
     hold.release()
     assert _status(change.join()) == 201
-    transfer_response = transfer.join()
-    assert _status(transfer_response) == 200, transfer_response.text  # type: ignore[attr-defined]
-    assert transfer_response.json()["assigned"] is False  # type: ignore[attr-defined]
-    assert transfer_response.json()["relinquished"] is True  # type: ignore[attr-defined]
+    # R01 S5-E2 lock-order correction C2 (a behavior change, for review): the transfer chose its recipient's
+    # candidate owner row (none: the recipient was a player) before it waited on the change, and the change then
+    # gave the recipient an owner row. A locking statement never picks up a row outside the discovered candidates,
+    # so the drift check refuses (retryable 409) instead of silently serializing as 200 as it did before. Nothing
+    # was written by the refused transfer.
+    refused = transfer.join()
+    assert _status(refused) == 409, refused.text  # type: ignore[attr-defined]
+    assert refused.json()["error"]["code"] == "ownership_transfer_recipient_changed"  # type: ignore[attr-defined]
+    assert _owners(postgres_engine, g) == {g.o1, g.o2, g.player}
+    assert _audit(postgres_engine, g).get("transfer_campaign_ownership") is None
+    # The retry finds the recipient already an owner: the same outcome the test asserted before the correction.
+    retried = _post(
+        client_factory,
+        g.o1_user_id,
+        urls["transfer"],
+        {"target_campaign_membership_id": str(g.player), "relinquish_own_ownership": True},
+    ).join()
+    assert _status(retried) == 200, retried.text  # type: ignore[attr-defined]
+    assert retried.json()["assigned"] is False  # type: ignore[attr-defined]
+    assert retried.json()["relinquished"] is True  # type: ignore[attr-defined]
 
     assert _owners(postgres_engine, g) == {g.o2, g.player}
     audit = _audit(postgres_engine, g)

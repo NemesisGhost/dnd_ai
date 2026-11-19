@@ -25,6 +25,7 @@ from sqlalchemy import Connection
 from dnd_ai.commands.travel import record_travel
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.relationship_authoring import MAX_TRAVELERS
 from dnd_ai.queries.relationship_authoring import list_entity_relationships
 
@@ -38,11 +39,13 @@ from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["travel"])
 
 _Access = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -108,6 +111,7 @@ def _record(
     idempotency_key: str | None,
     correlation_id: str | None,
     session_id: uuid.UUID | None,
+    plan: AuthorizationPlan,
 ) -> Any:
     payload = body.model_dump(mode="json")
     if session_id is not None:
@@ -121,6 +125,7 @@ def _record(
         command_name="record_travel",
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -135,6 +140,7 @@ def _record(
         world_time_id=body.world_time_id,
         note=body.note,
         session_id=session_id,
+        plan=plan,
     )
     if result.changed:
         changed_fields: dict[str, Any] = {"traveler_count": {"from": None, "to": len(result.moved)}}
@@ -165,6 +171,7 @@ def _record(
     if result.event_id is not None:
         receipt["event_id"] = str(result.event_id)
     finish_campaign_idempotency(connection, idem, status_code=200, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=200, content=receipt)
 
 
@@ -172,6 +179,7 @@ def _record(
 def travel_endpoint(
     body: TravelRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -184,6 +192,7 @@ def travel_endpoint(
         idempotency_key=idempotency_key,
         correlation_id=correlation_id,
         session_id=None,
+        plan=plan,
     )
 
 
@@ -192,6 +201,7 @@ def session_travel_endpoint(
     session_id: uuid.UUID,
     body: TravelRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -205,4 +215,5 @@ def session_travel_endpoint(
         idempotency_key=idempotency_key,
         correlation_id=correlation_id,
         session_id=session_id,
+        plan=plan,
     )

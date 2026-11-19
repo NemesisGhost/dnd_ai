@@ -502,15 +502,16 @@ PYTHONPATH=. python -m pytest -p default_config_plugin /path/to/dnd_ai/tests \
 
 `DATABASE_URL` still comes from the repository `.env` through conftest, so the database tests run unchanged. Report a run made this way as "defaults, `.env` override removed", and a run made from the repository root with your `.env` as it is separately.
 
-### 6.3 Running all four CI shards locally
+### 6.3 Running the CI shards locally (four by default; CI uses eight)
 
 ```bash
 uv run python scripts/run_sharded_tests.py
 ```
 
-One command, Windows or POSIX. It reproduces CI's `postgres-tests` job: the same partition
-(`CI_TEST_SHARD=<index>/4`, whole files dealt round-robin by `tests/conftest.py`), the whole of
-`tests/` (unit, database and scenario), four shards at once. The cause of the "don't run shards
+One command, Windows or POSIX. It reproduces CI's `postgres-tests` job: the same partition mechanism
+(`CI_TEST_SHARD=<index>/<total>`, whole files dealt round-robin by `tests/conftest.py`), the whole of
+`tests/` (unit, database and scenario), four shards at once by default (CI groups the same suite eight ways;
+`--shards 8` reproduces that grouping). The cause of the "don't run shards
 concurrently" warning above is that the migrations and downgrade tests create and drop
 **cluster-global roles**, so two shards on one server collide. CI gives each shard its own server;
 so does this script, with a throwaway PostgreSQL 18 cluster per shard (`initdb` into the run
@@ -558,6 +559,18 @@ Everything a run creates is in `.tmp/shards/run-<stamp>-<pid>/` (gitignored): ea
 the clusters, temp and basetemp directories are removed at the end (`--keep-data` keeps them). On
 Ctrl+C the shards and servers are stopped and only that run's own directories are cleaned.
 
+**Deadline reports.** When an HTTP race test's harness deadline expires (`tests/http_race_support.py`: a gate never
+reached, a request that does not finish, sessions that never block), `tests/deadline_diagnostics.py` writes a report
+**before** the assertion is raised and before any teardown, and the assertion message names the file. The runner points
+each shard's `RUNNER_DEADLINE_DIAG_DIR` at `shard-<n>/deadline-diagnostics/`, which is kept with the logs (a run that
+produced reports prints their count and directory). A report holds the requests' completion and exception state, every
+thread's stack and asyncio task, the pool's checkout state, every live gate and its listener, and *all* backends of the
+test database (idle and idle-in-transaction included, with locks, blockers and the deadlock counter) read over a separate
+connection, plus machine context. It never extends the deadline, retries, skips or masks the assertion, and a failing
+collector is reported as failed while the others still run. `faulthandler_timeout = 600` additionally dumps all stacks
+of a test that makes no progress at all. A past stall whose cause was not found is **not** a flake: if one recurs, read
+its report; if it does not recur, its cause is still unresolved.
+
 On Windows the four servers and the four pytest processes are put in a Job Object that kills
 them when the runner's handle closes. The coverage is partial, and this is what it is:
 
@@ -583,7 +596,7 @@ anything created inside the window or by an in-flight utility may still be runni
 anywhere else, and your own server is untouched.
 
 Extra pytest arguments go after `--` (for example `-- -x`), subject to the allowlist above;
-`--shards N` changes the count, but CI's is four, set in `ci.yml`.
+`--shards N` changes the count. The local default is four (a resource choice); CI runs the same suite as eight shards, set in `ci.yml` (`CI_SHARDS` in the runner); `--shards 8` reproduces CI's grouping but needs about twice the CPU and RAM.
 
 A second cause of one run harming another was fixed alongside: every pytest session used to delete
 every other session's `.tmp/pytest-tmp-*` directory at startup, so a focused test run started while a
@@ -604,6 +617,17 @@ CPU starvation. Judge such a failure by rerunning its file alone, and report bot
 portal and the Foundry module have their own npm commands (section 7). Focused runs are unchanged:
 `uv run pytest tests/unit` needs no database, and `uv run pytest path/to/test_file.py` runs against
 the server `DATABASE_URL` names, as before.
+
+### 6.4 Testing authorization and lock order (R01)
+
+A write route is protected by a final authorization check as the last statement before COMMIT ([ACCESS_CONTROL, "Authorization timing and the final check"](api/ACCESS_CONTROL.md#authorization-timing-and-the-final-check-r01-s6)). Tests for such a route and for the locks around it follow these rules; they are what slice reviews have asked for.
+
+- **Route inventory.** Every write route inside the R01 bound is finalized, pending or an explicit planned exclusion, exactly once. `uv run python -m tests.r01_manifest` (from the repository root) regenerates `tests/r01_route_manifest.json` and `src/dnd_ai/api/r01_pending_routes.py`; the unit pins in `tests/unit/test_r01_pending_routes.py`, `test_r01_route_manifest.py` and the per-slice `test_r01_*_route_shape.py` files fail until the counts and family sets are moved deliberately in the same change. The production pending set can be empty: tests of the pending-plan mechanism use a **test-only** pending route (a monkeypatched registry entry), never a production route.
+- **Real route, real guard.** Drive the route through its HTTP entry point on a pool engine with the commit guard installed (`tests/database/test_r01_s5e2_lock_order.py`'s `Pool`, `client_for` and `NthGate`). A refusal test parks the request at its final statement (`^WITH clock AS MATERIALIZED \(SELECT clock_timestamp\(\) AS t_auth\)`), commits the change from outside, releases, and asserts the refusal code, that **every durable write rolled back**, that nothing is disclosed in the body, that nothing is left open (idle-in-transaction, checked-out connections, advisory locks), and that a retry after the change is undone succeeds. A `Recorder` pins that exactly one final statement runs and that only the COMMIT follows it. A gate fires once (`NthGate` stops the n-th match); a later request that matches the same pattern passes through.
+- **Observe a lock claim before documenting it.** State a wait or an order in a doc only after a test shows it with `pg_blocking_pids` (the waiting backend, the holder, the statement), in both arrivals for races. A role revoke, role expiry or membership end cannot COMMIT while a request holds the campaign row `KEY SHARE`, so a lapse of that kind is committed **before** the request's first campaign-referencing write or the one-way wait is tested directly; changes that take no such lock (a role-capability removal, an account deactivation, a plain lifecycle `UPDATE`) can be committed at the final statement. `assert_clean` flags every driver exception, including an expected unique violation behind a 409; use a narrower assertion where that is the intended outcome, and always assert the deadlock counter did not move.
+- **Fail-before and mutations.** Run the new tests against `git archive <parent> src` placed first on `PYTHONPATH` and report which fail and which pass (the passing ones must be controls). Mutate the production source one change at a time (a removed final check, a dropped requirement, a weakened binding), require each to be killed, include a no-op control that must survive, and verify the source is restored byte-identical (compare `sha256` before and after).
+- **Isolation for verification runs.** Use a disposable PostgreSQL 18 cluster (`initdb` into a scratch directory, loopback only). Start it with an explicit port and address (`pg_ctl start -o "-p <port> -c listen_addresses=127.0.0.1"`): without them it tries the default port, which is a developer's own server. Override all three of `DATABASE_URL`, `MIGRATION_DATABASE_URL` and `API_DATABASE_URL`, set `DND_AI_TEST_DATABASE_URL` empty, run from an empty working directory with absolute paths (see §6.2), and never touch the developer's server or `.env`.
+- **Reporting.** A failed run stays recorded as failed; its rerun is reported separately and does not replace it. Say whether a failure was in a test, in the environment or in the source, and say what was **not** run (for example the four-shard runner of §6.3). Focused passes and a full four-shard run are different evidence.
 
 ---
 
@@ -675,7 +699,7 @@ Run the same three commands locally before pushing portal changes.
 - seed idempotency — apply the complete seed set twice and require byte-identical lookup rows
 - schema comparison — autogenerate against head must produce an empty diff, proving migrations and metadata agree
 
-**`postgres-tests`** runs the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) as four parallel matrix shards, each against its own fresh `postgres:18.4` service container — `tests/conftest.py` provisions its own ephemeral database off it exactly as it does against a local server. The suite outgrew a single 30-minute job (PR #66: ~26 minutes of pytest alone). `CI_TEST_SHARD=<index>/<total>` makes `tests/conftest.py` keep only that shard's test files (whole files, dealt round-robin in sorted order — disjoint and together covering every file, proven by `tests/unit/test_conftest_sharding.py`); unset, as locally, every test runs. To reproduce one CI shard locally, run `CI_TEST_SHARD=2/4 uv run pytest`. Don't run several shards concurrently against one local server: migrations and downgrade tests create and drop cluster-global roles (`migration_owner` and the application roles), and concurrent sessions collide on them (`tuple concurrently deleted`) — CI avoids this by giving every shard its own server. Locally, [`scripts/run_sharded_tests.py`](../scripts/run_sharded_tests.py) does the same ([section 6.3](#63-running-all-four-ci-shards-locally)).
+**`postgres-tests`** runs the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) as eight parallel matrix shards (four took 28-31 minutes for the slowest, and one was cancelled at the 30-minute cap), each against its own fresh `postgres:18.4` service container — `tests/conftest.py` provisions its own ephemeral database off it exactly as it does against a local server. The suite outgrew a single 30-minute job (PR #66: ~26 minutes of pytest alone). `CI_TEST_SHARD=<index>/<total>` makes `tests/conftest.py` keep only that shard's test files (whole files, dealt round-robin in sorted order — disjoint and together covering every file, proven by `tests/unit/test_conftest_sharding.py`); unset, as locally, every test runs. To reproduce one CI shard locally, run `CI_TEST_SHARD=2/4 uv run pytest`. Don't run several shards concurrently against one local server: migrations and downgrade tests create and drop cluster-global roles (`migration_owner` and the application roles), and concurrent sessions collide on them (`tuple concurrently deleted`) — CI avoids this by giving every shard its own server. Locally, [`scripts/run_sharded_tests.py`](../scripts/run_sharded_tests.py) does the same ([section 6.3](#63-running-all-four-ci-shards-locally)).
 
 **`docker-build`**: validates `compose.yaml`/`compose.ci.yaml`, builds the application image, brings up disposable PostgreSQL via compose, and runs the `migrate` service against it as an end-to-end smoke test of the self-hosted deployment topology itself.
 

@@ -47,13 +47,17 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import Connection, text
 
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 from dnd_ai.queries.quest import get_quest_view
 
+from ._operations import lock_operation_scope
+from ._shared import require_state_targetable
 from ._shared import validate_campaign_party as _validate_campaign_party
 from .knowledge import _reveal_knowledge_to_party_impl
+from .quest_runtime import lock_quest_runtime
 from .quests import _TERMINAL_OBJECTIVE_STATUSES, _advance_objective_impl
 
 
@@ -128,6 +132,15 @@ def _apply_proposal(
     authored changes" rule (docs/ENTITY_LIFECYCLE.md §10). Returns the
     resulting `narrative.events.event_id`."""
     if proposal_kind == "reveal_knowledge":
+        # R01 E1-C1: the item's `core.entities` row `FOR SHARE` BEFORE its `knowledge_items` row `FOR UPDATE` (taken
+        # by the shared reveal below), the order the knowledge definition edit already uses (entity `FOR UPDATE`, then
+        # the item UPDATE) and the human reveal's `_lock_claim`. A plain lock: it validates nothing and a missing row
+        # locks nothing, so the shared branch's own refusals and their precedence are unchanged. The item is its own
+        # entity (class-table inheritance: `knowledge_item_id` is `core.entities.entity_id`).
+        connection.execute(
+            text("SELECT 1 FROM core.entities WHERE entity_id = :item FOR SHARE"),
+            {"item": uuid.UUID(str(proposed_arguments["knowledge_item_id"]))},
+        )
         result = _reveal_knowledge_to_party_impl(
             connection,
             knowledge_item_id=uuid.UUID(str(proposed_arguments["knowledge_item_id"])),
@@ -332,8 +345,13 @@ def _revalidate_advance_quest_objective(
     trusted, not merely read; an immutable one is read unlocked instead
     (see the campaign row below) — a lock only protects against a change
     that can actually happen. The lock order below is a fixed, top-down
-    sequence (campaign-party association -> quest-objective structural
-    row -> objective-state row(s) -> quest-participant association) that
+    sequence (campaign-party association -> the quest entity `FOR SHARE`
+    -> the quest-runtime advisory lock and its quest-state row ->
+    quest-objective structural row -> objective-state row(s) ->
+    quest-participant association; R01 E1, design 4.3: the first three are
+    `_advance_objective_impl`'s own order, so a concurrent human advance and
+    this review never lock the objective and the advisory scope in opposite
+    orders) that
     every call to this function follows identically, so two concurrent
     calls — for the same or different proposals — can never deadlock
     against each other on rows this function itself locks (the standard
@@ -474,6 +492,29 @@ def _revalidate_advance_quest_objective(
 
     _validate_campaign_party(connection, campaign_id=campaign_id, party_id=args.party_id, lock=True)
 
+    # R01 E1 (design 4.3, D-3(a)): the human advance's own order, so the two never cross.
+    # `_advance_objective_impl` locks the quest entity `FOR SHARE`, then the quest-runtime advisory lock
+    # (and the quest state row), and only then the objective row. Taking the objective row first here
+    # formed a deadlock with a concurrent human advance (P-1). The quest is read unlocked to learn
+    # which entity and advisory scope to take, locked, and re-read, as the impl does.
+    unlocked_quest_id = _objective_quest_id(connection, args.quest_objective_id)
+    if unlocked_quest_id is None:
+        raise ValueError(
+            f"proposal {ai_proposed_change_id} names an objective that no longer exists"
+        )
+    require_state_targetable(connection, unlocked_quest_id)
+    relocked_quest_id = _objective_quest_id(connection, args.quest_objective_id)
+    if relocked_quest_id is None:
+        raise ValueError(
+            f"proposal {ai_proposed_change_id} names an objective that no longer exists"
+        )
+    lock_quest_runtime(
+        connection,
+        timeline_id=args.timeline_id,
+        quest_id=relocked_quest_id,
+        party_id=args.party_id,
+    )
+
     quest_row = connection.execute(
         text("""
             SELECT qs.quest_id
@@ -548,9 +589,27 @@ def _revalidate_advance_quest_objective(
     return npc_entity_id
 
 
+def _objective_quest_id(connection: Connection, quest_objective_id: uuid.UUID) -> uuid.UUID | None:
+    """The quest that owns an objective, read without a lock (None when the objective is gone)."""
+    value = connection.execute(
+        text("""
+            SELECT qs.quest_id
+            FROM narrative.quest_objectives qo
+            JOIN narrative.quest_stages qs ON qs.quest_stage_id = qo.quest_stage_id
+            WHERE qo.quest_objective_id = :objective
+        """),
+        {"objective": quest_objective_id},
+    ).scalar()
+    if value is None:
+        return None
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def review_proposed_change(
-    engine: Engine,
+    connection: Connection,
     *,
+    plan: AuthorizationPlan,
     ai_proposed_change_id: uuid.UUID,
     campaign_id: uuid.UUID,
     reviewer_user_id: uuid.UUID,
@@ -558,68 +617,75 @@ def review_proposed_change(
     comments: str | None = None,
 ) -> ReviewProposedChangeResult:
     """Record a human reviewer's decision on a `requires_approval`
-    proposal, and apply it immediately if approved — atomically, one
-    transaction. `decision` is `'approve'` or `'reject'`
+    proposal, and apply it immediately if approved — atomically, in the
+    caller's transaction (R01 E1: the request-owned transaction; this command
+    never opens, commits or rolls back a transaction, and `plan` is required).
+    The actor's scope is locked and re-authorized first (`lock_operation_scope`:
+    world, role rows, membership, account, then the campaign `FOR KEY SHARE`),
+    before the proposal row and before any downstream lock; the caller then
+    finalizes the plan after this returns. `decision` is `'approve'` or `'reject'`
     (`ai.change_reviews.decision`'s own CHECK). `campaign_id` is always the
     caller's own already-authorized campaign (the API layer's URL path,
     never trusted from the proposal row alone) — see
     `ProposedChangeNotFoundError`'s own docstring for why."""
-    with engine.begin() as connection:
-        _, proposed_arguments = _lock_pending_proposal(
-            connection, ai_proposed_change_id=ai_proposed_change_id, campaign_id=campaign_id
-        )
+    lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=reviewer_user_id, plan=plan
+    )
+    _, proposed_arguments = _lock_pending_proposal(
+        connection, ai_proposed_change_id=ai_proposed_change_id, campaign_id=campaign_id
+    )
 
-        proposal_kind = connection.execute(
-            text("SELECT proposal_kind FROM ai.proposed_changes WHERE ai_proposed_change_id = :id"),
-            {"id": ai_proposed_change_id},
-        ).scalar()
-        assert isinstance(proposal_kind, str)
+    proposal_kind = connection.execute(
+        text("SELECT proposal_kind FROM ai.proposed_changes WHERE ai_proposed_change_id = :id"),
+        {"id": ai_proposed_change_id},
+    ).scalar()
+    assert isinstance(proposal_kind, str)
 
-        review_id = connection.execute(
-            text("""
-                INSERT INTO ai.change_reviews
-                    (ai_proposed_change_id, reviewer_user_id, decision, comments)
-                VALUES (:proposal, :reviewer, :decision, :comments)
-                RETURNING ai_change_review_id
-            """),
-            {
-                "proposal": ai_proposed_change_id,
-                "reviewer": reviewer_user_id,
-                "decision": decision,
-                "comments": comments,
-            },
-        ).scalar()
-        assert isinstance(review_id, uuid.UUID)
+    review_id = connection.execute(
+        text("""
+            INSERT INTO ai.change_reviews
+                (ai_proposed_change_id, reviewer_user_id, decision, comments)
+            VALUES (:proposal, :reviewer, :decision, :comments)
+            RETURNING ai_change_review_id
+        """),
+        {
+            "proposal": ai_proposed_change_id,
+            "reviewer": reviewer_user_id,
+            "decision": decision,
+            "comments": comments,
+        },
+    ).scalar()
+    assert isinstance(review_id, uuid.UUID)
 
-        if decision == "reject":
-            connection.execute(
-                text("""
-                    UPDATE ai.proposed_changes
-                    SET status = 'rejected', decided_by_user_id = :reviewer, decided_at = now()
-                    WHERE ai_proposed_change_id = :id
-                """),
-                {"reviewer": reviewer_user_id, "id": ai_proposed_change_id},
-            )
-            return ReviewProposedChangeResult(
-                ai_change_review_id=review_id, status="rejected", applied_event_id=None
-            )
-
-        applied_event_id = _apply_proposal(
-            connection,
-            ai_proposed_change_id=ai_proposed_change_id,
-            proposal_kind=proposal_kind,
-            proposed_arguments=proposed_arguments,
-            campaign_id=campaign_id,
-        )
+    if decision == "reject":
         connection.execute(
             text("""
                 UPDATE ai.proposed_changes
-                SET status = 'applied', decided_by_user_id = :reviewer, decided_at = now(),
-                    applied_event_id = :event
+                SET status = 'rejected', decided_by_user_id = :reviewer, decided_at = now()
                 WHERE ai_proposed_change_id = :id
             """),
-            {"reviewer": reviewer_user_id, "event": applied_event_id, "id": ai_proposed_change_id},
+            {"reviewer": reviewer_user_id, "id": ai_proposed_change_id},
         )
         return ReviewProposedChangeResult(
-            ai_change_review_id=review_id, status="applied", applied_event_id=applied_event_id
+            ai_change_review_id=review_id, status="rejected", applied_event_id=None
         )
+
+    applied_event_id = _apply_proposal(
+        connection,
+        ai_proposed_change_id=ai_proposed_change_id,
+        proposal_kind=proposal_kind,
+        proposed_arguments=proposed_arguments,
+        campaign_id=campaign_id,
+    )
+    connection.execute(
+        text("""
+            UPDATE ai.proposed_changes
+            SET status = 'applied', decided_by_user_id = :reviewer, decided_at = now(),
+                applied_event_id = :event
+            WHERE ai_proposed_change_id = :id
+        """),
+        {"reviewer": reviewer_user_id, "event": applied_event_id, "id": ai_proposed_change_id},
+    )
+    return ReviewProposedChangeResult(
+        ai_change_review_id=review_id, status="applied", applied_event_id=applied_event_id
+    )

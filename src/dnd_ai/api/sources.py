@@ -23,12 +23,13 @@ from sqlalchemy import Connection
 
 from dnd_ai.commands.sources import SourceResult, attach_source, create_source, detach_source
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.source_authoring import (
     REFERENCE_MAX_LENGTH,
     SOURCE_TYPES,
     TITLE_MAX_LENGTH,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.provenance import (
     EntityRef,
     LinkRow,
@@ -40,6 +41,7 @@ from dnd_ai.queries.provenance import (
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._shared import timeline_world_id
@@ -48,6 +50,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["sources"])
 
@@ -60,6 +63,7 @@ _PrivateRead = Annotated[
     Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
 ]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -170,7 +174,9 @@ def _write(
     payload: dict[str, Any],
     command: Callable[[], SourceResult],
     created: bool = False,
+    plan: AuthorizationPlan,
 ) -> Any:
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -179,6 +185,7 @@ def _write(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -206,6 +213,7 @@ def _write(
         response = _provenance_json(connection, access, result.entity_id)
     status = 201 if created else 200
     finish_campaign_idempotency(connection, idem, status_code=status, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status, content=response) if created else response
 
 
@@ -213,6 +221,7 @@ def _write(
 def create_source_endpoint(
     body: CreateSourceRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -232,7 +241,9 @@ def create_source_endpoint(
             source_type=body.source_type,
             title=body.title,
             reference=body.reference,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -241,6 +252,7 @@ def attach_source_endpoint(
     entity_id: uuid.UUID,
     body: SourceLinkRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -258,7 +270,9 @@ def attach_source_endpoint(
             actor_user_id=access.user_id,
             entity_id=entity_id,
             source_id=body.source_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -267,6 +281,7 @@ def detach_source_endpoint(
     entity_id: uuid.UUID,
     body: SourceLinkRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -284,5 +299,7 @@ def detach_source_endpoint(
             actor_user_id=access.user_id,
             entity_id=entity_id,
             source_id=body.source_id,
+            plan=plan,
         ),
+        plan=plan,
     )

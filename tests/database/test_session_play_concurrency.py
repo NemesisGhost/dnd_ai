@@ -40,6 +40,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -66,6 +67,7 @@ class Fixture:
             actor_user_id=self.owner,
             session_id=session_id,
             expected_row_version=version,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def end(self, connection, session_id, version: int):  # type: ignore[no-untyped-def]
@@ -76,6 +78,7 @@ class Fixture:
             session_id=session_id,
             expected_row_version=version,
             end_world_time_id=None,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def log(self, connection, session_id):  # type: ignore[no-untyped-def]
@@ -85,6 +88,7 @@ class Fixture:
             actor_user_id=self.owner,
             session_id=session_id,
             entry="An entry",
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def travel(self, connection, session_id):  # type: ignore[no-untyped-def]
@@ -95,6 +99,7 @@ class Fixture:
             destination_location_id=self.place_id,
             character_ids=[self.character_id],
             session_id=session_id,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def add(self, connection, session_id, version: int):  # type: ignore[no-untyped-def]
@@ -106,6 +111,7 @@ class Fixture:
             expected_row_version=version,
             character_id=self.character_id,
             participation_role="player_character",
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def scalar(self, sql: str, **params: object):  # type: ignore[no-untyped-def]
@@ -128,6 +134,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
         place = create_location(
             setup,
@@ -136,6 +143,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             category_code="settlement",
             name="Race Town",
             summary=None,
+            plan=fixture_plan(setup, campaign_id),
         )
         for written in (created, place):
             version = written.row_version
@@ -146,6 +154,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                     entity_id=written.entity_id,
                     actor_user_id=owner,
                     expected_row_version=version,
+                    plan=fixture_plan(setup, campaign_id),
                 ).row_version
         calendar = create_calendar(
             setup,
@@ -164,6 +173,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 actor_user_id=owner,
                 calendar_id=calendar.calendar_id,
                 year=year,
+                plan=fixture_plan(setup, campaign_id),
             ).world_time_id
             for year in (1, 2)
         ]
@@ -173,12 +183,23 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=years[0],
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
         first = schedule_session(
-            setup, campaign_id=campaign_id, actor_user_id=owner, title="One", scheduled_for=None
+            setup,
+            campaign_id=campaign_id,
+            actor_user_id=owner,
+            title="One",
+            scheduled_for=None,
+            plan=fixture_plan(setup, campaign_id),
         ).session_id
         second = schedule_session(
-            setup, campaign_id=campaign_id, actor_user_id=owner, title="Two", scheduled_for=None
+            setup,
+            campaign_id=campaign_id,
+            actor_user_id=owner,
+            title="Two",
+            scheduled_for=None,
+            plan=fixture_plan(setup, campaign_id),
         ).session_id
     yield Fixture(
         postgres_engine, owner, campaign_id, first, second, created.entity_id, place.entity_id
@@ -254,6 +275,7 @@ def test_a_log_entry_that_loses_to_an_end_sees_the_ended_session(fx: Fixture) ->
             actor_user_id=fx.owner,
             world_time_id=year2,
             expected_row_version=1,
+            plan=fixture_plan(connection, fx.campaign_id),
         )
     out = race(
         fx.engine,
@@ -287,6 +309,7 @@ def test_travel_that_loses_to_an_end_sees_the_ended_session_and_records_nothing(
             actor_user_id=fx.owner,
             world_time_id=year2,
             expected_row_version=1,
+            plan=fixture_plan(connection, fx.campaign_id),
         )
     out = race(
         fx.engine,

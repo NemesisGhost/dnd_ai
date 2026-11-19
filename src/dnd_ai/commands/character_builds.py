@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import StaleWriteError
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.character_builds import (
     BUILD_COMPONENT,
     BUILD_EVENT_ACTIVATED,
@@ -210,9 +211,12 @@ def create_character_build(
     actor_user_id: uuid.UUID,
     character_id: uuid.UUID,
     build: BuildInput,
+    plan: AuthorizationPlan,
 ) -> BuildResult:
     normalized = normalize_build(build)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     _lock_buildable_character(connection, scope, character_id)
     ruleset_version_id = _campaign_ruleset_version(connection, campaign_id)
     _validate_rules(connection, normalized, ruleset_version_id)
@@ -332,9 +336,12 @@ def initialize_character_state(
     character_id: uuid.UUID,
     maximum_hit_points: int,
     current_hit_points: int | None = None,
+    plan: AuthorizationPlan,
 ) -> BuildResult:
     current, maximum = normalize_hit_points(current_hit_points, maximum_hit_points)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     _lock_buildable_character(connection, scope, character_id)
     inserted = connection.execute(
         text("""
@@ -366,8 +373,11 @@ def activate_character_build(
     character_id: uuid.UUID,
     character_build_id: uuid.UUID,
     expected_active_build_id: uuid.UUID | None,
+    plan: AuthorizationPlan,
 ) -> BuildResult:
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     character = _lock_buildable_character(connection, scope, character_id)
     belongs = connection.execute(
         text(

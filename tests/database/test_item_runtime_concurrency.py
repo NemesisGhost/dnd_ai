@@ -36,6 +36,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -60,6 +61,7 @@ class Fixture:
                 entity_id=entity_id,
                 actor_user_id=self.owner,
                 expected_row_version=version,
+                plan=fixture_plan(connection, self.campaign_id),
             ).row_version
 
     def item(self, connection, name: str, definition: uuid.UUID) -> uuid.UUID:  # type: ignore[no-untyped-def]
@@ -70,6 +72,7 @@ class Fixture:
             name=name,
             summary=None,
             item_definition_id=definition,
+            plan=fixture_plan(connection, self.campaign_id),
         )
         self.publish(connection, made.entity_id, made.row_version)
         return made.entity_id  # type: ignore[return-value]
@@ -83,6 +86,7 @@ class Fixture:
             category="wondrous_item",
             requires_attunement=attunement,
             canon_status="canon",
+            plan=fixture_plan(connection, self.campaign_id),
         ).item_definition_id
 
     def award(self, connection, item: uuid.UUID, token=None):  # type: ignore[no-untyped-def]
@@ -93,6 +97,7 @@ class Fixture:
             item_instance_id=item,
             holder_entity_id=self.holder,
             expected_last_event_id=token,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def token(self, item: uuid.UUID) -> uuid.UUID | None:
@@ -129,6 +134,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
         holder = npc.entity_id
         fixture = Fixture(postgres_engine, owner, campaign_id, world.world_id, timeline_id, holder)  # type: ignore[arg-type]
@@ -149,6 +155,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             calendar_id=calendar.calendar_id,
             year=1,
+            plan=fixture_plan(setup, campaign_id),
         ).world_time_id
         advance_campaign_clock(
             setup,
@@ -156,6 +163,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=time_id,
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
     yield fixture
     _purge_user_worlds(postgres_engine, owner)
@@ -195,6 +203,7 @@ def test_a_destroy_and_a_transfer_from_one_token_serialize(fx: Fixture) -> None:
             world_time_id=None,
             session_id=None,
             note=None,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: transfer_in_context(
             c,
@@ -246,6 +255,7 @@ def test_two_attunements_cannot_pass_the_three_item_limit(fx: Fixture) -> None:
                 item_instance_id=ring,
                 character_id=fx.holder,
                 expected_last_event_id=_token_in(setup, fx, ring),
+                plan=fixture_plan(setup, fx.campaign_id),
             )
         tokens = [_token_in(setup, fx, ring) for ring in rings[2:]]
 
@@ -257,6 +267,7 @@ def test_two_attunements_cannot_pass_the_three_item_limit(fx: Fixture) -> None:
             item_instance_id=ring,
             character_id=fx.holder,
             expected_last_event_id=token,
+            plan=fixture_plan(connection, fx.campaign_id),
         )
 
     out = race(

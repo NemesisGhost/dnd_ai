@@ -9,6 +9,7 @@ from sqlalchemy import Connection, text
 from dnd_ai.domain.access import FOUNDRY_ACCESS_AUTH_METHOD, AuthenticatedPrincipal
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -653,6 +654,7 @@ def test_the_command_re_checks_canon_edit_after_the_route(s: ContentSetup) -> No
             category_code="region",
             name="Sneaky",
             summary=None,
+            plan=fixture_plan(s.connection, uuid.UUID(s.cid)),
         )
     with pytest.raises(CampaignNotAuthorizedError):
         create_location(
@@ -662,6 +664,7 @@ def test_the_command_re_checks_canon_edit_after_the_route(s: ContentSetup) -> No
             category_code="region",
             name="Sneaky",
             summary=None,
+            plan=fixture_plan(s.connection, uuid.UUID(s.cid)),
         )
 
 
@@ -685,6 +688,7 @@ def test_an_archived_campaign_or_world_refuses_authoring(s: ContentSetup) -> Non
             category_code="region",
             name="Late",
             summary=None,
+            plan=fixture_plan(s.connection, uuid.UUID(s.cid)),
         )
 
 
@@ -708,6 +712,7 @@ def test_a_disabled_account_cannot_author(s: ContentSetup) -> None:
             category_code="region",
             name="Ghost",
             summary=None,
+            plan=fixture_plan(s.connection, uuid.UUID(s.cid)),
         )
 
 
@@ -722,7 +727,12 @@ def test_lifecycle_commands_also_require_an_active_campaign_and_account(s: Conte
         "expected_row_version": place["row_version"],
     }
     with pytest.raises(CampaignNotAuthorizedError):
-        archive_entity(s.connection, actor_user_id=s.player.user_id, **kwargs)  # type: ignore[arg-type]
+        archive_entity(
+            s.connection,
+            actor_user_id=s.player.user_id,
+            plan=fixture_plan(s.connection, uuid.UUID(s.cid)),
+            **kwargs,  # type: ignore[arg-type]
+        )
     s.connection.execute(
         text(
             "UPDATE campaign.campaigns SET lifecycle_status_id = "
@@ -732,4 +742,9 @@ def test_lifecycle_commands_also_require_an_active_campaign_and_account(s: Conte
         {"c": s.cid},
     )
     with pytest.raises(CampaignArchivedError):
-        archive_entity(s.connection, actor_user_id=s.gm.user_id, **kwargs)  # type: ignore[arg-type]
+        archive_entity(
+            s.connection,
+            actor_user_id=s.gm.user_id,
+            plan=fixture_plan(s.connection, uuid.UUID(s.cid)),
+            **kwargs,  # type: ignore[arg-type]
+        )

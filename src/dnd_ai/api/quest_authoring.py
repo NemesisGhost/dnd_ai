@@ -57,6 +57,7 @@ from dnd_ai.commands.quest_definitions import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.quest_authoring import (
     GM_NOTES_MAX_LENGTH,
     OBJECTIVE_TARGET_TYPE_CODES,
@@ -64,7 +65,7 @@ from dnd_ai.domain.quest_authoring import (
     QUANTITY_MAX,
     REWARD_DESCRIPTION_MAX_LENGTH,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.quest_authoring import (
     QuestAuthoringView,
     get_quest_authoring,
@@ -76,6 +77,7 @@ from dnd_ai.queries.reference_options import list_reference_options
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import (
@@ -91,6 +93,7 @@ from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
 from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["quest-authoring"])
 
@@ -106,6 +109,7 @@ _PrivateRead = Annotated[
     Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
 ]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -314,10 +318,12 @@ def _run(
     command: Callable[[], ContentWriteResult],
     created: bool = False,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> Any:
     """The one mutation flow every quest command shares: reserve the key (replay
     answers before the command runs), run the command, audit exactly once if it
     changed anything, answer with the whole authoring view, complete the key."""
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -326,6 +332,7 @@ def _run(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -345,6 +352,7 @@ def _run(
     response = _response(connection, result, changed=result.changed)
     status = 201 if created else 200
     finish_campaign_idempotency(connection, idem, status_code=status, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status, content=response) if created else response
 
 
@@ -424,7 +432,12 @@ def get_quest_authoring_endpoint(
 
 @router.post(_BASE, status_code=201)
 def create_quest_endpoint(
-    body: CreateQuestRequest, access: _Access, connection: _Conn, key: _Key, corr: _Corr
+    body: CreateQuestRequest,
+    access: _Access,
+    connection: _Conn,
+    key: _Key,
+    corr: _Corr,
+    plan: _Plan,
 ) -> Any:
     return _run(
         command_name="create_quest",
@@ -440,7 +453,9 @@ def create_quest_endpoint(
             actor_user_id=access.user_id,
             name=body.name,
             summary=body.summary,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -449,6 +464,7 @@ def update_quest_endpoint(
     quest_id: uuid.UUID,
     body: UpdateQuestRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -471,7 +487,9 @@ def update_quest_endpoint(
             summary=body.summary,
             change_note=body.change_note,
             gm_notes=body.gm_notes if "gm_notes" in body.model_fields_set else UNSET,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -483,6 +501,7 @@ def add_stage_endpoint(
     quest_id: uuid.UUID,
     body: StageRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -503,7 +522,9 @@ def add_stage_endpoint(
             name=body.name,
             description=body.description,
             stage_type=body.stage_type,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -512,6 +533,7 @@ def reorder_stages_endpoint(
     quest_id: uuid.UUID,
     body: ReorderRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -530,7 +552,9 @@ def reorder_stages_endpoint(
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
             ordered_stage_ids=body.stage_ids,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -540,6 +564,7 @@ def update_stage_endpoint(
     stage_id: uuid.UUID,
     body: StageRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -565,7 +590,9 @@ def update_stage_endpoint(
             name=body.name,
             description=body.description,
             stage_type=body.stage_type,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -575,6 +602,7 @@ def remove_stage_endpoint(
     stage_id: uuid.UUID,
     body: VersionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -597,7 +625,9 @@ def remove_stage_endpoint(
             quest_stage_id=stage_id,
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -610,6 +640,7 @@ def add_objective_endpoint(
     stage_id: uuid.UUID,
     body: ObjectiveRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -640,7 +671,9 @@ def add_objective_endpoint(
             visibility_policy=body.visibility_policy,
             quantity_required=body.quantity_required,
             target_entity_id=body.target_entity_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -651,6 +684,7 @@ def update_objective_endpoint(
     objective_id: uuid.UUID,
     body: ObjectiveRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -683,7 +717,9 @@ def update_objective_endpoint(
             visibility_policy=body.visibility_policy,
             quantity_required=body.quantity_required,
             target_entity_id=body.target_entity_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -694,6 +730,7 @@ def remove_objective_endpoint(
     objective_id: uuid.UUID,
     body: VersionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -718,7 +755,9 @@ def remove_objective_endpoint(
             quest_objective_id=objective_id,
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -736,6 +775,7 @@ def _route(
     key: str | None,
     corr: str | None,
     command: Callable[[], ContentWriteResult],
+    plan: AuthorizationPlan,
 ) -> Any:
     return _run(
         command_name=command_name,
@@ -745,6 +785,7 @@ def _route(
         correlation_id=corr,
         payload={"quest_id": str(quest_id), **extra, **body.model_dump(mode="json")},
         command=command,
+        plan=plan,
     )
 
 
@@ -753,6 +794,7 @@ def add_dependency_endpoint(
     quest_id: uuid.UUID,
     body: DependencyRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -775,7 +817,9 @@ def add_dependency_endpoint(
             objective_id=body.objective_id,
             depends_on_objective_id=body.depends_on_objective_id,
             dependency_type=body.dependency_type,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -785,6 +829,7 @@ def remove_dependency_endpoint(
     dependency_id: uuid.UUID,
     body: VersionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -805,7 +850,9 @@ def remove_dependency_endpoint(
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
             objective_dependency_id=dependency_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -814,6 +861,7 @@ def add_participant_endpoint(
     quest_id: uuid.UUID,
     body: ParticipantRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -835,7 +883,9 @@ def add_participant_endpoint(
             expected_row_version=body.expected_row_version,
             participant_entity_id=body.participant_entity_id,
             participant_role=body.participant_role,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -845,6 +895,7 @@ def remove_participant_endpoint(
     participant_id: uuid.UUID,
     body: VersionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -865,7 +916,9 @@ def remove_participant_endpoint(
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
             quest_participant_id=participant_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -874,6 +927,7 @@ def add_outcome_endpoint(
     quest_id: uuid.UUID,
     body: OutcomeRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -897,7 +951,9 @@ def add_outcome_endpoint(
             name=body.name,
             description=body.description,
             outcome_category=body.outcome_category,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -907,6 +963,7 @@ def update_outcome_endpoint(
     outcome_id: uuid.UUID,
     body: UpdateOutcomeRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -930,7 +987,9 @@ def update_outcome_endpoint(
             name=body.name,
             description=body.description,
             outcome_category=body.outcome_category,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -940,6 +999,7 @@ def remove_outcome_endpoint(
     outcome_id: uuid.UUID,
     body: VersionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -960,7 +1020,9 @@ def remove_outcome_endpoint(
             quest_outcome_id=outcome_id,
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -970,6 +1032,7 @@ def add_reward_endpoint(
     outcome_id: uuid.UUID,
     body: RewardRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -993,7 +1056,9 @@ def add_reward_endpoint(
             reward_type=body.reward_type,
             description=body.description,
             reward_knowledge_item_id=body.reward_knowledge_item_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -1003,6 +1068,7 @@ def remove_reward_endpoint(
     reward_id: uuid.UUID,
     body: VersionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     key: _Key,
     corr: _Corr,
@@ -1023,5 +1089,7 @@ def remove_reward_endpoint(
             quest_reward_id=reward_id,
             actor_user_id=access.user_id,
             expected_row_version=body.expected_row_version,
+            plan=plan,
         ),
+        plan=plan,
     )

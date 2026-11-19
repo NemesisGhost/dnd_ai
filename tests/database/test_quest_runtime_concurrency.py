@@ -28,6 +28,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -52,6 +53,7 @@ class Fixture:
             quest_id=self.quest_id,
             action=action,
             expected_status=expected,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def objective(self, connection, index: int, status: str, expected: str | None):  # type: ignore[no-untyped-def]
@@ -62,6 +64,7 @@ class Fixture:
             quest_objective_id=self.objectives[index],
             new_status=status,
             expected_status=expected,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def scalar(self, sql: str, **params: object):  # type: ignore[no-untyped-def]
@@ -76,7 +79,12 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
         world = make_authored_world(setup, owner_user_id=owner, name="Runtime Race World")
         campaign_id = make_authored_campaign(setup, world, name="Runtime Race Campaign")
         quest = create_quest(
-            setup, campaign_id=campaign_id, actor_user_id=owner, name="Race", summary=None
+            setup,
+            campaign_id=campaign_id,
+            actor_user_id=owner,
+            name="Race",
+            summary=None,
+            plan=fixture_plan(setup, campaign_id),
         )
         version = quest.row_version
         stage = add_quest_stage(
@@ -88,6 +96,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             name="Stage",
             description=None,
             stage_type="sequential",
+            plan=fixture_plan(setup, campaign_id),
         )
         version = stage.row_version
         objectives = []
@@ -107,6 +116,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 visibility_policy="visible",
                 quantity_required=None,
                 target_entity_id=None,
+                plan=fixture_plan(setup, campaign_id),
             )
             version = result.row_version
             objectives.append(result.record_id)
@@ -119,6 +129,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 entity_id=quest.entity_id,
                 actor_user_id=owner,
                 expected_row_version=published,
+                plan=fixture_plan(setup, campaign_id),
             ).row_version
         calendar = create_calendar(
             setup,
@@ -136,6 +147,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             calendar_id=calendar.calendar_id,
             year=1,
+            plan=fixture_plan(setup, campaign_id),
         ).world_time_id
         advance_campaign_clock(
             setup,
@@ -143,6 +155,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=time_id,
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
     yield Fixture(
         postgres_engine,
@@ -237,6 +250,7 @@ def test_a_structural_edit_that_loses_to_the_first_activation_is_refused(fx: Fix
             objective_id=fx.objectives[1],
             depends_on_objective_id=fx.objectives[0],
             dependency_type="prerequisite",
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )

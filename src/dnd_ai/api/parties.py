@@ -41,6 +41,7 @@ from dnd_ai.commands.party_members import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.data_classification import content_receipt
 from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.parties import PartyView, get_campaign_party, list_campaign_parties
@@ -65,11 +66,13 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["parties"])
 
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 _View = Annotated[AccessContext, Depends(require_campaign_capability("campaign.view"))]
@@ -292,6 +295,7 @@ def _run(
     status_code: int,
     reason: str | None = None,
     lifecycle_action: str | None = None,
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -301,6 +305,7 @@ def _run(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -331,6 +336,7 @@ def _run(
         changed=result.changed,
     )
     finish_campaign_idempotency(connection, idem, status_code=status_code, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status_code, content=receipt)
 
 
@@ -338,6 +344,7 @@ def _run(
 def create_party_endpoint(
     body: PartyFields,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -356,7 +363,9 @@ def create_party_endpoint(
             actor_user_id=access.user_id,
             name=body.name,
             description=body.description,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -365,6 +374,7 @@ def update_party_endpoint(
     party_id: uuid.UUID,
     body: UpdatePartyRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -385,7 +395,9 @@ def update_party_endpoint(
             expected_row_version=body.expected_row_version,
             name=body.name,
             description=body.description,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -394,6 +406,7 @@ def archive_party_endpoint(
     party_id: uuid.UUID,
     body: ArchivePartyRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -415,7 +428,9 @@ def archive_party_endpoint(
             party_id=party_id,
             expected_row_version=body.expected_row_version,
             reason=body.reason,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -424,6 +439,7 @@ def restore_party_endpoint(
     party_id: uuid.UUID,
     body: RestorePartyRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -445,7 +461,9 @@ def restore_party_endpoint(
             party_id=party_id,
             expected_row_version=body.expected_row_version,
             reason=body.reason,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -505,6 +523,7 @@ def _run_member(
     command: Any,
     status_code: int,
     reason: str | None,
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -514,6 +533,7 @@ def _run_member(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -542,6 +562,7 @@ def _run_member(
         "changed": True,
     }
     finish_campaign_idempotency(connection, idem, status_code=status_code, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status_code, content=receipt)
 
 
@@ -550,6 +571,7 @@ def add_member_endpoint(
     party_id: uuid.UUID,
     body: AddMemberRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -572,7 +594,9 @@ def add_member_endpoint(
             effective_from_world_time_id=body.effective_from_world_time_id,
             expected_party_row_version=body.expected_party_row_version,
             reason=body.reason,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -582,6 +606,7 @@ def end_membership_endpoint(
     party_membership_id: uuid.UUID,
     body: EndMembershipRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -608,5 +633,7 @@ def end_membership_endpoint(
             effective_to_world_time_id=body.effective_to_world_time_id,
             expected_party_row_version=body.expected_party_row_version,
             reason=body.reason,
+            plan=plan,
         ),
+        plan=plan,
     )

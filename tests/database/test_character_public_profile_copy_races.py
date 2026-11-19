@@ -58,6 +58,7 @@ from tests.database.test_character_reveal_delegation import (  # noqa: F401 - fi
     m,
 )
 from tests.lock_race_support import LockRace
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -75,6 +76,7 @@ def do_copy(
         actor_user_id=user,
         expected_row_version=expected,
         source_field=field,
+        plan=fixture_plan(c, g.campaign_id),
     )
 
 

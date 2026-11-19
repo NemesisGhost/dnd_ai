@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import StaleWriteError, normalize_reason
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import diff_fields, initial_fields
 from dnd_ai.domain.party_authoring import (
     PARTY_ACTIVE,
@@ -84,10 +85,13 @@ def create_party(
     actor_user_id: uuid.UUID,
     name: str | None,
     description: str | None = None,
+    plan: AuthorizationPlan,
 ) -> PartyResult:
     clean_name = normalize_name(name)
     clean_description = normalize_description(description)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     row = connection.execute(
         text("""
             INSERT INTO campaign.parties
@@ -129,10 +133,13 @@ def update_party(
     expected_row_version: int,
     name: str | None,
     description: str | None = None,
+    plan: AuthorizationPlan,
 ) -> PartyResult:
     clean_name = normalize_name(name)
     clean_description = normalize_description(description)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     party = lock_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
     if party.row_version != expected_row_version:
         raise StaleWriteError(f"party {party_id} is at {party.row_version}")
@@ -179,8 +186,11 @@ def _transition(
     party_id: uuid.UUID,
     expected_row_version: int,
     to_status: str,
+    plan: AuthorizationPlan,
 ) -> PartyResult:
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     party = lock_campaign_party(connection, campaign_id=campaign_id, party_id=party_id)
     if party.row_version != expected_row_version:
         raise StaleWriteError(f"party {party_id} is at {party.row_version}")
@@ -224,6 +234,7 @@ def archive_party(
     party_id: uuid.UUID,
     expected_row_version: int,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> PartyResult:
     normalize_reason(reason)
     return _transition(
@@ -233,6 +244,7 @@ def archive_party(
         party_id=party_id,
         expected_row_version=expected_row_version,
         to_status=PARTY_ARCHIVED,
+        plan=plan,
     )
 
 
@@ -244,6 +256,7 @@ def restore_party(
     party_id: uuid.UUID,
     expected_row_version: int,
     reason: str,
+    plan: AuthorizationPlan,
 ) -> PartyResult:
     normalize_reason(reason, required=True)
     return _transition(
@@ -253,4 +266,5 @@ def restore_party(
         party_id=party_id,
         expected_row_version=expected_row_version,
         to_status=PARTY_ACTIVE,
+        plan=plan,
     )

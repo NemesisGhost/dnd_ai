@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import AuthoringValidationError, StaleWriteError
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.data_classification import audit_change, audit_initial
 from dnd_ai.domain.knowledge_runtime import (
     BELIEF_COMPONENTS,
@@ -148,9 +149,12 @@ def reveal_knowledge_to_party(
     world_time_id: uuid.UUID | None = None,
     session_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> KnowledgeResult:
     awareness = normalize_awareness(awareness_level)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     _lock_claim(connection, scope, knowledge_item_id)
     time_id = time_or_clock(connection, scope, world_time_id)
     result = _reveal_knowledge_to_party_impl(
@@ -192,11 +196,14 @@ def record_character_knowledge(
     willing_to_share: bool = True,
     world_time_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> KnowledgeResult:
     awareness = normalize_awareness(awareness_level)
     confident = normalize_confidence(confidence)
     belief = normalize_interpretation(interpretation)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     locked = _lock_claim(connection, scope, knowledge_item_id, knower_entity_id)
     _require_knower(locked, knower_entity_id, what="knower")
     _serialize(connection, scope, knowledge_item_id, knower_entity_id)
@@ -326,6 +333,7 @@ def record_knowledge_transfer(
     modified_interpretation: str | None = None,
     world_time_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> KnowledgeResult:
     if transfer_method not in TRANSFER_METHODS:
         raise AuthoringValidationError("transfer_method is not a known method")
@@ -333,7 +341,9 @@ def record_knowledge_transfer(
         raise KnowerInvalidError("a knower cannot tell themselves")
     awareness = normalize_awareness(awareness_level)
     conveyed = normalize_interpretation(modified_interpretation)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     locked = _lock_claim(
         connection, scope, knowledge_item_id, source_entity_id, recipient_entity_id
     )
@@ -431,6 +441,7 @@ def change_belief(
     changes: dict[str, Any],
     world_time_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> KnowledgeResult:
     """Revise one belief. `changes` holds only the fields the caller sent, from
     `awareness_level`, `confidence`, `interpretation` and `willing_to_share`."""
@@ -448,7 +459,9 @@ def change_belief(
     if not clean:
         raise AuthoringValidationError("send at least one belief field to change")
 
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     found = connection.execute(
         text(
             "SELECT knowledge_item_id, knower_entity_id FROM knowledge.entity_knowledge "
@@ -534,9 +547,12 @@ def make_knowledge_public(
     awareness_level: str = "aware",
     world_time_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> KnowledgeResult:
     awareness = normalize_awareness(awareness_level)
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     locked = _lock_claim(connection, scope, knowledge_item_id, location_id)
     place = locked.get(location_id)
     if (

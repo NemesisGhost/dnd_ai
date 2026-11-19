@@ -320,7 +320,7 @@ def test_a_membership_ending_cannot_race_a_create_targeting_it(postgres_engine: 
 
 
 def test_an_account_disablement_cannot_race_a_create_targeting_it(postgres_engine: Engine) -> None:
-    """`create_resource_grant`'s own `FOR UPDATE OF u` lock on the grantee
+    """`create_resource_grant`'s own `FOR KEY SHARE OF u` lock on the grantee
     membership's owning user row must make a concurrent disablement of that
     account block too."""
     engine = postgres_engine
@@ -353,13 +353,10 @@ def test_an_account_disablement_cannot_race_a_create_targeting_it(postgres_engin
             second.execute(text("SET LOCAL lock_timeout = '2s'"))
             with pytest.raises(Exception) as exc:
                 second.execute(
-                    text("""
-                        UPDATE security.users SET lifecycle_status_id = (
-                            SELECT lifecycle_status_id FROM core.lifecycle_statuses
-                            WHERE code = 'inactive'
-                        )
-                        WHERE user_id = :u
-                    """),
+                    # the first statement of the real writer (`local_auth._set_local_account_lifecycle_status_impl`),
+                    # which takes the row FOR UPDATE before it updates the status; a bare UPDATE takes
+                    # FOR NO KEY UPDATE, which a FOR KEY SHARE holder does not exclude (R01 S5-A)
+                    text("SELECT 1 FROM security.users WHERE user_id = :u FOR UPDATE"),
                     {"u": target_user_id},
                 )
             message = str(exc.value)

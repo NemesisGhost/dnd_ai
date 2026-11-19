@@ -32,6 +32,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -54,6 +55,7 @@ class Fixture:
             character_id=self.character_id,
             character_build_id=self.builds[index],
             expected_active_build_id=expected,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def active(self) -> uuid.UUID | None:
@@ -97,6 +99,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
         version = created.row_version
         for step in (submit_entity_for_review, approve_entity, publish_entity_as_canon):
@@ -106,6 +109,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 entity_id=created.entity_id,
                 actor_user_id=owner,
                 expected_row_version=version,
+                plan=fixture_plan(setup, campaign_id),
             ).row_version
         builds = [
             create_character_build(
@@ -114,6 +118,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 actor_user_id=owner,
                 character_id=created.entity_id,
                 build=BuildInput(label=label),
+                plan=fixture_plan(setup, campaign_id),
             ).character_build_id
             for label in ("One", "Two", "Three")
         ]
@@ -123,6 +128,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             character_id=created.entity_id,
             maximum_hit_points=10,
+            plan=fixture_plan(setup, campaign_id),
         )
         calendar = create_calendar(
             setup,
@@ -140,6 +146,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             calendar_id=calendar.calendar_id,
             year=1,
+            plan=fixture_plan(setup, campaign_id),
         ).world_time_id
         advance_campaign_clock(
             setup,
@@ -147,6 +154,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=year,
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
         fixture = Fixture(postgres_engine, owner, campaign_id, created.entity_id, builds)
         fixture.activate(setup, 0, None)  # administrative baseline

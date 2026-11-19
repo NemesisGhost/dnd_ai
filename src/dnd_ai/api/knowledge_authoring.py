@@ -22,12 +22,13 @@ from dnd_ai.commands._content import ContentWriteResult
 from dnd_ai.commands.knowledge_definitions import create_knowledge_item, update_knowledge_item
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.knowledge_authoring import (
     KNOWLEDGE_SUBJECT_TYPE_CODES,
     SENSITIVITIES,
     STATEMENT_MAX_LENGTH,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.knowledge_authoring import (
     KnowledgeAuthoringView,
     get_knowledge_authoring,
@@ -38,6 +39,7 @@ from dnd_ai.queries.reference_options import list_reference_options
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import (
@@ -53,6 +55,7 @@ from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
 from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["knowledge-authoring"])
 
@@ -68,6 +71,7 @@ _PrivateRead = Annotated[
     Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
 ]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -175,11 +179,13 @@ def knowledge_subject_options_endpoint(
 def create_knowledge_endpoint(
     body: CreateKnowledgeRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
     command_name = "create_knowledge_item"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -188,6 +194,7 @@ def create_knowledge_endpoint(
         command_name=command_name,
         payload=body.model_dump(mode="json"),
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -200,6 +207,7 @@ def create_knowledge_endpoint(
         truth_status=body.truth_status,
         sensitivity=body.sensitivity,
         subject_entity_id=body.subject_entity_id,
+        plan=plan,
     )
     audit_content_write(
         connection,
@@ -214,6 +222,7 @@ def create_knowledge_endpoint(
     )
     response = _response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=201, content=response)
 
 
@@ -236,11 +245,13 @@ def update_knowledge_endpoint(
     knowledge_item_id: uuid.UUID,
     body: UpdateKnowledgeRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
     command_name = "update_knowledge_item"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -249,6 +260,7 @@ def update_knowledge_endpoint(
         command_name=command_name,
         payload={"knowledge_item_id": str(knowledge_item_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -264,6 +276,7 @@ def update_knowledge_endpoint(
         sensitivity=body.sensitivity,
         subject_entity_id=body.subject_entity_id,
         change_note=body.change_note,
+        plan=plan,
     )
     if result.changed:
         audit_content_write(
@@ -279,4 +292,5 @@ def update_knowledge_endpoint(
         )
     response = _response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return response

@@ -50,6 +50,7 @@ from dnd_ai.domain.authoring import (
     SupersessionTargetInvalidError,
     normalize_reason,
 )
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.dungeon_authoring import DungeonHasActiveAreasError
 from dnd_ai.domain.entity_lifecycle import (
     APPROVE,
@@ -139,6 +140,10 @@ ENTITY_REFERENCE_CLASSIFICATION: dict[tuple[str, str, str], str] = {
     # append-only history, so legal removal needs its own reviewed procedure.
     ("campaign", "character_public_profiles", "character_id"): BLOCKING,
     ("campaign", "character_public_profile_releases", "character_id"): BLOCKING,
+    # A character with a campaign player profile keeps it (P03-A A5): player-authored content
+    # cannot be recreated, and its versions are append-only.
+    ("campaign", "character_player_profiles", "character_id"): BLOCKING,
+    ("campaign", "character_player_profile_versions", "character_id"): BLOCKING,
     ("security", "character_revelations", "character_id"): BLOCKING,
     ("campaign", "relationship_state", "perspective_holder_entity_id"): BLOCKING,
     ("integration", "external_identifiers", "entity_id"): BLOCKING,
@@ -279,15 +284,28 @@ def _publish_reference_ids(
     return publish_reference_ids(connection, entity_id=entity_id, entity_type_code=type_code)
 
 
-def _lifecycle_world_capability(
-    connection: Connection, *, entity_id: uuid.UUID, action: str
+def lifecycle_world_capability_of(
+    connection: Connection,
+    *,
+    entity_id: uuid.UUID,
+    action: str,
+    campaign_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
 ) -> str | None:
     """The world capability `action` needs on `entity_id`, or `None` for the
     campaign-originated exceptions (`dnd_ai.domain.record_authoring`, which the
     read models and the per-record eligibility fields share). The entity type is
     read without a lock: it can never change (entity-type-change protection), and
     an unknown entity falls through to the strict capability and then to the
-    normal not-found error."""
+    normal not-found error.
+
+    One exception to "missing means unknown" (R01 S3-R1). A delete-draft physically removes the row, so a
+    replay of its receipt finds no entity, and the strict capability would refuse a player-character or
+    item-instance replay that needs no world role. The surviving evidence is the audit row the delete
+    wrote: `audit.change_log` (`deleted`, `delete_draft_entity`, `record_id` = the entity, the world of
+    this campaign) carries the entity's type in its server-written `changed_fields`. It is used only for
+    `delete_draft`, only for the same actor (the key's owner, so another caller learns nothing about an id
+    that once existed), and only when it names a type; anything else is the unknown-entity path above."""
     type_code = connection.execute(
         text("""
             SELECT et.code FROM core.entities e
@@ -296,6 +314,26 @@ def _lifecycle_world_capability(
         """),
         {"e": entity_id},
     ).scalar()
+    if type_code is None and action == DELETE_DRAFT:
+        type_code = connection.execute(
+            text("""
+                SELECT cl.changed_fields ->> 'entity_type_code'
+                FROM audit.change_log cl
+                JOIN audit.change_actions ca ON ca.change_action_id = cl.change_action_id
+                WHERE ca.code = 'deleted'
+                  AND cl.command_name = 'delete_draft_entity'
+                  AND cl.record_id = :e
+                  AND cl.actor_user_id = :a
+                  AND cl.world_id = (
+                      SELECT t.world_id FROM campaign.campaigns c
+                      JOIN campaign.timelines t ON t.timeline_id = c.timeline_id
+                      WHERE c.campaign_id = :c
+                  )
+                ORDER BY cl.change_log_id DESC
+                LIMIT 1
+            """),
+            {"e": entity_id, "a": actor_user_id, "c": campaign_id},
+        ).scalar()
     return (
         lifecycle_world_capability(str(type_code), action)
         if type_code is not None
@@ -311,6 +349,7 @@ def _prepare(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     action: str,
+    plan: AuthorizationPlan,
 ) -> tuple[uuid.UUID, LockedContent]:
     """Lock and authorize (scope, then entities in `entity_id` order: the target
     `FOR UPDATE`, and for publish the records it refers to `FOR SHARE`), bind the
@@ -319,9 +358,14 @@ def _prepare(
         connection,
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
-        world_capability=_lifecycle_world_capability(
-            connection, entity_id=entity_id, action=action
+        world_capability=lifecycle_world_capability_of(
+            connection,
+            entity_id=entity_id,
+            action=action,
+            campaign_id=campaign_id,
+            actor_user_id=actor_user_id,
         ),
+        plan=plan,
     )
     world_id = scope.world_id
     reference_ids = (
@@ -452,6 +496,7 @@ def _canon_transition(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     normalize_reason(reason)
     _world_id, entity = _prepare(
@@ -461,6 +506,7 @@ def _canon_transition(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         action=action,
+        plan=plan,
     )
     require_transition(action, entity.canon_status, entity.lifecycle_status)
     target = target_canon_status(action, entity.canon_status)
@@ -492,6 +538,7 @@ def submit_entity_for_review(
     entity_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """draft -> proposed."""
     return _canon_transition(
@@ -501,6 +548,7 @@ def submit_entity_for_review(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
 
 
@@ -512,6 +560,7 @@ def return_entity_to_draft(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """proposed | approved | rejected -> draft."""
     return _canon_transition(
@@ -522,6 +571,7 @@ def return_entity_to_draft(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         reason=reason,
+        plan=plan,
     )
 
 
@@ -532,6 +582,7 @@ def approve_entity(
     entity_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """proposed -> approved, bound to the reviewed `row_version`."""
     return _canon_transition(
@@ -541,6 +592,7 @@ def approve_entity(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
 
 
@@ -552,6 +604,7 @@ def reject_entity(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """draft | proposed -> rejected."""
     return _canon_transition(
@@ -562,6 +615,7 @@ def reject_entity(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         reason=reason,
+        plan=plan,
     )
 
 
@@ -572,6 +626,7 @@ def publish_entity_as_canon(
     entity_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """approved -> canon; the subtype chain must be complete."""
     return _canon_transition(
@@ -581,6 +636,7 @@ def publish_entity_as_canon(
         entity_id=entity_id,
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
+        plan=plan,
     )
 
 
@@ -593,6 +649,7 @@ def supersede_entity(
     expected_row_version: int,
     replacement_entity_id: uuid.UUID,
     replacement_expected_row_version: int,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """canon -> superseded, atomically linking the replacement. The replacement
     must be an active `approved` or `canon` entity of the same world and type
@@ -604,9 +661,14 @@ def supersede_entity(
         connection,
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
-        world_capability=_lifecycle_world_capability(
-            connection, entity_id=entity_id, action=SUPERSEDE
+        world_capability=lifecycle_world_capability_of(
+            connection,
+            entity_id=entity_id,
+            action=SUPERSEDE,
+            campaign_id=campaign_id,
+            actor_user_id=actor_user_id,
         ),
+        plan=plan,
     )
     # The replacement may be published by this call, so the records it refers to
     # are locked `FOR SHARE` together with the pair, in ascending id order, exactly
@@ -725,6 +787,7 @@ def archive_entity(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str | None = None,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """Archive an active entity that is not in review. Canon status is kept."""
     normalize_reason(reason)
@@ -735,6 +798,7 @@ def archive_entity(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         action=ARCHIVE,
+        plan=plan,
     )
     require_transition(ARCHIVE, entity.canon_status, entity.lifecycle_status)
     blocked = archive_blocked_reason(
@@ -761,6 +825,7 @@ def restore_entity(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """Restore an archived entity to active. A reason is required; canon status
     is unchanged (a superseded entity restores to superseded); the subtype chain
@@ -773,6 +838,7 @@ def restore_entity(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         action=RESTORE,
+        plan=plan,
     )
     require_transition(RESTORE, entity.canon_status, entity.lifecycle_status)
     _require_subtype_complete(connection, entity_id=entity_id, entity_type_id=entity.entity_type_id)
@@ -790,6 +856,7 @@ def delete_draft_entity(
     actor_user_id: uuid.UUID,
     expected_row_version: int,
     reason: str,
+    plan: AuthorizationPlan,
 ) -> EntityTransitionResult:
     """Physically delete a never-canon (`draft`/`rejected`), unreferenced draft.
     A reason is required. Only the reviewed owned rows (subtype chain, names,
@@ -804,6 +871,7 @@ def delete_draft_entity(
         actor_user_id=actor_user_id,
         expected_row_version=expected_row_version,
         action=DELETE_DRAFT,
+        plan=plan,
     )
     require_transition(DELETE_DRAFT, entity.canon_status, entity.lifecycle_status)
     if _has_blocking_references(connection, entity_id=entity_id):

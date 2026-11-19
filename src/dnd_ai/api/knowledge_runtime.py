@@ -31,6 +31,7 @@ from dnd_ai.commands.knowledge_runtime import (
 )
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.knowledge_runtime import (
     AWARENESS_LEVELS,
     INTERPRETATION_MAX_LENGTH,
@@ -47,10 +48,12 @@ from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["knowledge-runtime"])
 
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 _Edit = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
@@ -122,6 +125,7 @@ def _run(
     payload: dict[str, Any],
     command: Any,
     status_code: int,
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -131,6 +135,7 @@ def _run(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -161,6 +166,7 @@ def _run(
         receipt["knower_entity_id"] = str(result.knower_entity_id)
     status = status_code if result.changed else 200
     finish_campaign_idempotency(connection, idem, status_code=status, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status, content=receipt)
 
 
@@ -229,6 +235,7 @@ def reveal_endpoint(
     knowledge_item_id: uuid.UUID,
     body: RevealRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -251,7 +258,9 @@ def reveal_endpoint(
             world_time_id=body.world_time_id,
             session_id=body.session_id,
             note=body.note,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -260,6 +269,7 @@ def learn_endpoint(
     knowledge_item_id: uuid.UUID,
     body: LearnRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -284,7 +294,9 @@ def learn_endpoint(
             willing_to_share=body.willing_to_share,
             world_time_id=body.world_time_id,
             note=body.note,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -293,6 +305,7 @@ def transfer_endpoint(
     knowledge_item_id: uuid.UUID,
     body: TransferRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -317,7 +330,9 @@ def transfer_endpoint(
             modified_interpretation=body.modified_interpretation,
             world_time_id=body.world_time_id,
             note=body.note,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -326,6 +341,7 @@ def make_public_endpoint(
     knowledge_item_id: uuid.UUID,
     body: PublicRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -347,7 +363,9 @@ def make_public_endpoint(
             awareness_level=body.awareness_level,
             world_time_id=body.world_time_id,
             note=body.note,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -356,6 +374,7 @@ def belief_endpoint(
     entity_knowledge_id: uuid.UUID,
     body: BeliefRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -383,5 +402,7 @@ def belief_endpoint(
             changes=changes,
             world_time_id=body.world_time_id,
             note=body.note,
+            plan=plan,
         ),
+        plan=plan,
     )

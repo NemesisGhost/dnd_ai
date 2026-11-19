@@ -40,6 +40,7 @@ from dnd_ai.commands.encounter_preparation import (
     update_encounter_participant,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.encounter_operations import ACTION_KINDS, OUTCOMES
 from dnd_ai.domain.encounter_preparation import (
     INITIATIVE_MAX,
@@ -64,6 +65,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["encounter-preparation"])
 
@@ -71,6 +73,7 @@ _AUTHORING = "/campaigns/{campaign_id}/authoring/encounters"
 _BASE = "/campaigns/{campaign_id}/encounters"
 _Access = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -211,6 +214,7 @@ def _write(
     payload: dict[str, Any],
     created: bool,
     command: Callable[[], PreparationResult],
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -220,6 +224,7 @@ def _write(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -242,6 +247,7 @@ def _write(
     response = _view_json(_load(connection, access, result.encounter_id), changed=result.changed)
     status = 201 if created else 200
     finish_campaign_idempotency(connection, idem, status_code=status, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status, content=response) if created else response
 
 
@@ -249,6 +255,7 @@ def _write(
 def prepare_endpoint(
     body: PrepareRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -269,7 +276,9 @@ def prepare_endpoint(
             location_id=body.location_id,
             summary=body.summary,
             world_time_id=body.world_time_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -278,6 +287,7 @@ def update_endpoint(
     encounter_id: uuid.UUID,
     body: UpdateEncounterRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -297,7 +307,9 @@ def update_endpoint(
             encounter_id=encounter_id,
             location_id=body.location_id,
             summary=body.summary,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -306,6 +318,7 @@ def add_participant_endpoint(
     encounter_id: uuid.UUID,
     body: AddParticipantRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -326,7 +339,9 @@ def add_participant_endpoint(
             participant_entity_id=body.participant_entity_id,
             side=body.side,
             initiative=body.initiative,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -336,6 +351,7 @@ def update_participant_endpoint(
     participant_id: uuid.UUID,
     body: UpdateParticipantRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -363,7 +379,9 @@ def update_participant_endpoint(
             initiative=(
                 body.initiative if "initiative" in body.model_fields_set else KEEP_INITIATIVE
             ),
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -372,6 +390,7 @@ def remove_participant_endpoint(
     encounter_id: uuid.UUID,
     participant_id: uuid.UUID,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -390,7 +409,9 @@ def remove_participant_endpoint(
             actor_user_id=access.user_id,
             encounter_id=encounter_id,
             encounter_participant_id=participant_id,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -410,6 +431,7 @@ def _operate(
     correlation_id: str | None,
     body: OperationRequest,
     command: Callable[[], EncounterOperationResult],
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -419,6 +441,7 @@ def _operate(
         command_name=command_name,
         payload={"encounter_id": str(encounter_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -443,6 +466,7 @@ def _operate(
         "event_id": None if result.event_id is None else str(result.event_id),
     }
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 
@@ -451,6 +475,7 @@ def start_endpoint(
     encounter_id: uuid.UUID,
     body: OperationRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -471,7 +496,9 @@ def start_endpoint(
             world_time_id=body.world_time_id,
             session_id=body.session_id,
             note=body.note,
+            plan=plan,
         ),
+        plan=plan,
     )
 
 
@@ -480,6 +507,7 @@ def abort_endpoint(
     encounter_id: uuid.UUID,
     body: OperationRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -500,5 +528,7 @@ def abort_endpoint(
             world_time_id=body.world_time_id,
             session_id=body.session_id,
             note=body.note,
+            plan=plan,
         ),
+        plan=plan,
     )

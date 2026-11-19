@@ -76,8 +76,21 @@ from dnd_ai.commands.religions import create_religion
 from dnd_ai.config import settings
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import CampaignNotAuthorizedError
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.knowledge_authoring import statement_to_name
 from dnd_ai.queries.npc_authoring import list_species_options
+
+
+def _script_plan(
+    connection: Connection, campaign_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> AuthorizationPlan:
+    """A pending plan for this operator script (R01 S3). The script is not a route: it runs as the seeding
+    operator in its own transaction, so the commands record their decisions and nothing is judged. It
+    protects nothing, exactly as `R01_PENDING` did before the commands took a plan."""
+    return AuthorizationPlan.begin(
+        connection, actor_user_id=actor_user_id, campaign_id=campaign_id, pending=True
+    )
+
 
 _COMMAND_PREFIX = "scripts.setup_phase15_world_content"
 _PREFIX = "[P15 dev] "
@@ -220,6 +233,7 @@ def _publish(ctx: _Ctx, entity_id: uuid.UUID) -> str | None:
             entity_id=entity_id,
             actor_user_id=ctx.user_id,
             expected_row_version=version,
+            plan=_script_plan(ctx.connection, ctx.campaign_id, ctx.user_id),
         )
         _audit_transition(ctx, result, command.__name__)
     return "published"
@@ -236,6 +250,7 @@ def _archive(ctx: _Ctx, entity_id: uuid.UUID) -> str | None:
         actor_user_id=ctx.user_id,
         expected_row_version=version,
         reason="Phase 15 development data",
+        plan=_script_plan(ctx.connection, ctx.campaign_id, ctx.user_id),
     )
     _audit_transition(ctx, result, "archive_entity", lifecycle_action="archived")
     return "archived"
@@ -254,6 +269,7 @@ def _supersede(ctx: _Ctx, old: uuid.UUID, replacement: uuid.UUID) -> str | None:
         expected_row_version=version,
         replacement_entity_id=replacement,
         replacement_expected_row_version=replacement_version,
+        plan=_script_plan(ctx.connection, ctx.campaign_id, ctx.user_id),
     )
     _audit_transition(ctx, result, "supersede_entity")
     if result.replacement is not None:
@@ -345,6 +361,7 @@ def _author(ctx: _Ctx) -> None:
             name=_PREFIX + name,
             summary=f"{name} (development data).",
             parent_location_id=parent,
+            plan=_script_plan(conn, c, u),
         )
 
     def place(name: str, category: str, target: str, parent: uuid.UUID | None = None) -> _Record:
@@ -385,6 +402,7 @@ def _author(ctx: _Ctx) -> None:
             name=_PREFIX + "Brindlehaven Council",
             summary="The town's ruling council.",
             headquarters_location_id=settlement.entity_id,
+            plan=_script_plan(conn, c, u),
         ),
         target="published",
         portal_path=world + "/organization/{id}",
@@ -404,6 +422,7 @@ def _author(ctx: _Ctx) -> None:
             summary="Dock workers, not yet approved.",
             parent_organization_id=government.entity_id,
             typed_fields={"organization_type": "guild"},
+            plan=_script_plan(conn, c, u),
         ),
         target="draft",
         portal_path=world + "/organization/{id}",
@@ -421,6 +440,7 @@ def _author(ctx: _Ctx) -> None:
             name=_PREFIX + "The Tidewardens",
             summary="Sailors' faith.",
             pantheon_structure="Three tide spirits",
+            plan=_script_plan(conn, c, u),
         ),
         target="published",
         portal_path=world + "/religion/{id}",
@@ -440,6 +460,7 @@ def _author(ctx: _Ctx) -> None:
             summary="The local chapter.",
             religion_id=religion.entity_id,
             headquarters_location_id=building.entity_id,
+            plan=_script_plan(conn, c, u),
         ),
         target="published",
         portal_path=world + "/organization/{id}",
@@ -470,6 +491,7 @@ def _author(ctx: _Ctx) -> None:
                 origin_location_id=origin,
                 background="Written by the Phase 15 development script.",
                 notes="GM-only note.",
+                plan=_script_plan(conn, c, u),
             ),
             target=target,
             portal_path=world + "/character/{id}",
@@ -490,6 +512,7 @@ def _author(ctx: _Ctx) -> None:
             actor_user_id=u,
             name=_PREFIX + "The Missing Manifest",
             summary="A ship's manifest has vanished.",
+            plan=_script_plan(conn, c, u),
         ),
         target="draft",
         portal_path="/app/{c}/quests/{id}/edit",
@@ -515,6 +538,7 @@ def _author(ctx: _Ctx) -> None:
             actor_user_id=u,
             name=_PREFIX + "Whispers on the Quay",
             summary="An unfinished quest idea.",
+            plan=_script_plan(conn, c, u),
         ),
         target="draft",
         portal_path="/app/{c}/quests/{id}/edit",
@@ -543,6 +567,7 @@ def _author(ctx: _Ctx) -> None:
                 truth_status=truth,
                 sensitivity=sensitivity,
                 subject_entity_id=subject,
+                plan=_script_plan(conn, c, u),
             ),
             target=target,
             portal_path="/app/{c}/knowledge/{id}",
@@ -577,6 +602,7 @@ def _add_quest_structure(
             name=name,
             description=None,
             stage_type="sequential",
+            plan=_script_plan(conn, c, u),
         )
         _audit_create(ctx, result, "add_quest_stage")
         assert result.record_id is not None
@@ -599,6 +625,7 @@ def _add_quest_structure(
             visibility_policy="visible",
             quantity_required=None,
             target_entity_id=target,
+            plan=_script_plan(conn, c, u),
         )
         _audit_create(ctx, result, "add_quest_objective")
 

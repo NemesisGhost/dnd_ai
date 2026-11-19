@@ -4,7 +4,8 @@
     uv run python scripts/run_sharded_tests.py --verify-partition-only
     uv run python scripts/run_sharded_tests.py -- -x      # extra arguments go to every shard's pytest
 
-It reproduces `.github/workflows/ci.yml`'s `postgres-tests` job locally. It reuses CI's partition
+It reproduces `.github/workflows/ci.yml`'s `postgres-tests` job locally, with four shards by default (CI groups the
+same suite eight ways; `--shards 8` reproduces that grouping). It reuses CI's partition mechanism
 (`CI_TEST_SHARD=<index>/<total>`, whole files dealt round-robin by `tests/conftest.py`) and, like CI,
 gives every shard **its own PostgreSQL 18 server**. That is the point of this script, not a nicety:
 migrations and the downgrade tests create and drop cluster-global roles (`migration_owner`, the
@@ -57,7 +58,10 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_SHARDS = 4  # must match the matrix and the "/4" in .github/workflows/ci.yml
+CI_SHARDS = 8  # must match the matrix and the "/8" in .github/workflows/ci.yml
+# Locally the default stays four: eight servers and eight test processes need about twice the CPU and RAM of four
+# (docs/DEVELOPMENT.md section 6.3). The runner covers the same whole suite either way; `--shards 8` reproduces CI's grouping.
+DEFAULT_SHARDS = 4
 REQUIRED_MAJOR = 18
 _DB_NAME = "dnd_ai_ci"
 _DB_PASSWORD = "postgres"  # a throwaway loopback cluster, as CI's container
@@ -580,6 +584,9 @@ def shard_environment(shard: Shard, isolation: Path) -> dict[str, str]:
         TMPDIR=str(scratch),
         PYTHONPATH=str(isolation),
         PYTHONUNBUFFERED="1",
+        # Race-harness deadline reports (tests/deadline_diagnostics.py) go inside the kept run directory, so a
+        # stall that leaves no other trace is still diagnosable after the shard's tmp directory is removed.
+        RUNNER_DEADLINE_DIAG_DIR=str(shard.root / "deadline-diagnostics"),
     )
     return environment
 
@@ -918,6 +925,9 @@ def report(
             f"{shard.name}: exit {shard.returncode}  {detail}  ({shard.collected} collected, "
             f"{fmt(elapsed)}){note}"
         )
+        diagnostics = sorted((shard.root / "deadline-diagnostics").glob("*.txt"))
+        if diagnostics:
+            print(f"    {len(diagnostics)} deadline report(s) in {diagnostics[0].parent}")
         if shard.returncode != 0:
             failed = True
             for line in failure_lines(shard.pytest_log):
@@ -944,7 +954,10 @@ def main() -> int:
     sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]  # progress shows when piped
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0] if __doc__ else None)
     parser.add_argument(
-        "--shards", type=int, default=DEFAULT_SHARDS, help=f"shard count (CI uses {DEFAULT_SHARDS})"
+        "--shards",
+        type=int,
+        default=DEFAULT_SHARDS,
+        help=f"shard count (default {DEFAULT_SHARDS} locally; CI uses {CI_SHARDS})",
     )
     parser.add_argument("--pg-bin", help="directory holding the PostgreSQL 18 binaries")
     parser.add_argument("--timeout-minutes", type=int, default=120)

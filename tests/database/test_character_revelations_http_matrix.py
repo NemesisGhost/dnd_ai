@@ -85,6 +85,7 @@ from tests.database.test_character_revelations_matrix import (  # noqa: F401 - f
 )
 from tests.factories import make_external_identity
 from tests.lock_race_support import Budget, LockRace
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -264,6 +265,7 @@ def revoke_it(g: Gate, character: uuid.UUID, revelation: uuid.UUID) -> Callable[
         actor_membership_id=g.o1,
         reason="Race",
         reserve=lambda: False,
+        plan=fixture_plan(cn, g.campaign_id),
     )
 
 

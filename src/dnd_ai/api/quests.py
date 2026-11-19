@@ -141,6 +141,7 @@ from sqlalchemy import Connection
 
 from dnd_ai.commands.quests import _advance_objective_impl
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.queries.entity_lifecycle import lifecycle_hidden_entity_ids
 from dnd_ai.queries.quest import get_quest_view, list_campaign_quests
 
@@ -156,8 +157,11 @@ from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
 from .idempotency import IdempotentReplay, begin_idempotent_request, complete_idempotent_request
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["quests"])
+
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 # Quest objective advancement is a canon-affecting mutation (docs/
 # architecture/DATABASE_MODEL.md §12.3) — see this module's docstring for
@@ -251,6 +255,7 @@ def advance_objective_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_QUEST_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
@@ -271,6 +276,7 @@ def advance_objective_endpoint(
             correlation_id=correlation_id,
         )
         if isinstance(outcome, IdempotentReplay):
+            plan.finalize(connection)  # R01: a replay is judged before the receipt leaves
             return AdvanceObjectiveResponse.model_validate(outcome.response_body)
         reservation_id = outcome.idempotent_request_id
 
@@ -318,6 +324,7 @@ def advance_objective_endpoint(
             response_body=response.model_dump(mode="json"),
         )
 
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 

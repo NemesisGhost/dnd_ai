@@ -73,6 +73,7 @@ from tests.database.test_character_revelations_keyed import (
 )
 from tests.factories import make_external_identity, make_system_role_assignment, make_user
 from tests.lock_race_support import LockRace
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -111,6 +112,7 @@ def create_as(
         target_access_group_id=None,
         reason="Race",
         reserve=lambda: False,
+        plan=fixture_plan(cn, g.campaign_id),
     )
 
 
@@ -651,12 +653,16 @@ def test_a_keyed_waiter_whose_assignment_expires_during_the_key_wait_is_refused_
     finally:
         hold.release()
     one, two = first.join(), second.join()
-    assert _status(one) in (200, 201)  # type: ignore[arg-type]  # the first checked before expiry
+    # R01 S2: the first request checked its authority before the assignment expired, then waited at its
+    # audit insert while it lapsed. The route's final check now refuses it (it used to commit), so
+    # neither request writes anything and neither leaves a receipt.
+    assert _status(one) == 403  # type: ignore[arg-type]
     assert _status(two) == 403 and error_code(two) == "character_reveal_required"
     assert "character_revelation_id" not in two.text  # type: ignore[attr-defined]  # no replay
-    assert len(receipts(postgres_engine, g, user, key)) == 1  # the first's, unchanged
+    assert "character_revelation_id" not in one.text  # type: ignore[attr-defined]
+    assert len(receipts(postgres_engine, g, user, key)) == 0  # the first's was rolled back
     created = len(audit(postgres_engine, g, CREATE_COMMAND))
     revoked = len(audit(postgres_engine, g, REVOKE_COMMAND))
-    assert (created, revoked) == ((2, 0) if route == "create" else (1, 1))  # the setup row + one
+    assert (created, revoked) == (1, 0)  # only the setup row
     after = len(revelations(postgres_engine, g, c))
-    assert after == before_revelations + (1 if route == "create" else 0)
+    assert after == before_revelations

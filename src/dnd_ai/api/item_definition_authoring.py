@@ -26,13 +26,14 @@ from dnd_ai.commands.item_definitions import (
     update_item_definition,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.item_definition_authoring import (
     CANON_STATES,
     DESCRIPTION_MAX_LENGTH,
     NAME_MAX_LENGTH,
     RARITIES,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.item_definitions import (
     ItemDefinitionView,
     get_item_definition,
@@ -43,6 +44,7 @@ from dnd_ai.queries.item_definitions import (
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._shared import timeline_world_id
@@ -51,6 +53,7 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["item-definitions"])
 
@@ -64,6 +67,7 @@ _PrivateRead = Annotated[
     Depends(require_campaign_capability("canon.edit", world_capability=WORLD_CANON_READ_PRIVATE)),
 ]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -162,6 +166,7 @@ def _respond(
     correlation_id: str | None,
     status_code: int,
     idem: Any,
+    plan: AuthorizationPlan,
 ) -> Any:
     if result.changed:
         record_change_log(
@@ -188,6 +193,7 @@ def _respond(
         raise NotFoundError()
     response = {**_view_json(view), "created": result.created, "changed": result.changed}
     finish_campaign_idempotency(connection, idem, status_code=status_code, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status_code, content=response)
 
 
@@ -195,10 +201,12 @@ def _respond(
 def create_endpoint(
     body: DefinitionFields,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -207,6 +215,7 @@ def create_endpoint(
         command_name="create_item_definition",
         payload=body.model_dump(mode="json"),
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -222,6 +231,7 @@ def create_endpoint(
         weight=body.weight,
         base_cost_gp=body.base_cost_gp,
         canon_status=body.canon_status,
+        plan=plan,
     )
     return _respond(
         connection,
@@ -231,6 +241,7 @@ def create_endpoint(
         correlation_id=correlation_id,
         status_code=201,
         idem=idem,
+        plan=plan,
     )
 
 
@@ -239,10 +250,12 @@ def update_endpoint(
     definition_id: uuid.UUID,
     body: UpdateDefinitionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -251,6 +264,7 @@ def update_endpoint(
         command_name="update_item_definition",
         payload={"item_definition_id": str(definition_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -268,6 +282,7 @@ def update_endpoint(
         weight=body.weight,
         base_cost_gp=body.base_cost_gp,
         canon_status=body.canon_status,
+        plan=plan,
     )
     return _respond(
         connection,
@@ -277,4 +292,5 @@ def update_endpoint(
         correlation_id=correlation_id,
         status_code=200,
         idem=idem,
+        plan=plan,
     )

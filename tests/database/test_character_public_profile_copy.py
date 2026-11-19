@@ -58,6 +58,7 @@ from tests.database.test_character_reveal_delegation import (  # noqa: F401 - fi
     m,
 )
 from tests.factories import make_character
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -166,6 +167,7 @@ def update_source(
             species_id=current.species_id,
             size_category=current.size_category,
             origin_location_id=current.origin_location_id,
+            plan=fixture_plan(connection, g.campaign_id),
             **values,
         )
 

@@ -440,6 +440,7 @@ from dnd_ai.commands.world_time import create_calendar, create_world_time
 from dnd_ai.commands.worlds import create_world
 from dnd_ai.config import settings
 from dnd_ai.domain.access import is_platform_administrator, resolve_access_context
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.character_builds import (
     BuildInput,
     ClassLevelInput,
@@ -459,6 +460,18 @@ from dnd_ai.queries.world_explorer import (
     get_location_view,
     search_world_entities,
 )
+
+
+def _script_plan(
+    connection: Connection, campaign_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> AuthorizationPlan:
+    """A pending plan for this operator script (R01 S3). The script is not a route: it runs as the seeding
+    operator in its own transaction, so the commands record their decisions and nothing is judged. It
+    protects nothing, exactly as `R01_PENDING` did before the commands took a plan."""
+    return AuthorizationPlan.begin(
+        connection, actor_user_id=actor_user_id, campaign_id=campaign_id, pending=True
+    )
+
 
 _COMMAND_NAME = "scripts.setup_phase13c_dev_data"
 
@@ -2077,6 +2090,7 @@ def _get_or_create_character(
         summary=None,
         species_id=species_id,
         size_category=_CHARACTER_SIZE_CATEGORY,
+        plan=_script_plan(connection, campaign_id, owner_user_id),
     )
     entity_id = created.entity_id
     version = created.row_version
@@ -2087,6 +2101,7 @@ def _get_or_create_character(
             entity_id=entity_id,
             actor_user_id=owner_user_id,
             expected_row_version=version,
+            plan=_script_plan(connection, campaign_id, owner_user_id),
         ).row_version
     summary.add(created=True, label=f"character {name!r} ({species_code})", record_id=entity_id)
     return entity_id
@@ -2146,6 +2161,7 @@ def _ensure_character_state(
             character_id=character_id,
             maximum_hit_points=state.maximum_hit_points,
             current_hit_points=state.current_hit_points,
+            plan=_script_plan(connection, campaign_id, actor_user_id),
         )
         existing = (
             connection.execute(
@@ -2576,6 +2592,7 @@ def _ensure_character_build(
         actor_user_id=actor_user_id,
         character_id=character_id,
         build=build,
+        plan=_script_plan(connection, campaign_id, actor_user_id),
     )
     summary.add(created=True, label=label, record_id=created.character_build_id)
     return created.character_build_id
@@ -2621,6 +2638,7 @@ def _ensure_active_build_selection(
         character_id=character_id,
         character_build_id=character_build_id,
         expected_active_build_id=None,
+        plan=_script_plan(connection, campaign_id, actor_user_id),
     )
     summary.add(created=True, label=label, record_id=character_id)
 
@@ -2695,6 +2713,7 @@ def _create_fixture_world_time(
         hour=hour,
         minute=minute,
         label=label,
+        plan=_script_plan(connection, campaign_id, actor),
     ).world_time_id
 
 
@@ -3188,6 +3207,7 @@ def _get_or_create_party(
         campaign_id=campaign_id,
         actor_user_id=_world_time_actor_user_id,
         name=name,
+        plan=_script_plan(connection, campaign_id, _world_time_actor_user_id),
     ).party_id
     summary.add(created=True, label=f"party {name!r}", record_id=party_id)
     summary.add(
@@ -5517,6 +5537,7 @@ def _ensure_party_membership(
         character_id=member_entity_id,
         effective_from_world_time_id=effective_from_world_time_id,
         expected_party_row_version=version,
+        plan=_script_plan(connection, campaign_id, _world_time_actor_user_id),
     )
     summary.add(created=True, label=label, record_id=member_entity_id)
 

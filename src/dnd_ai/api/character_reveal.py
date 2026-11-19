@@ -13,6 +13,11 @@ assignment under lock (`CampaignOwnerRequiredError`, 403 `campaign_owner_require
 
 Auditing: one `audit.change_log` row per actual change (`security.character_reveal_delegations`,
 `record_id` the delegation); an idempotent repeat that changes nothing writes none.
+
+R01 S5-E6 (plan 6.36): both routes are **unkeyed pre-write plans** (`dnd_ai.commands.reveal_delegation_plans`,
+`R01_UNKEYED_PRE_WRITE_ROUTES`). Every lock and refusal precedes `plan.finalize`; the writes and the audit row are
+declared steps after it. They stay non-idempotent through a reservation: an `Idempotency-Key` header is ignored.
+`dnd_ai.commands.character_reveal` stays as the direct, unguarded command and the oracle of the route tests.
 """
 
 import uuid
@@ -22,27 +27,25 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection
 
-from dnd_ai.commands.character_reveal import (
-    grant_character_reveal_delegation,
-    revoke_character_reveal_delegation,
+from dnd_ai.commands.reveal_delegation_plans import (
+    prepare_grant,
+    prepare_revoke,
+    write_grant,
+    write_revoke,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 
-from ._shared import timeline_world_id
 from .access import require_campaign_capability
-from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["character-reveal"])
 
 _ACCESS_MANAGE_CAPABILITY = "access.manage"
 
-_GRANT_COMMAND_NAME = "grant_character_reveal_delegation"
-_REVOKE_COMMAND_NAME = "revoke_character_reveal_delegation"
-
-_CREATED_CHANGE_ACTION = "created"
-_UPDATED_CHANGE_ACTION = "updated"
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 
 class GrantCharacterRevealDelegationRequest(BaseModel):
@@ -76,37 +79,34 @@ def grant_character_reveal_delegation_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> GrantCharacterRevealDelegationResponse:
     """Delegates `character.reveal` to a member holding the built-in `gm` role. `granted` is
-    false when the member already held a current delegation (nothing written, nothing audited)."""
-    result = grant_character_reveal_delegation(
+    false when the member already held a current delegation (nothing written, nothing audited).
+
+    An **unkeyed** pre-write route (R01 S5-E6): the owner and grantee checks and every lock precede
+    `plan.finalize`; the closure of a stale delegation, the insert and the audit row are declared steps."""
+    prepared = prepare_grant(
         connection,
+        plan,
         campaign_id=campaign_id,
         actor_membership_id=access.campaign_membership_id,
         grantee_campaign_membership_id=body.grantee_campaign_membership_id,
         reason=body.reason,
     )
-    if result.created:
-        record_change_log(
-            connection,
-            change_action_code=_CREATED_CHANGE_ACTION,
-            schema_name="security",
-            table_name="character_reveal_delegations",
-            record_id=result.character_reveal_delegation_id,
-            entity_id=None,
-            world_id=timeline_world_id(connection, access.timeline_id),
-            actor_user_id=access.user_id,
-            correlation_id=correlation_id,
-            command_name=_GRANT_COMMAND_NAME,
-            event_id=None,
-            changed_fields={
-                "grantee_campaign_membership_id": str(result.grantee_campaign_membership_id),
-                "gm_membership_role_id": str(result.gm_membership_role_id),
-                "replaced_stale_delegation": bool(result.replaced_stale_delegation_ids),
-            },
-        )
+    plan.finalize(connection)
+    result = write_grant(
+        connection,
+        plan,
+        prepared,
+        campaign_id=campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        grantee_campaign_membership_id=body.grantee_campaign_membership_id,
+        correlation_id=correlation_id,
+    )
     return GrantCharacterRevealDelegationResponse(
         grantee_campaign_membership_id=result.grantee_campaign_membership_id,
         character_reveal_delegation_id=result.character_reveal_delegation_id,
@@ -126,37 +126,30 @@ def revoke_character_reveal_delegation_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ACCESS_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> RevokeCharacterRevealDelegationResponse:
     """Revokes the member's live delegation. `revoked` is false when they held none (nothing
-    written, nothing audited)."""
-    result = revoke_character_reveal_delegation(
+    written, nothing audited). An **unkeyed** pre-write route (R01 S5-E6), like the grant."""
+    prepared = prepare_revoke(
         connection,
+        plan,
         campaign_id=campaign_id,
         actor_membership_id=access.campaign_membership_id,
         grantee_campaign_membership_id=grantee_campaign_membership_id,
         reason=body.reason,
     )
-    if result.revoked:
-        assert result.character_reveal_delegation_id is not None
-        record_change_log(
-            connection,
-            change_action_code=_UPDATED_CHANGE_ACTION,
-            schema_name="security",
-            table_name="character_reveal_delegations",
-            record_id=result.character_reveal_delegation_id,
-            entity_id=None,
-            world_id=timeline_world_id(connection, access.timeline_id),
-            actor_user_id=access.user_id,
-            correlation_id=correlation_id,
-            command_name=_REVOKE_COMMAND_NAME,
-            event_id=None,
-            changed_fields={
-                "grantee_campaign_membership_id": str(result.grantee_campaign_membership_id),
-                "revoked": True,
-            },
-        )
+    plan.finalize(connection)
+    result = write_revoke(
+        connection,
+        plan,
+        prepared,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        grantee_campaign_membership_id=grantee_campaign_membership_id,
+        correlation_id=correlation_id,
+    )
     return RevokeCharacterRevealDelegationResponse(
         grantee_campaign_membership_id=result.grantee_campaign_membership_id,
         revoked=result.revoked,

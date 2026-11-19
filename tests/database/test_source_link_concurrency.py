@@ -18,6 +18,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_location, make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -39,6 +40,7 @@ class Fixture:
             actor_user_id=self.owner,
             entity_id=self.entity_id,
             source_id=self.source_id,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def detach(self, connection):  # type: ignore[no-untyped-def]
@@ -48,6 +50,7 @@ class Fixture:
             actor_user_id=self.owner,
             entity_id=self.entity_id,
             source_id=self.source_id,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def links(self) -> list[bool]:
@@ -76,6 +79,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             source_type="session_notes",
             title="Race notes",
+            plan=fixture_plan(setup, campaign_id),
         )
     yield Fixture(postgres_engine, owner, campaign_id, entity_id, source.source_id)
     _purge_user_worlds(postgres_engine, owner)

@@ -659,6 +659,12 @@ def postgres_engine() -> Iterator[Engine]:
     preprovisioned_url = os.environ.get("DND_AI_TEST_DATABASE_URL")
     if preprovisioned_url:
         engine = create_engine(preprovisioned_url, **_test_engine_kwargs())
+        # The application installs its commit guard when it creates its engine (`get_engine`); the
+        # test engine is the app's engine under `dependency_overrides`, so install it here too, not
+        # lazily on the first write request, which would register listeners under a running thread.
+        from dnd_ai.domain.authorization import install_authorization_guard
+
+        install_authorization_guard(engine)
         try:
             _require_supported_postgres(engine)
             yield engine
@@ -704,6 +710,12 @@ def postgres_engine() -> Iterator[Engine]:
         _run_alembic_upgrade(test_url.render_as_string(hide_password=False))
 
         engine = create_engine(test_url, **_test_engine_kwargs())
+        # The application installs its commit guard when it creates its engine (`get_engine`); the
+        # test engine is the app's engine under `dependency_overrides`, so install it here too, not
+        # lazily on the first write request, which would register listeners under a running thread.
+        from dnd_ai.domain.authorization import install_authorization_guard
+
+        install_authorization_guard(engine)
         try:
             yield engine
         finally:

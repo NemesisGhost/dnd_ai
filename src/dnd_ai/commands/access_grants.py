@@ -546,7 +546,8 @@ def grant_character_relationship(
 
     Locks the target membership row, then `campaign.campaigns`
     (checkpoint-4 correction), then, separately, the membership's owning
-    user row (`FOR UPDATE OF cm`/`FOR UPDATE OF c`/`FOR UPDATE OF u`), then
+    user row (`FOR UPDATE OF cm`/`FOR UPDATE OF c`/`FOR KEY SHARE OF u`, the last since R01 S5-A:
+    see `assign_membership_role` for why `KEY SHARE` still excludes a deactivation), then
     the target character row (`FOR UPDATE OF e`), then the candidate
     relationship-type row, before evaluating each one's own eligibility
     check — the same "membership-then-role" lock ordering `assign_
@@ -614,7 +615,7 @@ def grant_character_relationship(
             FROM security.users u
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
             WHERE u.user_id = :user
-            FOR UPDATE OF u
+            FOR KEY SHARE OF u
         """),
         {"user": membership_row["user_id"]},
     ).scalar()
@@ -937,7 +938,7 @@ def change_character_relationship(
             FROM security.users u
             JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
             WHERE u.user_id = :user
-            FOR UPDATE OF u
+            FOR KEY SHARE OF u
         """),
         {"user": row["user_id"]},
     ).scalar()
@@ -1364,7 +1365,7 @@ def create_resource_grant(
     checkpoint 6, the group row `FOR UPDATE OF ag` for an access-group
     grantee — both now carry a mutable lifecycle to protect), then
     `campaign.campaigns` (`FOR UPDATE OF c`), then, separately, the
-    membership grantee's owning user row (`FOR UPDATE OF u`, skipped for
+    membership grantee's owning user row (`FOR KEY SHARE OF u` since R01 S5-A, skipped for
     an access-group grantee, which has none of its own), then the target
     resource row
     (`_validate_resource_grant_target()`'s own lock), then the candidate
@@ -1465,7 +1466,7 @@ def create_resource_grant(
                 FROM security.users u
                 JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = u.lifecycle_status_id
                 WHERE u.user_id = :user
-                FOR UPDATE OF u
+                FOR KEY SHARE OF u
             """),
             {"user": membership_owner_user_id},
         ).scalar()

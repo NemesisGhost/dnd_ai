@@ -96,7 +96,7 @@ import uuid
 from collections.abc import Callable
 from typing import Annotated, Literal
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import Connection, text
 
@@ -105,9 +105,12 @@ from dnd_ai.domain.access import (
     FOUNDRY_ACCESS_AUTH_METHOD,
     AccessContext,
     AuthenticatedPrincipal,
+    AuthoritySnapshot,
     resolve_access_context,
 )
 from dnd_ai.domain.authoring import WorldAuthorityRequiredError
+from dnd_ai.domain.authorization import Requirement
+from dnd_ai.domain.authorization_requirements import judged_requirement
 from dnd_ai.domain.errors import DomainAuthorizationError
 from dnd_ai.domain.foundry_pairing import FOUNDRY_SCOPES
 from dnd_ai.domain.public_profiles import may_read_released_profile
@@ -129,6 +132,7 @@ from ._shared import timeline_world_id
 from .auth import get_authenticated_user_id
 from .deps import get_connection
 from .errors import ForbiddenError, NotFoundError
+from .r01_route_plans import open_request_plan
 
 
 def require_world_capability_for_campaign(
@@ -146,6 +150,84 @@ def require_world_capability_for_campaign(
         raise WorldAuthorityRequiredError(
             f"user {access.user_id} lacks {world_capability} on the campaign's world"
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class FoundryRouteFacts:
+    """The facts of a Foundry-authenticated request that a route requirement judges (plan S4b-4): the
+    campaign in the route, the campaign the credential is bound to, the scope the route requires and the
+    scopes the credential was granted. All are read from the authenticated principal at the start of the
+    request and are immutable."""
+
+    route_campaign_id: uuid.UUID
+    bound_campaign_id: uuid.UUID | None
+    route_scope: str
+    granted_scopes: frozenset[str]
+
+
+def route_capability_requirement(
+    *,
+    capability_code: str,
+    allow_archived_campaign: bool,
+    world_capability: str | None,
+    world_id: uuid.UUID | None,
+    actor_user_id: uuid.UUID,
+    foundry: FoundryRouteFacts | None = None,
+) -> Requirement:
+    """The route dependency's own decision (campaign capability, campaign lifecycle and, when
+    declared, the world capability) as a requirement for the plan's final check (R01 plan 6.5, rule
+    1b). It raises what the dependency raises at the start of the request: 404 for no access or an
+    archived campaign, 403 for a missing capability, 403 `world_authority_required` for a missing world
+    capability.
+
+    `foundry` (slice S4b-4): for a request authenticated by a Foundry access token on a route that
+    accepts one, the credential's campaign binding (404 when it names another campaign) and the
+    route's scope (403 when the token's granted scopes lack it), judged in the dependency's own order,
+    after the campaign's existence and lifecycle and before the capability. They are facts of the
+    authenticated principal, captured at the start of the request. They are not database inputs of
+    the final statement: explicit device or connection revocation follows plan section 2.1's
+    recommended decision (judged at the start of the request) and natural token expiry is excluded by
+    R-D3."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        access = snapshot.access
+        if access is None:
+            return NotFoundError()
+        if not allow_archived_campaign and access.campaign_lifecycle_status in (
+            "archived",
+            "deleted",
+        ):
+            return NotFoundError()
+        if foundry is not None:
+            if foundry.route_campaign_id != foundry.bound_campaign_id:
+                return NotFoundError()
+            if foundry.route_scope not in foundry.granted_scopes:
+                return ForbiddenError()
+        if not access.has_capability(capability_code):
+            return ForbiddenError()
+        if world_capability is not None:
+            authority = snapshot.world_authority
+            if authority is None or not authority.has_capability(world_capability):
+                return WorldAuthorityRequiredError(
+                    f"user {actor_user_id} lacks {world_capability} on the campaign's world"
+                )
+        return None
+
+    name = f"route.{capability_code}" if foundry is None else f"route.{capability_code}.foundry"
+    return judged_requirement(name, decide, world_id=world_id if world_capability else None)
+
+
+def active_account_requirement() -> Requirement:
+    """R01 E3-D5: the caller's account must be `active` at the final check. An inactive (or vanished) account gets the
+    non-disclosing 404 the route gives a caller with no access. Opt-in: the snapshot reads the account lifecycle only
+    when a requirement declares it, and takes no row lock. Judged fresh per transaction: build one per plan."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        if snapshot.account_active is not True:
+            return NotFoundError()
+        return None
+
+    return judged_requirement("account.active", decide, account=True)
 
 
 class RecordAuthoringResponse(BaseModel):
@@ -207,6 +289,21 @@ def can_create_definitions(connection: Connection, *, access: AccessContext) -> 
     ).can_edit
 
 
+def _foundry_facts(
+    principal: AuthenticatedPrincipal, campaign_id: uuid.UUID, foundry_scope: str | None
+) -> FoundryRouteFacts | None:
+    """The Foundry facts of this request's route requirement: none for any other authentication."""
+    if principal.auth_method != FOUNDRY_ACCESS_AUTH_METHOD or foundry_scope is None:
+        return None
+    assert principal.foundry_scopes is not None  # guaranteed by AuthenticatedPrincipal
+    return FoundryRouteFacts(
+        route_campaign_id=campaign_id,
+        bound_campaign_id=principal.campaign_id,
+        route_scope=foundry_scope,
+        granted_scopes=frozenset(principal.foundry_scopes),
+    )
+
+
 def require_campaign_capability(
     capability_code: str,
     *,
@@ -214,7 +311,7 @@ def require_campaign_capability(
     foundry_scope: str | None = None,
     allow_archived_campaign: bool = False,
     world_capability: str | None = None,
-) -> Callable[[uuid.UUID, AuthenticatedPrincipal, Connection], AccessContext]:
+) -> Callable[[uuid.UUID, Request, AuthenticatedPrincipal, Connection], AccessContext]:
     """Returns a FastAPI dependency requiring `capability_code` (role- or
     character-relationship-derived, per `AccessContext.has_capability`) in
     the campaign named by the route's own `campaign_id` path parameter.
@@ -277,6 +374,7 @@ def require_campaign_capability(
 
     def _dependency(
         campaign_id: uuid.UUID,
+        request: Request,
         principal: Annotated[AuthenticatedPrincipal, Depends(get_authenticated_user_id)],
         connection: Annotated[Connection, Depends(get_connection)],
     ) -> AccessContext:
@@ -319,6 +417,25 @@ def require_campaign_capability(
         if world_capability is not None:
             require_world_capability_for_campaign(
                 connection, access=access, world_capability=world_capability
+            )
+        # R01 plan 6.5 rule 1b: a write route's plan opens here, and this decision becomes its first
+        # requirement. A read opens none.
+        plan = open_request_plan(
+            request, connection, actor_user_id=principal.user_id, campaign_id=campaign_id
+        )
+        if plan is not None:
+            plan.require(
+                connection,
+                route_capability_requirement(
+                    capability_code=capability_code,
+                    allow_archived_campaign=allow_archived_campaign,
+                    world_capability=world_capability,
+                    world_id=timeline_world_id(connection, access.timeline_id)
+                    if world_capability is not None
+                    else None,
+                    actor_user_id=principal.user_id,
+                    foundry=_foundry_facts(principal, campaign_id, foundry_scope),
+                ),
             )
         return dataclasses.replace(access, principal=principal)
 

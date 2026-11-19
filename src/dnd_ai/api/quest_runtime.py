@@ -22,6 +22,7 @@ from sqlalchemy import Connection, text
 from dnd_ai.commands.quest_runtime import RuntimeResult, change_quest_status, set_objective_status
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.quest_runtime import OBJECTIVE_TARGETS
 from dnd_ai.queries.quest_runtime import get_quest_progress
 
@@ -34,10 +35,12 @@ from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["quest-runtime"])
 
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 _Edit = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
@@ -74,6 +77,7 @@ def _run(
     payload: dict[str, Any],
     command: Any,
     table: str,
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -83,6 +87,7 @@ def _run(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -111,6 +116,7 @@ def _run(
     if result.quest_objective_id is not None:
         receipt["quest_objective_id"] = str(result.quest_objective_id)
     finish_campaign_idempotency(connection, idem, status_code=200, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=200, content=receipt)
 
 
@@ -163,6 +169,7 @@ def _quest_action(action: str) -> Any:
         quest_id: uuid.UUID,
         body: QuestActionRequest,
         access: _Edit,
+        plan: _Plan,
         connection: _Conn,
         idempotency_key: _Key,
         correlation_id: _Corr,
@@ -185,7 +192,9 @@ def _quest_action(action: str) -> Any:
                 party_id=body.party_id,
                 world_time_id=body.world_time_id,
                 note=body.note,
+                plan=plan,
             ),
+            plan=plan,
         )
 
     endpoint.__name__ = f"quest_{action}_endpoint"
@@ -203,6 +212,7 @@ def set_objective_status_endpoint(
     quest_objective_id: uuid.UUID,
     body: ObjectiveStatusRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -225,5 +235,7 @@ def set_objective_status_endpoint(
             party_id=body.party_id,
             world_time_id=body.world_time_id,
             note=body.note,
+            plan=plan,
         ),
+        plan=plan,
     )

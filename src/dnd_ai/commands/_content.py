@@ -34,6 +34,7 @@ from dnd_ai.domain.authoring import (
     WorldAuthorityRequiredError,
     WorldNotAuthorizedError,
 )
+from dnd_ai.domain.authorization import AuthorizationPlan, PlanArgument, Requirement
 from dnd_ai.domain.content_authoring import content_edit_blocked_reason, is_reference_eligible
 from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 from dnd_ai.queries.world_authority import resolve_world_authority
@@ -47,6 +48,64 @@ class EntityNotFoundError(DomainAuthorizationError):
     """No such entity *in this campaign's world* (or not of the type this
     command handles) -- a nonexistent entity, one belonging to another world,
     and one of another type are indistinguishable (fixed 404)."""
+
+
+def canon_edit_requirement(actor_user_id: uuid.UUID, campaign_id: uuid.UUID) -> Requirement:
+    """Campaign `canon.edit` for the actor, with the error `lock_authoring_scope` raises today."""
+    return Requirement(
+        name="campaign.canon.edit",
+        predicate=lambda snapshot: (
+            snapshot.access is not None and snapshot.access.has_capability(CANON_EDIT)
+        ),
+        refusal=lambda: CampaignNotAuthorizedError(
+            f"user {actor_user_id} lacks canon.edit on {campaign_id}"
+        ),
+    )
+
+
+def world_capability_requirement(
+    actor_user_id: uuid.UUID, world_id: uuid.UUID, world_capability: str
+) -> Requirement:
+    """`world_capability` on the campaign's world, with the error `lock_authoring_scope` raises."""
+    return Requirement(
+        name=f"world.{world_capability}",
+        predicate=lambda snapshot: (
+            snapshot.world_authority is not None
+            and snapshot.world_authority.has_capability(world_capability)
+        ),
+        refusal=lambda: WorldAuthorityRequiredError(
+            f"user {actor_user_id} lacks {world_capability} on world {world_id}"
+        ),
+        world_id=world_id,
+    )
+
+
+def register_authoring_requirements(
+    connection: Connection,
+    plan: AuthorizationPlan,
+    *,
+    actor_user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    world_id: uuid.UUID,
+    world_capability: str | None,
+) -> None:
+    """The one place a definition-authoring decision becomes plan requirements (R01 plan 6.6, R-D4).
+
+    Campaign `canon.edit` first, then `world_capability` when one is required, each registered **once**:
+    a requirement already in the plan (by name) is not added again. A route registers these through
+    `dnd_ai.api._authoring.require_authoring_decisions` **before** it asks the idempotency store for a
+    replay, because a replay finalizes the plan before any command runs and so would otherwise judge only
+    the route's own decision; the command's `lock_authoring_scope` then finds them already registered, so a
+    fresh request and a replay judge the same requirements in the same order. It registers only (no
+    statement, so no lock) and so is safe before the idempotency boundary."""
+    names = {requirement.name for requirement in plan.requirements}
+    canon = canon_edit_requirement(actor_user_id, campaign_id)
+    if canon.name not in names:
+        plan.require(connection, canon)
+    if world_capability is not None:
+        world = world_capability_requirement(actor_user_id, world_id, world_capability)
+        if world.name not in names:
+            plan.require(connection, world)
 
 
 @dataclass(frozen=True)
@@ -98,6 +157,7 @@ def lock_authoring_scope(
     campaign_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     world_capability: str | None,
+    plan: PlanArgument,
 ) -> AuthoringScope:
     """Lock and re-authorize. Raises `CampaignNotAuthorizedError` (404) if the
     campaign does not exist or the actor no longer holds `canon.edit`,
@@ -117,7 +177,13 @@ def lock_authoring_scope(
     campaign-originated records that live in world tables (D8: world-time points,
     item instances, player-character identity) and for the campaign-state
     operations wrapped by `dnd_ai.commands._operations.lock_operation_scope`. It is
-    required (no default) so no caller can omit the world check by accident."""
+    required (no default) so no caller can omit the world check by accident.
+
+    `plan` is required too (R01 plan section 6.5, rule 1). Given an `AuthorizationPlan`, each check
+    below that passes is also registered as a requirement, in this order (campaign `canon.edit`, then
+    the world capability), for the plan's final check; the early check itself is unchanged. Given
+    `R01_PENDING`, the helper behaves exactly as before and registers nothing: that is an explicit
+    marker for a family not yet migrated, and it protects nothing."""
     world_id = connection.execute(
         text("""
             SELECT t.world_id FROM campaign.campaigns c
@@ -140,14 +206,20 @@ def lock_authoring_scope(
     # Hold the actor's open membership and unrevoked role rows so a concurrent
     # `revoke_membership_role` / `end_campaign_membership` (which take FOR UPDATE
     # on these rows) serializes against this command. `mr` before `cm`, the same
-    # order `change_membership_role` uses.
+    # order `change_membership_role` uses, and **two statements, not one**: a
+    # single `FOR SHARE OF mr, cm` join locked the membership together with the
+    # *first* role row and then waited for the remaining role rows while holding
+    # it, so a writer that held a later role row and wanted the membership
+    # (reveal-delegation grant, S5-E2 change, ownership transfer) deadlocked with
+    # it (R01 S5-E2 lock-order correction C3, P-1). Role rows first, in id order;
+    # the membership only after every role row is held.
     #
     # These are locked BEFORE the campaign row, not after: a role revocation
     # writes the membership-role row and then, at commit, its deferred
     # access-manager retention trigger takes the campaign row FOR UPDATE. A
     # command holding the campaign lock while waiting on the revoked row would
     # deadlock with it (found by the real-PostgreSQL race test).
-    connection.execute(
+    held_roles = connection.execute(
         text("""
             SELECT mr.membership_role_id
             FROM security.membership_roles mr
@@ -156,10 +228,22 @@ def lock_authoring_scope(
             WHERE cm.campaign_id = :c AND cm.user_id = :u
               AND cm.ended_at IS NULL AND mr.revoked_at IS NULL
             ORDER BY mr.membership_role_id
-            FOR SHARE OF mr, cm
+            FOR SHARE OF mr
         """),
         {"c": campaign_id, "u": actor_user_id},
     ).all()
+    if held_roles:
+        # Only an actor holding a role row needed the membership held (a membership with no role grants no
+        # authority and the checks below refuse it): the same rows the joined statement used to lock.
+        connection.execute(
+            text("""
+                SELECT cm.campaign_membership_id
+                FROM security.campaign_memberships cm
+                WHERE cm.campaign_id = :c AND cm.user_id = :u AND cm.ended_at IS NULL
+                FOR SHARE
+            """),
+            {"c": campaign_id, "u": actor_user_id},
+        ).all()
     user = connection.execute(
         text("SELECT lifecycle_status_id FROM security.users WHERE user_id = :u FOR SHARE"),
         {"u": actor_user_id},
@@ -175,6 +259,14 @@ def lock_authoring_scope(
     # while it waits for the membership row this command already holds FOR SHARE above;
     # FOR SHARE here made the two wait on each other (SQLSTATE 40P01). Nothing locks
     # this row again later in any caller, so no later upgrade can reintroduce a wait.
+    #
+    # A keyed request of an opted-in route (R01 O-2, AM-1) deferred its reservation's campaign foreign key, so
+    # this is the first lock on the row: the plan's own evidence statement takes it here, after every role row,
+    # membership and account lock above (the order every access writer follows), and the statement below then
+    # re-locks a row already held and never waits. Only a plan that owes the evidence takes it; any other plan,
+    # an unkeyed request included, goes straight to the statement below.
+    if isinstance(plan, AuthorizationPlan) and plan.owes_campaign_evidence:
+        plan.lock_campaign_evidence(connection)
     campaign = connection.execute(
         text(
             "SELECT lifecycle_status_id FROM campaign.campaigns "
@@ -195,11 +287,29 @@ def lock_authoring_scope(
     access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)
     if access is None or not access.has_capability(CANON_EDIT):
         raise CampaignNotAuthorizedError(f"user {actor_user_id} lacks canon.edit on {campaign_id}")
+    if isinstance(plan, AuthorizationPlan):
+        register_authoring_requirements(
+            connection,
+            plan,
+            actor_user_id=actor_user_id,
+            campaign_id=campaign_id,
+            world_id=world_id,
+            world_capability=None,
+        )
     if world_capability is not None:
         authority = resolve_world_authority(connection, user_id=actor_user_id, world_id=world_id)
         if authority is None or not authority.has_capability(world_capability):
             raise WorldAuthorityRequiredError(
                 f"user {actor_user_id} lacks {world_capability} on world {world_id}"
+            )
+        if isinstance(plan, AuthorizationPlan):
+            register_authoring_requirements(
+                connection,
+                plan,
+                actor_user_id=actor_user_id,
+                campaign_id=campaign_id,
+                world_id=world_id,
+                world_capability=world_capability,
             )
     return AuthoringScope(world_id=world_id, campaign_id=campaign_id)
 

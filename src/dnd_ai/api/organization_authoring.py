@@ -31,6 +31,7 @@ from dnd_ai.commands.organizations import create_organization, update_organizati
 from dnd_ai.commands.religions import create_religion, update_religion
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, REASON_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.organization_authoring import (
     DESCRIPTION_FIELD_MAX_LENGTH,
     GENERIC_ORGANIZATION_TYPES,
@@ -41,7 +42,7 @@ from dnd_ai.domain.organization_authoring import (
     OrganizationField,
     OrganizationKind,
 )
-from dnd_ai.domain.world_authority import WORLD_CANON_READ_PRIVATE
+from dnd_ai.domain.world_authority import WORLD_CANON_EDIT, WORLD_CANON_READ_PRIVATE
 from dnd_ai.queries.organization_authoring import (
     OrganizationAuthoringView,
     ReferenceSummary,
@@ -55,6 +56,7 @@ from dnd_ai.queries.reference_options import descendant_ids, list_reference_opti
 from ._authoring import (
     BaseAuthoringRequest,
     finish_campaign_idempotency,
+    require_authoring_decisions,
     start_campaign_idempotency,
 )
 from ._content_support import (
@@ -70,6 +72,7 @@ from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
 from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["organization-authoring"])
 
@@ -86,6 +89,7 @@ _PrivateRead = Annotated[
     Depends(require_campaign_capability(_CAPABILITY, world_capability=WORLD_CANON_READ_PRIVATE)),
 ]
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 
@@ -292,11 +296,13 @@ def organization_parent_options_endpoint(
 def create_organization_endpoint(
     body: CreateOrganizationRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
     command_name = "create_organization"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -305,6 +311,7 @@ def create_organization_endpoint(
         command_name=command_name,
         payload=body.model_dump(mode="json"),
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -321,6 +328,7 @@ def create_organization_endpoint(
         headquarters_location_id=body.headquarters_location_id,
         religion_id=body.religion_id,
         typed_fields=body.typed_fields(),
+        plan=plan,
     )
     audit_content_write(
         connection,
@@ -335,6 +343,7 @@ def create_organization_endpoint(
     )
     response = _organization_response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=201, content=response)
 
 
@@ -356,11 +365,13 @@ def update_organization_endpoint(
     organization_id: uuid.UUID,
     body: UpdateOrganizationRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
     command_name = "update_organization"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -369,6 +380,7 @@ def update_organization_endpoint(
         command_name=command_name,
         payload={"organization_id": str(organization_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -387,6 +399,7 @@ def update_organization_endpoint(
         religion_id=body.religion_id,
         typed_fields=body.typed_fields(),
         change_note=body.change_note,
+        plan=plan,
     )
     if result.changed:
         audit_content_write(
@@ -402,6 +415,7 @@ def update_organization_endpoint(
         )
     response = _organization_response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 
@@ -462,11 +476,13 @@ def religion_reference_options_endpoint(
 def create_religion_endpoint(
     body: CreateReligionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
     command_name = "create_religion"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -475,6 +491,7 @@ def create_religion_endpoint(
         command_name=command_name,
         payload=body.model_dump(mode="json"),
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -485,6 +502,7 @@ def create_religion_endpoint(
         name=body.name,
         summary=body.summary,
         pantheon_structure=body.pantheon_structure,
+        plan=plan,
     )
     audit_content_write(
         connection,
@@ -499,6 +517,7 @@ def create_religion_endpoint(
     )
     response = _religion_response(connection, result, changed=True)
     finish_campaign_idempotency(connection, idem, status_code=201, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=201, content=response)
 
 
@@ -518,11 +537,13 @@ def update_religion_endpoint(
     religion_id: uuid.UUID,
     body: UpdateReligionRequest,
     access: _Access,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
 ) -> Any:
     command_name = "update_religion"
+    require_authoring_decisions(connection, plan, access, world_capability=WORLD_CANON_EDIT)
     idem = start_campaign_idempotency(
         connection,
         actor_user_id=access.user_id,
@@ -531,6 +552,7 @@ def update_religion_endpoint(
         command_name=command_name,
         payload={"religion_id": str(religion_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -544,6 +566,7 @@ def update_religion_endpoint(
         summary=body.summary,
         pantheon_structure=body.pantheon_structure,
         change_note=body.change_note,
+        plan=plan,
     )
     if result.changed:
         audit_content_write(
@@ -559,6 +582,7 @@ def update_religion_endpoint(
         )
     response = _religion_response(connection, result, changed=result.changed)
     finish_campaign_idempotency(connection, idem, status_code=200, body=response)
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 

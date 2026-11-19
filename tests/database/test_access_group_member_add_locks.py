@@ -32,6 +32,7 @@ from tests.database.test_authoring_concurrency import _client_for
 from tests.database.test_authoring_scope_recovery_locks import (  # noqa: F401 - fixtures by name
     AFTER_CAMPAIGN_LOCK,
     CAMPAIGN_LOCK,
+    CAMPAIGN_NKU,
     RECOVERY_MEMBERSHIP,
     _location_count,
     _membership_of,
@@ -60,7 +61,7 @@ ADD_SECOND_LOCK = (
     r"|FROM campaign\.campaigns c JOIN .* FOR KEY SHARE OF c"
 )
 ADD_INSERT = r"INSERT INTO security\.access_group_memberships"
-ADD_ACCOUNT_LOCK = r"FROM security\.users u JOIN .* FOR UPDATE OF u"
+ADD_ACCOUNT_LOCK = r"FROM security\.users u JOIN .* FOR (UPDATE|KEY SHARE) OF u"
 
 
 # --- fixtures and helpers -------------------------------------------------------------------------
@@ -183,19 +184,24 @@ def test_an_author_waits_for_an_add_paused_before_its_second_lock(
 # --- 3. recovery, both orders ------------------------------------------------------------------------
 
 
-def test_adding_the_member_recovery_promotes_finishes_while_recovery_is_paused(
+def test_adding_the_member_recovery_promotes_queues_at_the_membership_and_both_commit(
     fx: Fixture, editor: uuid.UUID, stranded: uuid.UUID, group: uuid.UUID
 ) -> None:
-    """S3. Recovery holds the campaign `FOR NO KEY UPDATE` and stops before its membership
-    statement. The add must finish meanwhile (`KEY SHARE` does not wait for `NO KEY UPDATE`), and
-    then recovery commits. With the campaign `FOR UPDATE` the add waits at the campaign."""
+    """S3. Recovery holds the member's membership `FOR UPDATE` and the campaign `FOR NO KEY UPDATE`
+    and stops before its second membership statement (`after=CAMPAIGN_NKU`).
+
+    Characterization changed by R01 S5-B: before it, recovery held only the campaign here and the
+    add finished meanwhile. Now recovery took the membership first, so the add's `FOR NO KEY
+    UPDATE` on that membership queues behind it, observed as blocked by recovery's session. The add
+    holds only the group, which recovery does not want, so there is no cycle; released, recovery
+    commits and then the add (its campaign `FOR KEY SHARE` does not conflict with recovery's lock)."""
     member = _membership_of(fx, editor)
     with LockRace(fx.engine) as race:
-        pause = race.pause(thread_name="recovery", pattern=RECOVERY_MEMBERSHIP)
+        pause = race.pause(thread_name="recovery", pattern=RECOVERY_MEMBERSHIP, after=CAMPAIGN_NKU)
         recovery = race.start("recovery", _recover(fx, stranded, editor))
         pause.wait_reached(recovery)
         add = race.start("add", _add(fx, group, member))
-        race.wait_done(add, why="the add is waiting for recovery's campaign lock")
+        race.wait_blocked_by(pause, add)
         pause.release()
         race.join_all()
     assert add.error is None, add.error

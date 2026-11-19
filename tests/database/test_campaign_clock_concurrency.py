@@ -21,6 +21,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -42,6 +43,7 @@ class Fixture:
             actor_user_id=self.owner,
             world_time_id=self.years[year_index],
             expected_row_version=version,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def clock(self) -> tuple[uuid.UUID, int]:
@@ -93,6 +95,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 actor_user_id=owner,
                 calendar_id=calendar.calendar_id,
                 year=year,
+                plan=fixture_plan(setup, campaign_id),
             ).world_time_id
             for year in (1, 2, 3)
         ]
@@ -157,6 +160,7 @@ def test_two_causal_advances_with_one_expected_version_leave_one_detail_row(fx: 
                 expected_row_version=1,
                 cause_event_id=cause,
                 explanation=f"Explained {index}",
+                plan=fixture_plan(connection, fx.campaign_id),
             )
 
         return run

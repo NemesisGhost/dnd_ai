@@ -32,6 +32,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -56,6 +57,7 @@ class Fixture:
             actor_user_id=self.owner,
             knowledge_item_id=self.claim_id,
             knower_entity_id=self.knower_id,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def belief_id(self) -> uuid.UUID:
@@ -77,6 +79,7 @@ class Fixture:
             entity_knowledge_id=self.belief_id(),
             expected_last_event_id=token,
             changes=changes,
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def scalar(self, sql: str, **params: object):  # type: ignore[no-untyped-def]
@@ -92,6 +95,7 @@ def _publish(setup, campaign_id, owner, entity_id, version):  # type: ignore[no-
             entity_id=entity_id,
             actor_user_id=owner,
             expected_row_version=version,
+            plan=fixture_plan(setup, campaign_id),
         ).row_version
     return version
 
@@ -111,6 +115,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             summary=None,
             species_id=species,
             size_category="medium",
+            plan=fixture_plan(setup, campaign_id),
         )
         _publish(setup, campaign_id, owner, knower.entity_id, knower.row_version)
         claim = create_knowledge_item(
@@ -121,6 +126,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             knowledge_type="secret",
             truth_status="true",
             sensitivity="secret",
+            plan=fixture_plan(setup, campaign_id),
         )
         claim_version = _publish(setup, campaign_id, owner, claim.entity_id, claim.row_version)
         calendar = create_calendar(
@@ -139,6 +145,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             calendar_id=calendar.calendar_id,
             year=1,
+            plan=fixture_plan(setup, campaign_id),
         ).world_time_id
         advance_campaign_clock(
             setup,
@@ -146,6 +153,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             actor_user_id=owner,
             world_time_id=time_id,
             expected_row_version=0,
+            plan=fixture_plan(setup, campaign_id),
         )
     yield Fixture(
         postgres_engine,
@@ -203,6 +211,7 @@ def test_a_statement_edit_that_loses_to_the_first_learning_is_refused(fx: Fixtur
             knowledge_type="secret",
             truth_status="true",
             sensitivity="secret",
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         ENTITY_LOCK,
     )
@@ -226,6 +235,7 @@ def test_a_correction_that_loses_to_a_belief_change_refuses(fx: Fixture) -> None
             actor_user_id=fx.owner,
             event_id=learned,
             reason="Race",
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         BELIEF_ROW,
     )

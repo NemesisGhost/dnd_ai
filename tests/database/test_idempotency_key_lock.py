@@ -27,13 +27,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
-import dnd_ai.api.memberships as memberships_api
 from dnd_ai.api.idempotency import (
     IdempotencyKeyLockError,
     idempotency_key_lock_scope,
     lock_idempotency_key,
     reset_idempotency_key_lock,
 )
+from dnd_ai.domain.authorization import AuthorizationPlan
 from tests.database.test_campaign_owner_gate import (  # noqa: F401 - fixtures used by name
     Gate,
     client_factory,
@@ -334,19 +334,21 @@ def test_a_first_request_that_rolls_back_leaves_the_key_free_for_the_second(
 ) -> None:
     key = _fresh_key("rollback")
     urls = _urls(g)
-    real = memberships_api.record_change_log
+    # The end route is a pre-write plan since S5-E3 (its audit row is the declared step `audit_membership_ended`).
+    real = AuthorizationPlan.execute
     calls: list[int] = []
     guard = threading.Lock()
 
-    def fail_once(*args: Any, **kwargs: Any) -> Any:
-        with guard:
-            calls.append(1)
-            first = len(calls) == 1
-        if first:
-            raise RuntimeError("audit unavailable")
-        return real(*args, **kwargs)
+    def fail_once(self: AuthorizationPlan, connection: Any, step: Any, params: Any) -> Any:
+        if step.name == "audit_membership_ended":
+            with guard:
+                calls.append(1)
+                first = len(calls) == 1
+            if first:
+                raise RuntimeError("audit unavailable")
+        return real(self, connection, step, params)
 
-    monkeypatch.setattr(memberships_api, "record_change_log", fail_once)
+    monkeypatch.setattr(AuthorizationPlan, "execute", fail_once)
     hold = _hold_membership(postgres_engine, g.player)
     a, b = _race(
         client_factory, postgres_engine, g, hold, urls["end_player"], urls["end_player"], key

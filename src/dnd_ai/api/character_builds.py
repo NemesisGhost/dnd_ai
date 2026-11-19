@@ -27,6 +27,7 @@ from dnd_ai.commands.character_builds import (
     initialize_character_state,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.character_builds import (
     ABILITY_SCORE_MAX,
     ABILITY_SCORE_MIN,
@@ -57,10 +58,12 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .errors import NotFoundError
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["character-builds"])
 
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 _Edit = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
@@ -197,6 +200,7 @@ def _run(
     created: bool,
     schema_table: tuple[str, str],
     record_id: Any,
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -206,6 +210,7 @@ def _run(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -234,6 +239,7 @@ def _run(
     if result.event_id is not None:
         receipt["event_id"] = str(result.event_id)
     finish_campaign_idempotency(connection, idem, status_code=status_code, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=status_code, content=receipt)
 
 
@@ -242,6 +248,7 @@ def create_build_endpoint(
     character_id: uuid.UUID,
     body: CreateBuildRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -286,11 +293,13 @@ def create_build_endpoint(
             actor_user_id=access.user_id,
             character_id=character_id,
             build=build,
+            plan=plan,
         ),
         status_code=201,
         created=True,
         schema_table=("character", "character_builds"),
         record_id=lambda r: r.character_build_id,
+        plan=plan,
     )
 
 
@@ -300,6 +309,7 @@ def activate_build_endpoint(
     build_id: uuid.UUID,
     body: ActivateBuildRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -322,11 +332,13 @@ def activate_build_endpoint(
             character_id=character_id,
             character_build_id=build_id,
             expected_active_build_id=body.expected_active_build_id,
+            plan=plan,
         ),
         status_code=200,
         created=False,
         schema_table=("campaign", "character_state"),
         record_id=lambda r: r.character_id,
+        plan=plan,
     )
 
 
@@ -335,6 +347,7 @@ def initialize_state_endpoint(
     character_id: uuid.UUID,
     body: InitializeStateRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -353,9 +366,11 @@ def initialize_state_endpoint(
             character_id=character_id,
             maximum_hit_points=body.maximum_hit_points,
             current_hit_points=body.current_hit_points,
+            plan=plan,
         ),
         status_code=201,
         created=True,
         schema_table=("campaign", "character_state"),
         record_id=lambda r: r.character_id,
+        plan=plan,
     )

@@ -21,6 +21,7 @@ from dnd_ai.domain.authoring import (
     WorldArchivedError,
     WorldNotAuthorizedError,
 )
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.data_classification import audit_initial
 from dnd_ai.domain.world_authority import WORLD_MANAGE
 from dnd_ai.domain.world_time import (
@@ -181,11 +182,14 @@ def create_world_time(
     label: str | None = None,
     after_world_time_id: uuid.UUID | None = None,
     before_world_time_id: uuid.UUID | None = None,
+    plan: AuthorizationPlan,
 ) -> CreateWorldTimeResult:
     """Record a point in fictional time. Either a calendar date (`calendar_id`
     and `year`, optionally finer) or a narrative placement (`label` and
     `after_world_time_id`, optionally `before_world_time_id`)."""
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     clean_label = normalize_label(label, required=calendar_id is None)
     if calendar_id is not None:
         if year is None or after_world_time_id is not None or before_world_time_id is not None:

@@ -114,6 +114,7 @@ from dnd_ai.commands.encounters import (
     _start_encounter_impl,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.queries.encounter import EncounterAudience, get_encounter_view
 
 from ._authoring import finish_campaign_idempotency, start_campaign_idempotency
@@ -123,9 +124,12 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .items import _time_or_clock
+from .r01_route_plans import get_authorization_plan
 from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["encounters"])
+
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 # Encounter management is a canon-affecting mutation (docs/architecture/
 # DATABASE_MODEL.md §12.3) — see this module's docstring for why every
@@ -259,6 +263,7 @@ def start_encounter_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ENCOUNTER_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> EncounterResponse:
     result = _start_encounter_impl(
@@ -271,7 +276,9 @@ def start_encounter_endpoint(
         location_id=body.location_id,
         summary=body.summary,
     )
-    return EncounterResponse(encounter_id=result.encounter_id)
+    response = EncounterResponse(encounter_id=result.encounter_id)
+    plan.finalize(connection)  # R01: the last statement
+    return response
 
 
 @router.post(
@@ -289,6 +296,7 @@ def resolve_combat_turn_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ENCOUNTER_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
@@ -301,6 +309,7 @@ def resolve_combat_turn_endpoint(
         command_name="resolve_combat_turn",
         payload={"encounter_id": str(encounter_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -347,6 +356,7 @@ def resolve_combat_turn_endpoint(
     finish_campaign_idempotency(
         connection, idem, status_code=201, body=response.model_dump(mode="json")
     )
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 
@@ -364,6 +374,7 @@ def end_encounter_endpoint(
     access: Annotated[
         AccessContext, Depends(require_campaign_capability(_ENCOUNTER_MANAGE_CAPABILITY))
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
@@ -376,6 +387,7 @@ def end_encounter_endpoint(
         command_name="end_encounter",
         payload={"encounter_id": str(encounter_id), **body.model_dump(mode="json")},
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -407,6 +419,7 @@ def end_encounter_endpoint(
     finish_campaign_idempotency(
         connection, idem, status_code=200, body=response.model_dump(mode="json")
     )
+    plan.finalize(connection)  # R01: the last statement
     return response
 
 

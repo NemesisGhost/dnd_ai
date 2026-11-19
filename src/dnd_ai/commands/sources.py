@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.content_authoring import initial_fields
 from dnd_ai.domain.source_authoring import (
     SourceAlreadyAttachedError,
@@ -51,6 +52,7 @@ def create_source(
     source_type: str,
     title: str,
     reference: str | None = None,
+    plan: AuthorizationPlan,
 ) -> SourceResult:
     code = normalize_source_type(source_type)
     clean_title = normalize_title(title)
@@ -60,6 +62,7 @@ def create_source(
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=plan,
     )
     type_id = lookup_id(connection, "core", "source_types", "source_type_id", code)
     source_id = connection.execute(
@@ -95,12 +98,14 @@ def _lock_pair(
     actor_user_id: uuid.UUID,
     entity_id: uuid.UUID,
     source_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> uuid.UUID:
     scope = lock_authoring_scope(
         connection,
         campaign_id=campaign_id,
         actor_user_id=actor_user_id,
         world_capability=WORLD_CANON_EDIT,
+        plan=plan,
     )
     locked = lock_entities(connection, world_id=scope.world_id, share_ids=[entity_id])
     if entity_id not in locked:
@@ -125,6 +130,7 @@ def attach_source(
     actor_user_id: uuid.UUID,
     entity_id: uuid.UUID,
     source_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> SourceResult:
     world_id = _lock_pair(
         connection,
@@ -132,6 +138,7 @@ def attach_source(
         actor_user_id=actor_user_id,
         entity_id=entity_id,
         source_id=source_id,
+        plan=plan,
     )
     active = connection.execute(
         text("""
@@ -167,6 +174,7 @@ def detach_source(
     actor_user_id: uuid.UUID,
     entity_id: uuid.UUID,
     source_id: uuid.UUID,
+    plan: AuthorizationPlan,
 ) -> SourceResult:
     world_id = _lock_pair(
         connection,
@@ -174,6 +182,7 @@ def detach_source(
         actor_user_id=actor_user_id,
         entity_id=entity_id,
         source_id=source_id,
+        plan=plan,
     )
     link_id = connection.execute(
         text("""

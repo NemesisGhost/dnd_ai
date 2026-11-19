@@ -26,6 +26,7 @@ from dnd_ai.commands.campaign_clock import (
     correct_campaign_clock,
 )
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.campaign_clock import CLOCK_EXPLANATION_MAX_LENGTH
 from dnd_ai.queries.campaign_clock import list_clock_cause_choices, resolve_effective_clock
 
@@ -39,11 +40,13 @@ from .access import require_campaign_capability
 from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
+from .r01_route_plans import get_authorization_plan
 from .world_explorer import resolve_world_entity_visibility
 
 router = APIRouter(tags=["campaign-clock"])
 
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 _View = Annotated[AccessContext, Depends(require_campaign_capability("campaign.view"))]
@@ -127,6 +130,7 @@ def _run(
     correlation_id: str | None,
     payload: dict[str, Any],
     command: Any,
+    plan: AuthorizationPlan,
 ) -> Any:
     idem = start_campaign_idempotency(
         connection,
@@ -136,6 +140,7 @@ def _run(
         command_name=command_name,
         payload=payload,
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -162,6 +167,7 @@ def _run(
         "changed": True,
     }
     finish_campaign_idempotency(connection, idem, status_code=200, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=200, content=receipt)
 
 
@@ -169,6 +175,7 @@ def _run(
 def advance_clock_endpoint(
     body: AdvanceClockRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -176,6 +183,7 @@ def advance_clock_endpoint(
     return _run(
         command_name="advance_campaign_clock",
         access=access,
+        plan=plan,
         connection=connection,
         idempotency_key=idempotency_key,
         correlation_id=correlation_id,
@@ -186,6 +194,7 @@ def advance_clock_endpoint(
             connection,
             campaign_id=access.campaign_id,
             actor_user_id=access.user_id,
+            plan=plan,
             world_time_id=body.world_time_id,
             expected_row_version=body.expected_row_version,
             cause_event_id=body.cause_event_id,
@@ -203,6 +212,7 @@ def advance_clock_endpoint(
 def correct_clock_endpoint(
     body: CorrectClockRequest,
     access: _Edit,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -210,6 +220,7 @@ def correct_clock_endpoint(
     return _run(
         command_name="correct_campaign_clock",
         access=access,
+        plan=plan,
         connection=connection,
         idempotency_key=idempotency_key,
         correlation_id=correlation_id,
@@ -218,6 +229,7 @@ def correct_clock_endpoint(
             connection,
             campaign_id=access.campaign_id,
             actor_user_id=access.user_id,
+            plan=plan,
             world_time_id=body.world_time_id,
             expected_row_version=body.expected_row_version,
             corrects_event_id=body.corrects_event_id,

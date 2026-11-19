@@ -27,6 +27,7 @@ from sqlalchemy import Connection
 from dnd_ai.commands.world_time import create_calendar, create_world_time
 from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authoring import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.world_authority import WORLD_MANAGE, WORLD_VIEW, WorldAuthority
 from dnd_ai.domain.world_time import (
     DAY_COUNT_MAX,
@@ -53,11 +54,13 @@ from .audit import record_change_log
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
 from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, build_page, decode_typed_cursor
+from .r01_route_plans import get_authorization_plan
 from .world_access import require_world_capability
 
 router = APIRouter(tags=["world-time"])
 
 _Conn = Annotated[Connection, Depends(get_connection)]
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 _Key = Annotated[str | None, Depends(get_idempotency_key)]
 _Corr = Annotated[str | None, Depends(get_request_correlation_id)]
 _CampaignAccess = Annotated[AccessContext, Depends(require_campaign_capability("canon.edit"))]
@@ -214,6 +217,7 @@ def list_world_times_endpoint(
 def create_world_time_endpoint(
     body: CreateWorldTimeRequest,
     access: _CampaignAccess,
+    plan: _Plan,
     connection: _Conn,
     idempotency_key: _Key,
     correlation_id: _Corr,
@@ -227,6 +231,7 @@ def create_world_time_endpoint(
         command_name=command_name,
         payload=body.model_dump(mode="json"),
         correlation_id=correlation_id,
+        plan=plan,
     )
     if idem.replay is not None:
         return idem.replay
@@ -244,6 +249,7 @@ def create_world_time_endpoint(
         label=body.label,
         after_world_time_id=body.after_world_time_id,
         before_world_time_id=body.before_world_time_id,
+        plan=plan,
     )
     record_change_log(
         connection,
@@ -261,4 +267,5 @@ def create_world_time_endpoint(
     )
     receipt = {"world_time_id": str(result.world_time_id), "created": True, "changed": True}
     finish_campaign_idempotency(connection, idem, status_code=201, body=receipt)
+    plan.finalize(connection)  # R01: the last statement
     return JSONResponse(status_code=201, content=receipt)

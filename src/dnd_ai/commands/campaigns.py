@@ -223,6 +223,7 @@ docstring for the full mechanism and concurrency argument."""
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 from sqlalchemy import Connection, text
 
@@ -691,6 +692,32 @@ def _lock_campaign_for_manage(
         """),
         {"c": campaign_id},
     ).one_or_none()
+    return _authorize_locked_campaign(
+        connection, row, campaign_id=campaign_id, actor_user_id=actor_user_id
+    )
+
+
+def read_manageable_campaign(
+    connection: Connection, *, campaign_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> _LockedCampaign:
+    """The same reads and checks as `_lock_campaign_for_manage`, for a caller that already holds the
+    campaign row `FOR UPDATE` (the R01 lifecycle plans take it through `plan.lock`)."""
+    row = connection.execute(
+        text("""
+            SELECT c.name, c.description, c.row_version, c.lifecycle_status_id, c.timeline_id
+            FROM campaign.campaigns c
+            WHERE c.campaign_id = :c
+        """),
+        {"c": campaign_id},
+    ).one_or_none()
+    return _authorize_locked_campaign(
+        connection, row, campaign_id=campaign_id, actor_user_id=actor_user_id
+    )
+
+
+def _authorize_locked_campaign(
+    connection: Connection, row: Any, *, campaign_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> _LockedCampaign:
     if row is None:
         raise CampaignNotAuthorizedError(f"campaign {campaign_id} does not exist")
     access = resolve_access_context(connection, user_id=actor_user_id, campaign_id=campaign_id)

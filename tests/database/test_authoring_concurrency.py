@@ -43,6 +43,7 @@ from tests.builders import (
     make_world_creator,
 )
 from tests.factories import make_external_identity, make_location, make_user, oidc_principal
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -658,6 +659,7 @@ def test_two_approvals_with_the_same_expected_version_one_wins_one_is_stale(
         entity_id=place,
         actor_user_id=committed_owner,
         expected_row_version=version,
+        plan=fixture_plan(first, campaign),
     )
     out: dict[str, object] = {}
 
@@ -670,6 +672,7 @@ def test_two_approvals_with_the_same_expected_version_one_wins_one_is_stale(
                     entity_id=place,
                     actor_user_id=committed_owner,
                     expected_row_version=version,
+                    plan=fixture_plan(connection, campaign),
                 )
                 out["result"] = "approved"
             except StaleWriteError:

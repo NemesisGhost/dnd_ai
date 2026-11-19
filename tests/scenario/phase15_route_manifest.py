@@ -91,6 +91,10 @@ _MEMBER_READS = frozenset(
         f"{CAMPAIGN}/characters/{{character_id}}",
         f"{CAMPAIGN}/characters/{{character_id}}/inventory",
         f"{CAMPAIGN}/characters/{{character_id}}/parties",
+        # P03-A A5a: the GM reads of the campaign player profile. The route filter is
+        # `campaign.view`; the read rule is in the query, and a non-reader gets the generic 404.
+        f"{CAMPAIGN}/characters/{{character_id}}/player-profile",
+        f"{CAMPAIGN}/characters/{{character_id}}/player-profile/versions/{{profile_row_version}}",
         f"{CAMPAIGN}/characters/{{character_id}}/public-profile",
         f"{CAMPAIGN}/characters/{{character_id}}/public-profile/releases/{{version_number}}",
         f"{CAMPAIGN}/characters/{{character_id}}/relationships",

@@ -23,6 +23,7 @@ from typing import Any
 from sqlalchemy import Connection, text
 
 from dnd_ai.domain.authoring import AuthoringValidationError, StaleWriteError
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.domain.data_classification import audit_change
 from dnd_ai.domain.dungeon_authoring import (
     STATE_KINDS,
@@ -213,6 +214,7 @@ def set_dungeon_state(
     expected_last_event_id: uuid.UUID | None,
     world_time_id: uuid.UUID | None = None,
     note: str | None = None,
+    plan: AuthorizationPlan,
 ) -> DungeonStateResult:
     if kind not in STATE_KINDS:
         raise StateTargetInvalidError(f"unknown state kind {kind!r}")
@@ -221,7 +223,9 @@ def set_dungeon_state(
     if unknown or not changes:
         raise StateTargetInvalidError(f"{kind} state has no field(s) {sorted(unknown) or 'given'}")
     clean = {name: _validate(spec.fields[name], name, value) for name, value in changes.items()}
-    scope = lock_operation_scope(connection, campaign_id=campaign_id, actor_user_id=actor_user_id)
+    scope = lock_operation_scope(
+        connection, campaign_id=campaign_id, actor_user_id=actor_user_id, plan=plan
+    )
     area_id = _lock_published_areas(connection, scope, kind, target_id, dungeon_area_id)
     values: dict[str, Any] = {}
     for name, value in clean.items():

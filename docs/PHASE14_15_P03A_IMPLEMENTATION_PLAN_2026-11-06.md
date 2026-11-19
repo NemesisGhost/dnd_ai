@@ -1,11 +1,12 @@
 # P03-A implementation plan: public profiles, revelation and audience-safe character reads
 
-**Status (2026-11-10):** Approved planning document.
+**Status (reconciled 2026-11-11 at `d51e38a`):** Approved plan with implementation through A4. Dated implementation and review entries below preserve their original evidence.
 
-- **Implemented and independently reviewed:** A0, A1, P0, P1, A2a, A2a-R, A2b-1, A2b-2, P2, P3, A3a and A3b. The A3b verification closeout is complete (PASS WITH NONBLOCKING FINDINGS).
-- **CI and PR:** CI run 42755362414 passed all ten jobs at `bfa64f2`, the head of draft PR #68, which is open and unmerged.
-- **Decisions:** D6 was approved on 2026-11-10, so every owner decision this plan has raised is now approved.
-- **Next:** A4 is designed (§12) and not started; it is for Sonnet as A4a, then A4b. A5 to A7 are outlined in §4 only.
+- **Implemented and reviewed:** A0, A1, P0, P1, A2a, A2a-R, A2b-1, A2b-2, P2, P3, A3a, A3b and A4a/b. A4 production correctness was accepted; its HTTP-race and disclosure-sweep gaps are resolved. The A3 harness closeout records 7,550/7,550 tests at `1cb3b2b`, with retained nonblocking findings; see the 2026-11-11 closeout below.
+- **CI and PR:** historical run 42755362414 passed at `bfa64f2`; later closeout entries refer to PR evidence. Current-head CI/PR/merge status was not queried for this reconciliation and is not established by the earlier pass.
+- **Merged checkpoint (recorded 2026-11-11):** PR #68 (head `d51e38a`) merged into `main` as `b0910c48a8a54e8b9b4d2283ed30d371d704f80c` at 2026-11-11 22:38:32 UTC. The post-merge `main` push CI run 43113470050 completed with conclusion success on `b0910c4`; both were queried with `gh`. This is a merge checkpoint for the work through A4, not Phase 15 completion.
+- **Decisions:** D1–D12 are approved (D6 on 2026-11-10). A5's D13–D18 were approved by the owner on 2026-11-11 (see "Decisions still needed"; the rules are in [the A5 design](PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md) §4). No owner decision is open for A5.
+- **Remaining:** A5a (storage and GM reads) is **implemented and passed independent re-review (current-head CI pending)**; A5b (provenance and restriction) **passed independent review with nonblocking findings (current-head CI pending)**; A5c (the GM-selected copy) is **implemented and awaiting independent review** (A5 design §17). A5 is **designed and finalized (2026-11-11)**: [the A5 design](PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md), slices A5a–A5c in order. A5 is infrastructure: it has no production profile writer until P03-B. A6 and A7 are outlined in §4 and not started. Fix DEF-019 before A6; A5 is optional for entry to A6. A7's audience preview is optional. See [BACKLOG](BACKLOG.md) for the consolidated work and acceptance gates.
 - **History:** the plan was committed on its own as the design commit (`3b3d637`) before A2a's code. The dated entries below record each step.
 
 *Superseded status line (2026-11-08), for the record:* A0, A1, P0, P1, A2a and A2a-R are implemented and independently reviewed (A2a and A2a-R: PASS WITH NONBLOCKING FINDINGS; handoff `523ae5c`). D7 and D8 are approved (recorded 2026-11-07). A2b-1 and A2b-2 are implemented and reviewed (handoff `a9ec4c4`). A3a (storage, create/revoke/list, lifecycle hooks) is implemented locally and awaits independent review (see the A3a implementation record); A3b is not started. A3 is designed and finalized (§10; D4, D5 and D9–D12 approved, §10.15, including the D9-a candidate-statement cutoff approved 2026-11-08) and not implemented. P2, the shared idempotency key lock, is implemented at `d36d565` and independently reviewed (PASS WITH NONBLOCKING FINDINGS; record below §10). A3a now needs P3, committing the request transaction before the response (DEF-022, §11), which is designed and not implemented.
@@ -19,7 +20,7 @@
 - **D7-a to D7-f**, the points D7 left open, were approved by the owner in conversation and recorded on 2026-11-07 (§9.10).
 - **D4-C, D5-c, D9, D10-a, D11-a and D12-a** were approved by the owner in conversation and recorded on 2026-11-07 (§10.15).
 - **D9-a's candidate-statement cutoff** (§10.4) was approved by the owner on 2026-11-08.
-- **D6** was approved by the owner on 2026-11-10 (see "Decisions still needed"); A4's design follows it (§12). Until then it was the only open decision, and it blocked A4 only. No owner decision is open now.
+- **D6** was approved by the owner on 2026-11-10 (see "Decisions still needed"); A4's design follows it (§12). Until then it was the only open decision, and it blocked A4 only. No owner decision was open after it until the A5 design proposed D13–D18 on 2026-11-11; the owner approved them the same day.
 - **Revision of 2026-11-07, after an independent CHANGES REQUIRED review.** The review text is not in the repository; this revision follows the owner's summary of it.
   - The recovery deadlock is now a prerequisite commit, P0 (§6).
   - The draft-read and deny policy is now proposed decision D8.
@@ -159,11 +160,15 @@ Every code claim was checked by reading source at the stated commit. No applicat
 
 ## Recommendation
 
-**Next (2026-11-10): A4a, then A4b (§12, for Sonnet), then one independent review covering both.** D6 is approved and no owner decision is open.
+**Next (updated 2026-11-11 after D13–D18 were approved): A5a, A5b and A5c in order, each independently reviewed (A5 design §13). Independently, resolve DEF-019 before A6, then A6 and A7 under §4.** A4a/b and their review corrections are implemented. D1–D18 are settled. This does not settle the separate DEF-016 or other backlog policy questions.
 
-- **A4a** adds migration 146, the D6 draft controls, the release's identity snapshot, token and retry key, and the GM read additions. No audience response changes.
-- **A4b** adds the public-profile tier, the `public_profile` section, `sections` and `can_open_character`.
-- **Not started:** A5 to A7. DEF-019 should still be fixed before A6.
+*Previous recommendation (2026-11-11, after the first A5 design and before approval):* the owner records D13–D18, then A5a–A5c, and independently DEF-019 before A6.
+
+*Previous recommendation (reconciled 2026-11-11, before the A5 design):* resolve DEF-019 before A6, then deliver the remaining A5–A7 scope under §4.
+
+- **A4a (done)** added migration 146, the D6 draft controls, the release's identity snapshot, token and retry key, and the GM read additions.
+- **A4b (done)** added the public-profile tier, the `public_profile` section, `sections` and `can_open_character`.
+- **Not started:** A6 and A7. A5a passed independent re-review and A5b passed review (CI pending); A5c is implemented and awaiting review. DEF-019 should still be fixed before A6, and now also covers A5c's copy route.
 
 *Previous recommendation (2026-11-08; done: P3, A3a and A3b are implemented and reviewed):*
 
@@ -365,7 +370,7 @@ The second caller, AI NPC context ([domain/context_assembly.py:362-396](../src/d
 | **A2b-2** (designed, revised after review; for Sonnet) | The copy command and route, `legacy_copy` in the GM read, the copy audit row (§9.4, §9.6) | A2b-1 | §9.8–§9.9: copy rules, recopy, excerpt regressions through the real copy, disclosure sweep, copy races |
 | **A3** (designed in §10; split into A3a and A3b, §10.10) | Revelations: audience kinds, snapshot, create/revoke, membership-end and group-deactivate hooks, `AccessContext` source, discovery bundle | A2 (a revelation requires an existing release, D9-d); D4-C, D5-c, D9, D10 (approved) | T82 audiences, including the late joiner; T6 independent-grant survival; whole vs operation deny; cross-surface matrix from investigation D6.4 (lists, counts, pagination, relationships, organizations, roster, events, encounters, Knowledge, preview), with **response-body ID assertions**; bootstrap, inventory and sheet unchanged |
 | **A4** (designed 2026-11-10 in §12; for Sonnet as A4a and A4b) | Migration 146 (D6 draft controls, the release's identity snapshot, the retry key); the public-profile tier and its DTO; the `public_profile` section for summary and full readers; `sections`; `can_open_character` | A3b (done); D6 (approved 2026-11-10), D11, D12 | §12.9, §12.11: browse/detail agreement; the public tier carries no species, size or mechanics unless released; revocation takes effect on the next request |
-| **A5** | OD-18 player-profile storage plus GM read (editing is P03-B, T85); publishing a selected field via A2 provenance | A2 | Readable only by A's GMs; nothing in B; no write path for players yet |
+| **A5** (designed 2026-11-11 in [the A5 design](PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md); finalized after D13–D18 approval; for Sonnet as A5a–A5c) | OD-18 player-profile storage plus GM read (editing is P03-B, T85); GM-selected copy of an eligible field via A2 provenance. Infrastructure: no production profile writer until P03-B. Migrations 147 (storage) and 148 (provenance) | A2; D13–D18 (approved 2026-11-11) | Readable only by A's GMs; nothing in B; no write path for players yet. Full criteria: design §11 and §13 |
 | **A6** | Portal: reveal/delegation management, draft and release editor, revelation list and revoke, public character view, effective-access sources | A4 (A5 optional) | jsdom; type contract; non-disclosing errors; real-browser checks recorded as pending |
 | **A7** | Character-profile audience preview (investigation D6.3, optional), docs reconciliation, corrected Sella acceptance (investigation D6.8) | A4, A6 | Manual T82/D6.8 on namespaced fixtures, not the owner's campaign |
 
@@ -707,7 +712,7 @@ Change the campaign statement in `lock_authoring_scope` from `FOR SHARE` to **`F
 
 | Protection | Mechanism | After P0 |
 |---|---|---|
-| Campaign archive, reactivate and settings edit serialize with an authoring write | `archive_campaign`, `reactivate_campaign` and `update_campaign` all take the campaign row `FOR UPDATE` first, through `_lock_campaign_for_manage` ([campaigns.py:682](../src/dnd_ai/commands/campaigns.py#L682)). These are the only application `UPDATE`s of `campaign.campaigns` (`campaigns.py:723`, `:801`); migration 024's `UPDATE`s are a one-time backfill | `FOR UPDATE` conflicts with `KEY SHARE`, so this is preserved. In READ COMMITTED, an author who waited reads the archived status after its lock and fails with `CampaignArchivedError` |
+| Campaign archive, reactivate and settings edit serialize with an authoring write | `archive_campaign`, `reactivate_campaign` and `update_campaign` all take the campaign row `FOR UPDATE` first, through `_lock_campaign_for_manage` ([campaigns.py:682](../src/dnd_ai/commands/campaigns.py#L682)). These are the only application `UPDATE`s of `campaign.campaigns` (`campaigns.py:723`, `:801`); migration 024's `UPDATE`s are a one-time backfill | `FOR UPDATE` conflicts with `KEY SHARE`, so this is preserved. In READ COMMITTED, an author who waited reads the archived status after its lock and fails with `CampaignArchivedError`. *R01 S5-E1 (2026-11-14): the three routes now run as keyed pre-write plans (`dnd_ai.commands.campaign_lifecycle_plans`) and take the actor's role rows, membership and account `FOR SHARE` before the campaign `FOR UPDATE` (and the world and timeline `FOR SHARE` before those, for reactivation); the direct commands keep the order described here.* |
 | Role loss (`revoke_membership_role`, `change_membership_role`) and membership end (`end_campaign_membership`) serialize with an authoring write | The role rows and membership `FOR SHARE`, taken before the campaign row; the deferred retention trigger takes the campaign `FOR UPDATE` at commit | Unchanged. The helper's comment about why the membership comes before the campaign still holds, because `KEY SHARE` still conflicts with the trigger's `FOR UPDATE` |
 | Account deactivation | The account `FOR SHARE` | Unchanged |
 | World archive, end of a world role, world ownership transfer and world recovery | The world `FOR SHARE` | Unchanged |
@@ -4014,6 +4019,15 @@ Each is one commit on `phase15/completion`, green on its own. One independent re
   - **D12-b:** add both as deny-only codes in A3a.
 
   The whole-character `campaign.view` deny is creatable (A2a-R), and it covers the cases the denies must cover.
+- **D13–D18: A5 player-profile decisions. Approved by the owner (recorded 2026-11-11).** Full rules: [the A5 design](PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md) §4.1–§4.6. The options as first proposed (design at `d04ca57`) are kept in that design's §4.8.
+  - **D13, fields.** The eleven Phase 16A fields: `portrayal_guidance`, `personality`, `ideals`, `bonds`, `flaws`, `goals`, `fears`, `loyalties`, `boundaries`, `speech_patterns`, `profile_notes`.
+    - `boundaries` and `profile_notes` are excluded from every structured publication or copy operation. Manual transcription by an authorized reader is not claimed to be prevented.
+    - `profile_notes` is shared with the campaign's authorized GMs and the character's eligible controllers. Its future UI label is "Notes for the GM and controllers". It is not a personal notebook. Phase 16B/16C private notes need separate storage and authorization, with no automatic GM access.
+  - **D14, selection.** The GM selects eligible fields for copying into the public draft. Copying publishes nothing; release and revelation stay separate, deliberate steps. No player publication approval is implied. A player opt-in is a possible later extension, not approved scope.
+  - **D15, reads.** A5's GM read requires effective character-scoped `canon.edit`, with the approved whole-character and operation-specific deny rules. Reveal authority alone grants no player-profile access. OD-18's future independent read path for eligible primary and co-controllers is preserved, and `canon.edit` is not a prerequisite for it.
+  - **D16, copied text.** Per-field provenance and restriction watermarks apply. Copied content stays restricted until a release covers its current content. The restriction holds through edits, clearing and recopying, and provenance relabelling cannot bypass it.
+  - **D17, classification.** `CHARACTER_VISIBLE`, with explicit authorization rules. The classification grants no permission by itself. Profile content never reaches audit rows, receipts, logs or unrelated responses.
+  - **D18, population before P03-B.** No production profile writer. The application roles may read the profile tables and cannot write them. Tests populate valid versions through an identified fixture helper. The public-draft copy and release commands stay within their own authorized scope. P03-B delivers the write privileges, the commands, attribution, versioning writes and controller authorization. A5 is infrastructure, not delivered profile-authoring functionality.
 
 ---
 

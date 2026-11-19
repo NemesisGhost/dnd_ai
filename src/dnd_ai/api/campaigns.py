@@ -66,7 +66,6 @@ from in the first place.
 """
 
 import uuid
-from collections.abc import Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
@@ -74,14 +73,20 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Connection
 
-from dnd_ai.commands.campaigns import (
-    CampaignMutationResult,
-    archive_campaign,
-    create_campaign,
-    reactivate_campaign,
-    update_campaign,
+from dnd_ai.commands._pre_write_steps import receipt_params
+from dnd_ai.commands.campaign_lifecycle_plans import (
+    LIFECYCLE_RECEIPT,
+    PreparedLifecycle,
+    prepare_archive_campaign,
+    prepare_reactivate_campaign,
+    prepare_update_campaign,
+    write_archive_campaign,
+    write_reactivate_campaign,
+    write_update_campaign,
 )
+from dnd_ai.commands.campaigns import create_campaign
 from dnd_ai.domain.access import AccessContext
+from dnd_ai.domain.authorization import AuthorizationPlan
 from dnd_ai.queries.campaign_settings import get_campaign_settings, list_archived_campaigns
 
 from .access import require_campaign_capability
@@ -95,11 +100,12 @@ from .idempotency import (
     begin_campaign_creation_request,
     begin_idempotent_request,
     complete_campaign_creation_request,
-    complete_idempotent_request,
 )
 from .pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, build_page, decode_typed_cursor
+from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["campaigns"])
+_Plan = Annotated[AuthorizationPlan, Depends(get_authorization_plan)]
 
 _CREATE_CAMPAIGN_COMMAND_NAME = "create_campaign"
 _CREATED_CHANGE_ACTION = "created"
@@ -286,145 +292,158 @@ def get_campaign_settings_endpoint(
     }
 
 
-def _record_campaign_change(
-    connection: Connection,
+def _begin_lifecycle_request(
     *,
-    result: CampaignMutationResult,
-    action: str,
-    command_name: str,
-    access: AccessContext,
-    correlation_id: str | None,
-    reason: str | None,
-) -> None:
-    record_change_log(
-        connection,
-        change_action_code=action,
-        schema_name="campaign",
-        table_name="campaigns",
-        record_id=result.campaign_id,
-        entity_id=None,
-        world_id=result.world_id,
-        actor_user_id=access.user_id,
-        correlation_id=correlation_id,
-        command_name=command_name,
-        event_id=None,
-        previous_status=result.previous_lifecycle_status,
-        new_status=result.lifecycle_status if result.previous_lifecycle_status else None,
-        changed_fields=result.changed_fields or None,
-        reason=reason,
-    )
-
-
-def _campaign_command(
-    *,
-    command_name: str,
-    action: str | None,
-    access: AccessContext,
+    plan: AuthorizationPlan,
     connection: Connection,
+    access: AccessContext,
     idempotency_key: str | None,
     correlation_id: str | None,
+    command_name: str,
     payload: dict[str, Any],
-    run: Callable[[], CampaignMutationResult],
-    reason: str | None = None,
-    include_status: bool = True,
-) -> Any:
-    reservation_id: uuid.UUID | None = None
-    if idempotency_key is not None:
-        outcome = begin_idempotent_request(
-            connection,
-            actor_user_id=access.user_id,
-            campaign_id=access.campaign_id,
-            idempotency_key=idempotency_key,
-            command_name=command_name,
-            payload=payload,
-            correlation_id=correlation_id,
+) -> tuple[JSONResponse | None, uuid.UUID | None]:
+    """The reservation phase shared by the three keyed pre-write lifecycle routes (R01 S5-E1): defer the
+    reservation's campaign FK, reserve, bind the server's outcome. Returns `(replay response, None)` for a
+    replay (already finalized: a replay is judged before the receipt leaves, R-D4), else `(None, the
+    reservation id, or None when unkeyed)`."""
+    if idempotency_key is None:
+        plan.bind_unkeyed(connection)
+        return None, None
+    plan.defer_reservation_campaign_fk(connection)
+    outcome = begin_idempotent_request(
+        connection,
+        actor_user_id=access.user_id,
+        campaign_id=access.campaign_id,
+        idempotency_key=idempotency_key,
+        command_name=command_name,
+        payload=payload,
+        correlation_id=correlation_id,
+    )
+    plan.bind_reservation(connection, outcome)
+    if isinstance(outcome, IdempotentReplay):
+        plan.finalize(connection)
+        return (
+            JSONResponse(status_code=outcome.response_status_code, content=outcome.response_body),
+            None,
         )
-        if isinstance(outcome, IdempotentReplay):
-            return JSONResponse(
-                status_code=outcome.response_status_code, content=outcome.response_body
-            )
-        reservation_id = outcome.idempotent_request_id
+    return None, outcome.idempotent_request_id
 
-    result = run()
-    if result.changed and action is not None:
-        _record_campaign_change(
-            connection,
-            result=result,
-            action=action,
-            command_name=command_name,
-            access=access,
-            correlation_id=correlation_id,
-            reason=reason,
-        )
+
+def _lifecycle_response(
+    campaign_id: uuid.UUID, prepared: PreparedLifecycle, *, include_status: bool
+) -> dict[str, Any]:
     response: dict[str, Any] = {
-        "campaign_id": str(result.campaign_id),
-        "row_version": result.row_version,
+        "campaign_id": str(campaign_id),
+        "row_version": prepared.row_version,
     }
     if include_status:
-        response["lifecycle_status"] = result.lifecycle_status
-    if reservation_id is not None:
-        complete_idempotent_request(
-            connection,
-            idempotent_request_id=reservation_id,
-            response_status_code=200,
-            response_body=response,
-        )
+        response["lifecycle_status"] = prepared.lifecycle_status
     return response
+
+
+def _complete_receipt(
+    connection: Connection,
+    plan: AuthorizationPlan,
+    reservation_id: uuid.UUID | None,
+    response: dict[str, Any],
+) -> None:
+    if reservation_id is not None:
+        plan.execute(connection, LIFECYCLE_RECEIPT, receipt_params(reservation_id, 200, response))
 
 
 @router.post("/campaigns/{campaign_id}/update")
 def update_campaign_endpoint(
     body: UpdateCampaignRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability("access.manage"))],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> Any:
-    return _campaign_command(
-        command_name="update_campaign",
-        action="updated",
-        access=access,
+    """A keyed-optional pre-write route (R01 S5-E1; `dnd_ai.commands.campaign_lifecycle_plans`)."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
         connection=connection,
+        access=access,
         idempotency_key=idempotency_key,
         correlation_id=correlation_id,
+        command_name="update_campaign",
         payload={"campaign_id": str(access.campaign_id), **body.model_dump(mode="json")},
-        include_status=False,
-        run=lambda: update_campaign(
-            connection,
-            campaign_id=access.campaign_id,
-            actor_user_id=access.user_id,
-            expected_row_version=body.expected_row_version,
-            name=body.name,
-            description=body.description,
-        ),
     )
+    if replay is not None:
+        return replay
+    prepared = prepare_update_campaign(
+        connection,
+        plan,
+        campaign_id=access.campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        expected_row_version=body.expected_row_version,
+        name=body.name,
+        description=body.description,
+        reservation_id=reservation_id,
+    )
+    plan.finalize(connection)
+    write_update_campaign(
+        connection,
+        plan,
+        prepared,
+        campaign_id=access.campaign_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        name=body.name,
+        description=body.description,
+    )
+    response = _lifecycle_response(access.campaign_id, prepared, include_status=False)
+    _complete_receipt(connection, plan, reservation_id, response)
+    return response
 
 
 @router.post("/campaigns/{campaign_id}/archive")
 def archive_campaign_endpoint(
     body: ArchiveCampaignRequest,
     access: Annotated[AccessContext, Depends(require_campaign_capability("access.manage"))],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> Any:
-    return _campaign_command(
-        command_name="archive_campaign",
-        action="archived",
-        access=access,
+    """A keyed-optional pre-write route. It changes the lifecycle the route requirement reads, so
+    `finalize` runs before the `UPDATE` and judges the approved pre-command state."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
         connection=connection,
+        access=access,
         idempotency_key=idempotency_key,
         correlation_id=correlation_id,
+        command_name="archive_campaign",
         payload={"campaign_id": str(access.campaign_id), **body.model_dump(mode="json")},
-        reason=body.reason.strip() if body.reason and body.reason.strip() else None,
-        run=lambda: archive_campaign(
-            connection,
-            campaign_id=access.campaign_id,
-            actor_user_id=access.user_id,
-            expected_row_version=body.expected_row_version,
-            reason=body.reason,
-        ),
     )
+    if replay is not None:
+        return replay
+    prepared = prepare_archive_campaign(
+        connection,
+        plan,
+        campaign_id=access.campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        expected_row_version=body.expected_row_version,
+        reason=body.reason,
+        reservation_id=reservation_id,
+    )
+    plan.finalize(connection)
+    write_archive_campaign(
+        connection,
+        plan,
+        prepared,
+        campaign_id=access.campaign_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+        reason=body.reason,
+    )
+    response = _lifecycle_response(access.campaign_id, prepared, include_status=True)
+    _complete_receipt(connection, plan, reservation_id, response)
+    return response
 
 
 @router.post("/campaigns/{campaign_id}/reactivate")
@@ -434,22 +453,42 @@ def reactivate_campaign_endpoint(
         AccessContext,
         Depends(require_campaign_capability("access.manage", allow_archived_campaign=True)),
     ],
+    plan: _Plan,
     connection: Annotated[Connection, Depends(get_connection)],
     idempotency_key: Annotated[str | None, Depends(get_idempotency_key)],
     correlation_id: Annotated[str | None, Depends(get_request_correlation_id)],
 ) -> Any:
-    return _campaign_command(
-        command_name="reactivate_campaign",
-        action="restored",
-        access=access,
+    """A keyed-optional pre-write route that may address an archived campaign. Its COMMIT-time retention
+    check re-acquires the campaign `FOR UPDATE` this request holds."""
+    replay, reservation_id = _begin_lifecycle_request(
+        plan=plan,
         connection=connection,
+        access=access,
         idempotency_key=idempotency_key,
         correlation_id=correlation_id,
+        command_name="reactivate_campaign",
         payload={"campaign_id": str(access.campaign_id), **body.model_dump(mode="json")},
-        run=lambda: reactivate_campaign(
-            connection,
-            campaign_id=access.campaign_id,
-            actor_user_id=access.user_id,
-            expected_row_version=body.expected_row_version,
-        ),
     )
+    if replay is not None:
+        return replay
+    prepared = prepare_reactivate_campaign(
+        connection,
+        plan,
+        campaign_id=access.campaign_id,
+        actor_user_id=access.user_id,
+        actor_membership_id=access.campaign_membership_id,
+        expected_row_version=body.expected_row_version,
+        reservation_id=reservation_id,
+    )
+    plan.finalize(connection)
+    write_reactivate_campaign(
+        connection,
+        plan,
+        prepared,
+        campaign_id=access.campaign_id,
+        actor_user_id=access.user_id,
+        correlation_id=correlation_id,
+    )
+    response = _lifecycle_response(access.campaign_id, prepared, include_status=True)
+    _complete_receipt(connection, plan, reservation_id, response)
+    return response

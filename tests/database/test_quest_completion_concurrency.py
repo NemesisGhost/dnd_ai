@@ -21,6 +21,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_user
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -54,6 +55,7 @@ class Fixture:
             objective_id=self.objectives[objective],
             depends_on_objective_id=self.objectives[on],
             dependency_type="prerequisite",
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def outcome(self, connection, code: str, version: int):  # type: ignore[no-untyped-def]
@@ -67,6 +69,7 @@ class Fixture:
             name=code,
             description=None,
             outcome_category="neutral",
+            plan=fixture_plan(connection, self.campaign_id),
         )
 
     def edges(self) -> int:
@@ -88,7 +91,12 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
         world = make_authored_world(setup, owner_user_id=owner, name="Quest Race World")
         campaign_id = make_authored_campaign(setup, world, name="Quest Race Campaign")
         quest = create_quest(
-            setup, campaign_id=campaign_id, actor_user_id=owner, name="Race", summary=None
+            setup,
+            campaign_id=campaign_id,
+            actor_user_id=owner,
+            name="Race",
+            summary=None,
+            plan=fixture_plan(setup, campaign_id),
         )
         version = quest.row_version
         stage = add_quest_stage(
@@ -100,6 +108,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
             name="Stage",
             description=None,
             stage_type="sequential",
+            plan=fixture_plan(setup, campaign_id),
         )
         version = stage.row_version
         objectives = []
@@ -119,6 +128,7 @@ def fx(postgres_engine: Engine) -> Iterator[Fixture]:
                 visibility_policy="visible",
                 quantity_required=None,
                 target_entity_id=None,
+                plan=fixture_plan(setup, campaign_id),
             )
             version = result.row_version
             objectives.append(result.record_id)

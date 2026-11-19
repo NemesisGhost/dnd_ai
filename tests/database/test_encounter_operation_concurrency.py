@@ -19,6 +19,7 @@ from tests.builders import make_authored_campaign, make_authored_world
 from tests.database.test_authoring_concurrency import _purge_user_worlds
 from tests.database.test_content_authoring_concurrency import race
 from tests.factories import make_character, make_user, make_world_time
+from tests.r01_support import fixture_plan
 
 pytestmark = pytest.mark.database
 
@@ -112,6 +113,7 @@ def test_a_turn_waits_for_an_abort_and_is_then_refused(fx: Fixture) -> None:
             actor_user_id=fx.owner,
             encounter_id=fx.encounter_id,
             world_time_id=fx.time_id,
+            plan=fixture_plan(c, fx.campaign_id),
         ),
         lambda c: fx.turn(c, fx.actors[0]),
         ENCOUNTER_LOCK,
