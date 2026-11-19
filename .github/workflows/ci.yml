@@ -185,7 +185,9 @@ jobs:
   postgres-tests:
     name: Tests (PostgreSQL 18, shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 (was 30): the suite grew with the R01 authorization work and the slowest shard now takes 28-31 minutes of
+    # pytest on a hosted runner, so a 30-minute cap cancelled a shard at 95% (a cancelled shard is not a test failure).
+    timeout-minutes: 45
     # The complete unit/database/scenario suite outgrew a single 30-minute
     # job (PR #66: ~26 minutes of pytest alone), so it runs as parallel
     # shards. Each shard gets its own fresh postgres:18.4 service container

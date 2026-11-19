@@ -572,7 +572,7 @@ EXPECTED_B: dict[tuple[str, str, str], Any] = {
 
 
 def wait_expired(engine: Engine, role: uuid.UUID) -> None:
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 40
     while time.monotonic() < deadline:
         gone = rows(
             engine,
@@ -606,10 +606,15 @@ def test_c_a_grant_and_a_transfer_to_the_grantor_never_wait_in_a_cycle(
         insert_role(c, tag("low", "a2"), x_m, owner)
         insert_role(c, g_x, x_m, gm)
         if owner_row == "expiring":
+            # The grant takes C's owner row `FOR SHARE` before its gate, so the expiry cannot be armed after the grant
+            # is parked (the setup UPDATE would queue behind the grant's lock and the row would lapse only after the
+            # grant committed). It is armed first, with a window a loaded shard cannot outrun (the old 1.5 s window
+            # was outrun on CI, the grant was refused before its gate, and the gate was never reached): the grant
+            # must authorize inside it, and the transfer starts only once the database reports the row past expiry.
             c.execute(
                 text(
                     "UPDATE security.membership_roles "
-                    "SET expires_at = clock_timestamp() + interval '1500 milliseconds' "
+                    "SET expires_at = clock_timestamp() + interval '6 seconds' "
                     "WHERE membership_role_id = :r"
                 ),
                 {"r": r_c},
@@ -1224,17 +1229,9 @@ def test_h_a_candidate_revoked_after_discovery_takes_the_insert_path(w: World, p
 
 
 def expiring_recipient(w: World, label: str) -> Cast:
-    cast = owners(w, label)
-    with w.engine.begin() as c:
-        c.execute(
-            text(
-                "UPDATE security.membership_roles "
-                "SET expires_at = clock_timestamp() + interval '1500 milliseconds' "
-                "WHERE membership_role_id = :r"
-            ),
-            {"r": cast.ids["r_a"]},
-        )
-    return cast
+    """The cast, with the recipient's owner row live. Its expiry is armed by the test **after** the request is parked
+    (`_set_recipient_expiry`), never as a window before the request runs."""
+    return owners(w, label)
 
 
 def _database_times(engine: Engine, role: uuid.UUID) -> str:
@@ -1400,6 +1397,7 @@ def test_h_the_callers_ownership_is_judged_before_the_recipients_drift(
     cast = expiring_recipient(w, "H4")
 
     def lose_ownership_and_let_the_recipient_expire() -> None:
+        _set_recipient_expiry(w.engine, cast.ids["r_a"], "clock_timestamp()")
         wait_expired(w.engine, cast.ids["r_a"])
         with w.engine.begin() as c:
             c.execute(
