@@ -46,6 +46,7 @@ from tests.database.test_api_integration import (  # noqa: F401 - fixtures by na
 from tests.database.test_r01_s2_profile_routes import Recorder, idle_in_transaction
 from tests.database.test_r01_s3_authoring_routes import code, error_of
 from tests.database.test_r01_s5e2_lock_order import (  # noqa: F401 - fixtures by name
+    PATIENCE,
     NthGate,
     Pool,
     assert_clean,
@@ -341,6 +342,15 @@ CHANGES: dict[str, tuple[Callable[[Scene], None], Callable[[Scene], None], int]]
 }
 
 
+def reach(gate: NthGate) -> None:
+    """Wait for the gated statement with this suite's patience, not the shared 15 s hang detector: four shards share a
+    runner, and a request that is merely slow to start (one CI run took ~20 s before its first statement, with no blocker
+    and no wait event) is not a hang. A gate that is never reached still fails, after the longer wait."""
+    assert gate.reached.wait(PATIENCE), (
+        f"the request never reached the gated statement: {gate.describe()}"
+    )
+
+
 def gated(
     sc: Scene,
     nth: int,
@@ -353,11 +363,11 @@ def gated(
     statement of that transaction); `during` commits from outside; then release. Returns the response."""
     with NthGate(sc.pool.engine, pattern, nth) as gate:
         request = gate.track(run_in_thread("sync", run))
-        gate.wait_reached()
+        reach(gate)
         assert gate.matched is not None and re.search(pattern, gate.matched)
         during()
         gate.release()
-        assert request.done.wait(30.0)
+        assert request.done.wait(PATIENCE)
     return request.result
 
 
@@ -650,7 +660,7 @@ def test_a_waiting_replay_is_judged_after_the_wait_and_the_lock_is_released(sc: 
     op = op_id()
     with NthGate(sc.pool.engine, INTERACTION_INSERT, 1) as gate:
         holder = gate.track(run_in_thread("holder", lambda: sync(sc, op)))
-        gate.wait_reached()
+        reach(gate)
         waiter = run_in_thread("waiter", lambda: sync(sc, op))
         deadline = time.monotonic() + 15.0
         while time.monotonic() < deadline:
@@ -664,7 +674,7 @@ def test_a_waiting_replay_is_judged_after_the_wait_and_the_lock_is_released(sc: 
         assert queued == 1, "the second delivery never queued on the operation's advisory lock"
         revoke_role(sc)
         gate.release()
-        assert holder.done.wait(30.0) and waiter.done.wait(30.0)
+        assert holder.done.wait(PATIENCE) and waiter.done.wait(PATIENCE)
     assert code(holder.result) == 403 and code(waiter.result) == 403
     assert state(sc.f, sc.pool, sc.encounter, sc.system) == sc.base_state
     assert_cleaned_up(sc.pool)
@@ -857,12 +867,12 @@ def test_an_access_change_before_the_works_campaign_writes_does_not_wait_for_the
     apply, undo, refused = CHANGES[change]
     with NthGate(sc.pool.engine, ROUND_LOCK, 1) as gate:
         request = gate.track(run_in_thread("sync", lambda: sync(sc, op_id())))
-        gate.wait_reached()
+        reach(gate)
         started = time.monotonic()
         apply(sc)  # would block here if the sync held a lock the change needs
         assert time.monotonic() - started < 5.0
         gate.release()
-        assert request.done.wait(30.0)
+        assert request.done.wait(PATIENCE)
     assert code(request.result) == refused, request.result.text
     assert state(sc.f, sc.pool, sc.encounter, sc.system) == sc.base_state
     assert_cleaned_up(sc.pool)
@@ -896,13 +906,13 @@ def test_a_role_or_membership_change_arriving_during_the_work_commits_after_it(
     op = op_id()
     with NthGate(sc.pool.engine, FINAL_STATEMENT, W_FINAL) as gate:
         request = gate.track(run_in_thread("sync", lambda: sync(sc, op)))
-        gate.wait_reached()
+        reach(gate)
         changer = run_in_thread("change", lambda: apply(sc))
         waiting = blocked_by(sc, gate.pid)
         assert waiting, "the access change never queued behind the work"
         assert not changer.done.is_set()
         gate.release()
-        assert request.done.wait(30.0) and changer.done.wait(30.0)
+        assert request.done.wait(PATIENCE) and changer.done.wait(PATIENCE)
     assert code(request.result) == 201, request.result.text  # ordered before the change
     after = state(sc.f, sc.pool, sc.encounter, sc.system)
     assert after["turns"] == 1 and after["hp"] == 13
@@ -1023,12 +1033,12 @@ def test_a_deactivation_does_not_wait_for_the_work_that_holds_the_campaign_key_s
     op = op_id()
     with NthGate(sc.pool.engine, INTERACTION_INSERT, 1) as gate:
         request = gate.track(run_in_thread("sync", lambda: sync(sc, op)))
-        gate.wait_reached()
+        reach(gate)
         started = time.monotonic()
         deactivate_account(sc)
         assert time.monotonic() - started < 5.0
         gate.release()
-        assert request.done.wait(30.0)
+        assert request.done.wait(PATIENCE)
     assert code(request.result) == 404, request.result.text
     assert state(sc.f, sc.pool, sc.encounter, sc.system) == sc.base_state
     [job] = jobs(sc.pool, sc.system, op)

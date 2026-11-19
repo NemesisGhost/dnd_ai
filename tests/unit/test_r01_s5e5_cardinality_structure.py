@@ -15,6 +15,7 @@ from types import ModuleType
 import pytest
 
 from dnd_ai.domain import authorization, authorization_steps
+from tests.ast_support import dump
 
 pytestmark = pytest.mark.unit
 
@@ -23,36 +24,36 @@ FUNCTIONS = ("_skippable", "_lower_bound_met", "_check_admission")
 
 #: sha256 (first 16 hex digits) of `ast.dump` of the `if` statement of each existing branch, at `cde48d2`.
 BRANCH_PINS = {
-    "_check_admission:AnyConfirmed": "3c994beca8706e75",
-    "_check_admission:Between": "544717729c116f52",
-    "_check_admission:Exactly": "1762207c97b8d746",
-    "_check_admission:PerAbsence": "81cfb9d150cbb61c",
-    "_check_admission:PerEvidence": "813796b4585c3492",
-    "_lower_bound_met:AnyConfirmed": "c87f0b27e9d5061b",
-    "_lower_bound_met:Between": "2348b62f6feb8ffa",
-    "_lower_bound_met:Exactly": "b381c6e5039b0323",
-    "_lower_bound_met:PerAbsence": "5d8665bb903c2513",
-    "_lower_bound_met:PerEvidence": "1286b40f15f43569",
-    "_lower_bound_met:complete": "c90a68180ea74de5",
-    "_skippable:AnyConfirmed": "428d2195ba790a34",
-    "_skippable:Between": "97d555ad0fef2bb7",
-    "_skippable:Exactly": "753f40ac70c007bb",
-    "_skippable:PerAbsence": "9f01e41da762e0de",
-    "_skippable:PerEvidence": "69272cdee2bb744d",
-    "_skippable:complete": "9c731d6ecada1d97",
+    "_check_admission:AnyConfirmed": "a6cfb5e00e4f8562",
+    "_check_admission:Between": "ff61e5280fde6cc0",
+    "_check_admission:Exactly": "af4f326a94290e21",
+    "_check_admission:PerAbsence": "6b0fa6fd68d9179f",
+    "_check_admission:PerEvidence": "1d06d0726084f293",
+    "_lower_bound_met:AnyConfirmed": "84273f762a86afcf",
+    "_lower_bound_met:Between": "8e4201df19bc1cbf",
+    "_lower_bound_met:Exactly": "2e501f04d202e1ca",
+    "_lower_bound_met:PerAbsence": "9e4a9391d869eef1",
+    "_lower_bound_met:PerEvidence": "de0a0a9016b7ec85",
+    "_lower_bound_met:complete": "7a5156f6be5118b4",
+    "_skippable:AnyConfirmed": "df8e834ed5b26ec5",
+    "_skippable:Between": "7a278b177c0b3f99",
+    "_skippable:Exactly": "88eec9635aa5f279",
+    "_skippable:PerAbsence": "c66fc48b05a946fe",
+    "_skippable:PerEvidence": "ba6bb0676b0acb6c",
+    "_skippable:complete": "ab8cdbf17012f06f",
 }
 CLASS_PINS = {
-    "Exactly": "b3203d116089bfde",
-    "Between": "17e802dbbe9c9d97",
-    "EachLockedRow": "fac792121afe8983",
-    "PerEvidence": "87ab426db36cd680",
-    "PerAbsence": "b95d8742e8dcbbbc",
-    "AnyConfirmed": "3921b8839b06436a",
+    "Exactly": "889d47f491956553",
+    "Between": "f73fbc578cc1931b",
+    "EachLockedRow": "99dd30f0542b80cd",
+    "PerEvidence": "6a3a60922538d34c",
+    "PerAbsence": "ee64a4b31f830ff3",
+    "AnyConfirmed": "49fb3f854b4185ba",
 }
 
 
 def _digest(node: ast.AST) -> str:
-    return hashlib.sha256(ast.dump(node).encode()).hexdigest()[:16]
+    return hashlib.sha256(dump(node).encode()).hexdigest()[:16]
 
 
 def _tree(module: ModuleType) -> ast.Module:
@@ -73,7 +74,7 @@ def test_the_branches_of_the_existing_cardinalities_are_unchanged() -> None:
         for node in function.body:
             if not isinstance(node, ast.If):
                 continue
-            test = ast.dump(node.test)
+            test = dump(node.test)
             named = [name for name in EXISTING if f"id='{name}'" in test]
             for name in named:
                 found[f"{function.name}:{name}"] = _digest(node)

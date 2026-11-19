@@ -32,6 +32,7 @@ from dnd_ai.domain.authorization import (
     ViolationReason,
 )
 from dnd_ai.domain.authorization_steps import LockMode
+from tests.ast_support import dump
 
 pytestmark = pytest.mark.unit
 
@@ -223,7 +224,7 @@ def test_nothing_outside_the_mechanism_uses_the_new_entry_points(pattern: str) -
 
 
 def _digest(nodes: list[ast.AST]) -> str:
-    return hashlib.sha256("|".join(ast.dump(n) for n in nodes).encode()).hexdigest()[:16]
+    return hashlib.sha256("|".join(dump(n) for n in nodes).encode()).hexdigest()[:16]
 
 
 def _whole(function: ast.FunctionDef) -> list[ast.AST]:
@@ -236,7 +237,7 @@ def _body_from(index: int) -> Callable[[ast.FunctionDef], list[ast.AST]]:
 
 def _first_if_naming(word: str) -> Callable[[ast.FunctionDef], list[ast.AST]]:
     def select(function: ast.FunctionDef) -> list[ast.AST]:
-        found = [n for n in function.body if isinstance(n, ast.If) and word in ast.dump(n.test)]
+        found = [n for n in function.body if isinstance(n, ast.If) and word in dump(n.test)]
         return found[:1]
 
     return select
@@ -287,47 +288,47 @@ SELECTORS: dict[str, Callable[[ast.FunctionDef], list[ast.AST]]] = {
     "_on_before_cursor_execute": _body_from(2),
     "_on_handle_error": _handle_error_pre_write_test,
     "_on_savepoint_rollback": lambda f: [
-        n for n in f.body if isinstance(n, ast.If) and "PRE_WRITE" in ast.dump(n.test)
+        n for n in f.body if isinstance(n, ast.If) and "PRE_WRITE" in dump(n.test)
     ],
     "_has_campaign_evidence": lambda f: [f.body[-1]],
 }
 
 #: digests of the parent's statements (`git show 3a85ca5:src/dnd_ai/domain/authorization.py`)
 PARENT_PINS: dict[str, str] = {
-    "_any_confirmed": "5a27bb3638090b7b",
-    "_authorizes_fk_mode": "196e18d9f6f60575",
-    "_begin_call": "a985fae91a764cef",
-    "_build_snapshot": "f2eb6d376215ea54",
-    "_check_admission": "ed13fb5e9dc8067b",
-    "_check_obligations": "4931573a69eab5e3",
-    "_close": "92b2a72bdb5185f2",
+    "_any_confirmed": "ecb2463ba5ba0942",
+    "_authorizes_fk_mode": "871967dd2a028f4b",
+    "_begin_call": "f4978e8238c68e79",
+    "_build_snapshot": "10ae810c482048f0",
+    "_check_admission": "5083e9b8e4c4eb92",
+    "_check_obligations": "6f05a0c23c2d36e9",
+    "_close": "59b26693336f3f6d",
     "_controlled": "404af2f10281ea22",
-    "_guard_flight": "d26d62abe7f82275",
-    "_has_campaign_evidence": "a367c89eaec3efc2",
-    "_incomplete": "aea9e211c9ee2c9c",
-    "_install_declaration": "f41ec77c38e4fce3",
-    "_issue": "cb447030cc4eb407",
-    "_lower_bound_met": "ed4496a340aed6c3",
-    "_obligation_failure": "3d952e02178c8b9d",
-    "_observe_statement": "57dd2a7903a529ee",
-    "_on_after_cursor_execute": "dc559311c0859f04",
-    "_on_after_execute": "1614a324fff89b14",
-    "_on_before_cursor_execute": "a4fad91d603f6865",
-    "_on_before_execute": "cfe463a4a9969dbd",
-    "_on_do_execute": "517b830b4094ae05",
+    "_guard_flight": "4eeb87324e36da10",
+    "_has_campaign_evidence": "ab4ced72cd725094",
+    "_incomplete": "28067ce47a9c597d",
+    "_install_declaration": "cbee75ddc08de038",
+    "_issue": "35ba591c9722ae10",
+    "_lower_bound_met": "eb1d4c6b7ab178ea",
+    "_obligation_failure": "7591e2d9ac2df947",
+    "_observe_statement": "d7478a346c11deab",
+    "_on_after_cursor_execute": "b9c4fc0341d26aba",
+    "_on_after_execute": "d560847f49484cca",
+    "_on_before_cursor_execute": "2a6c71d76afd467d",
+    "_on_before_execute": "09cd49e6744f8bb9",
+    "_on_do_execute": "451b1a9124d1692d",
     "_on_handle_error": "0ef0d31e1456c142",
-    "_on_savepoint_rollback": "1b0d04c28cf9f4a7",
-    "_on_unsupported_dispatch": "f3cb8c84820ccecd",
-    "_refuses_commit": "0491d23a2f8fe551",
-    "_skippable": "b318238b66c6b6ee",
-    "_validate_rows": "d0c8b05bfbe771cb",
-    "_values_match": "c5e9f852b0f30122",
-    "_verify_session": "f18c9782da5e831d",
-    "defer_reservation_campaign_fk": "9d021e8971db405d",
-    "execute": "9aa78aabd3a8b5eb",
-    "finalize": "0bc934ca584f5220",
-    "lock": "bd099087ed68017a",
-    "require": "a0e1349a63a591b9",  # R01 E2 correction C-1: one declared party perspective per plan (was 92302c364e2191b5)
+    "_on_savepoint_rollback": "b60be1a56a35eb13",
+    "_on_unsupported_dispatch": "3fb63fa9de916647",
+    "_refuses_commit": "30f2a0f499251933",
+    "_skippable": "926d422e0067a02b",
+    "_validate_rows": "9b13cc843bbc6684",
+    "_values_match": "5f45f24e3df78925",
+    "_verify_session": "f57e9c13f0cfbafd",
+    "defer_reservation_campaign_fk": "09eb2b8be5696071",
+    "execute": "aae5e024ef1d1210",
+    "finalize": "902df922d8c19b98",
+    "lock": "4617045beaab9180",
+    "require": "742c5127e08b421e",  # R01 E2 correction C-1: one declared party perspective per plan (was 92302c364e2191b5)
 }
 
 
@@ -357,18 +358,18 @@ def test_the_module_level_guard_is_unchanged_where_it_is_not_amended() -> None:
 
 
 MODULE_PINS: dict[str, str] = {
-    "_forget": "187433413743c452",
-    "_on_after_cursor_execute": "73938ae179383597",
-    "_on_after_execute": "cf78c2e7901a95c5",
-    "_on_before_cursor_execute": "4ecea22d4eb4bd35",
-    "_on_before_execute": "7cce1f9f8aa02c0b",
-    "_on_commit": "b466739732017a51",
-    "_on_do_execute": "ace8f86582a5386f",
-    "_on_do_execute_no_params": "94f93121a572c34f",
-    "_on_do_executemany": "fc89c090ed44401c",
-    "_on_handle_error": "1b750f667fe0cdff",
-    "_on_rollback": "2d1debe46bb5423a",
-    "_on_rollback_savepoint": "96b7c78c0893ef3d",
-    "_plans_for": "77a9650f7282fcd3",
-    "install_authorization_guard": "73e31a6673e21b10",
+    "_forget": "f406ecbf55ff8c6b",
+    "_on_after_cursor_execute": "869924a6c3ba9c6a",
+    "_on_after_execute": "e332fd573840e26a",
+    "_on_before_cursor_execute": "86000c29ad38c802",
+    "_on_before_execute": "17a907e31582edd1",
+    "_on_commit": "a221a461ffe47706",
+    "_on_do_execute": "6209758d53d36ce3",
+    "_on_do_execute_no_params": "3c7525553c4486a9",
+    "_on_do_executemany": "35ccaca729225a50",
+    "_on_handle_error": "9e6adbb71cf4f879",
+    "_on_rollback": "6ca3ab6eb21e5880",
+    "_on_rollback_savepoint": "be3c2fbd0e02ef8c",
+    "_plans_for": "7ba47218880545e2",
+    "install_authorization_guard": "136f63a647f24f51",
 }
