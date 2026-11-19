@@ -11,7 +11,7 @@
 - **Extends**: [ADR 0005](0005-separate-rules-definitions-from-world-instances.md) and the identity-immutability policy of `DATABASE_MODEL.md` §8 (revisions 033/036). It does not replace the `rules` schema.
 - **Related**: [ADR 0006](0006-ai-proposes-but-does-not-own-canon.md), [ADR 0016](0016-data-classification-and-private-data-handling.md), [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md), [ADR 0022](0022-creature-templates-combatants-and-promotion.md).
 
-**Current delivery mapping:** this accepted design maps to [P19-C01, P19-C03 and P19-C04](../delivery/work-register.md#maintained-work-register); R19-P and lettered implementation labels below remain detailed technical references. Current gate status is in the [ID crosswalk](../delivery/work-register.md#id-migration-crosswalk).
+**Current delivery mapping:** implementation is split across the adopted [P19 execution sequence](../delivery/work-register.md#p19-c01), from source provenance through calculation, GM reads, configuration, build review, audience projection and contract freeze. The former R19-P and P19 checkpoint labels remain historical technical references in the [register crosswalk](../delivery/work-register.md#id-migration-crosswalk).
 
 ## Context (verified at `10a1a4e`)
 

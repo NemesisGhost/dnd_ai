@@ -2,7 +2,7 @@
 
 Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
 
-Current delivery ID: [P15-C02-S03-T01](work-register.md#maintained-work-register); P03-A is the retained historical contract label.
+Current A5c review handoff: [a5c](work-register.md#a5c). P03-A remains the historical contract label.
 
 **Status (updated 2026-11-12):** **A5a (storage and GM reads) is implemented and passed independent re-review (current-head CI pending); A5b (provenance and restriction) passed independent review with nonblocking findings (current-head CI pending); A5c (the copy) is implemented and awaiting independent review.** The design below was finalized on 2026-11-11 and is otherwise unchanged; see §17 for the records. The owner approved D13–D18 on 2026-11-11 (§4). The approvals are recorded here and in the P03-A plan's "Decisions still needed" section. No owner decision is open for A5. Slices A5a, A5b and A5c (§13) may start in order, each after the previous slice's independent review.
 

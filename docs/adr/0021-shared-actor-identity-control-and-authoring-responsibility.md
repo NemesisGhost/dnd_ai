@@ -25,7 +25,7 @@
 - **Implemented by**: Phase 15 checkpoints P03-A, P03-B, P03-C, and **P03-S** (campaign mechanical-state isolation, §3). The P03-S name is provisional; Phase 15 may fold it into P03-B/C, but it must precede controller operations that write state ([roadmap](../delivery/roadmap.md) §8, 15H). Phase 19 consumes the contracts ([rules foundations §5.1](../delivery/rules-foundations.md#51-actor-contract-owner-phase-15)) and implements none of them.
 - **Related**: [ADR 0003](0003-separate-world-timeline-and-campaign.md), [ADR 0010](0010-use-sort-key-ranges-for-fictional-time-intervals.md), [ADR 0016](0016-data-classification-and-private-data-handling.md), [ADR 0022](0022-creature-templates-combatants-and-promotion.md), [ADR 0023](0023-rules-engine-calculation-validation-and-source-authorization.md).
 
-**Current delivery mapping:** Phase 15 owns this contract at [P15-C02-S03](../delivery/work-register.md#maintained-work-register); its P03-A/B/C/S labels and Phase 19 alias R19-P1 are retained for historical traceability. Current implementation and acceptance status is in the work register.
+**Current delivery mapping:** Phase 15 owns these accepted contracts across [profile/revelation](../delivery/work-register.md#p15-c02), [control and controller profile](../delivery/work-register.md#p15-c11), [authoring and compatibility](../delivery/work-register.md#p15-c13), and [mechanical-state migration/cutover](../delivery/work-register.md#p15-c15), with acceptance in the attached actor records. P03-A/B/C/S and R19-P1 remain historical aliases in the [register crosswalk](../delivery/work-register.md#id-migration-crosswalk).
 
 ## Context
 

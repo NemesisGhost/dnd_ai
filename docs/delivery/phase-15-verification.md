@@ -2,7 +2,7 @@
 
 Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
 
-Current delivery gate: [P15-C09-S01-T01](work-register.md#maintained-work-register). Historical checkpoint and run identifiers below remain unchanged.
+Current integrated gate: [P15-C22](work-register.md#p15-c22), with implementation evidence collected at [p15-integration](work-register.md#p15-integration) and owner acceptance at [p15-owner](work-register.md#p15-owner). The former Register P15-C09-S01-T01 remains a historical crosswalk key; historical checkpoint and run identifiers below remain unchanged.
 
 Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md) and [ADR 0015](../adr/0015-typed-world-content-authoring.md). **Status: implementation complete and merged (PR #65, `60d5bc9`); automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.1 is a **subset** of Phase 15: **Phase 15 as a whole is incomplete**, and the remaining campaign-operations and world-structure work is the checkpoint sequence in [PLAN.md Phase 15](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md). Phase 16 is blocked by the Phase 15 completion gate.
 

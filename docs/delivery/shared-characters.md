@@ -2,7 +2,7 @@
 
 Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
 
-Current delivery ID: [P15-C02-S03](work-register.md#maintained-work-register); legacy P03-A/B/C/S names map in the [crosswalk](work-register.md#id-migration-crosswalk).
+Current delivery is split across [profile and revelation](work-register.md#p15-c02), [control](work-register.md#p15-c11), [controller profile](work-register.md#p15-c12), [authoring responsibility](work-register.md#p15-c13), [compatibility](work-register.md#p15-c14), and [mechanical-state migration and cutover](work-register.md#p15-c15). P03-A/B/C/S remain historical contract labels in the [crosswalk](work-register.md#id-migration-crosswalk).
 
 
 ## Historical handoff through A5c

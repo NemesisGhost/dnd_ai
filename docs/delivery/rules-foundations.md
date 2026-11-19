@@ -36,9 +36,9 @@ As instructed, OD-6 is reconciled to permit campaign-scoped builds. **No owner q
 
 ---
 
-Current delivery IDs and current status are owned by the [work register](work-register.md#maintained-work-register). ADRs 0021-0023 are accepted architecture. The P19-C01 checkpoint still awaits primary-PC acknowledgment of accepted ADR 0021; all rules foundation implementation work below remains unimplemented and gated as stated. The detailed design labels below are legacy aliases mapped to current delivery tasks in the crosswalk and register.
+Current delivery IDs and status are owned by the [work register](work-register.md#maintained-work-register). This plan retains its pre-adoption P19 IDs as historical technical labels; use the [adopted P19 execution tables](work-register.md#p19-c01) and [crosswalk](work-register.md#id-migration-crosswalk) for scheduling. ADRs 0021-0023 are accepted architecture. The historical R19-P0 architecture checkpoint (previous Register P19-C01) still awaits primary-PC acknowledgment of accepted ADR 0021; all rules foundation implementation work below remains unimplemented and gated as stated. The detailed design labels below are legacy aliases mapped to current delivery tasks in the crosswalk and register.
 
-Current identifiers below are the scheduling IDs. The legacy labels are retained in the following exact crosswalk for traceability.
+This plan retains the pre-adoption P19 scheduling identifiers and technical labels as historical references. They are not the current adopted IDs. Use the [adopted P19 execution tables](work-register.md#p19-c01) and [reviewed migration crosswalk](work-register.md#id-migration-crosswalk) for current ordering, dependencies and status. The table below preserves the earlier technical crosswalk.
 
 | Legacy design label | Current delivery ID | Scope / gate |
 |---|---|---|
