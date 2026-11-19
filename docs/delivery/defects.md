@@ -1,6 +1,6 @@
 # Phase 14/15 acceptance — defect register (CP-11)
 
-Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline. DEF-002 has one registration at the audited head. DEF-019 has owner closure for the bounded R01 scope. DEF-020 and DEF-021 remain separate.
+Use the [maintained work register](work-register.md#maintained-work-register) for current disposition and the [ID crosswalk](work-register.md#id-migration-crosswalk) to map unchanged DEF identifiers to delivery IDs. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline. DEF-002 has one registration at the audited head. DEF-019 has owner closure for the bounded R01 scope. DEF-020 and DEF-021 remain separate.
 
 Started 2026-10-26 for code `9ab549ddbc78cb9b5c1aac9c99f3a967112edc62`. Acceptance handoff record. Graded with the repository's rubric, [grading](grading.md): production exposure 0–3 + impact 0–3 + triggerability 0–2 + detection/recovery 0–1 + blast radius 0–1; bands 9–10 Critical, 7–8 High (both merge blockers), 4–6 Medium (merge only with an explicit, evidence-backed risk decision), 1–3 Low, 0 Informational.
 

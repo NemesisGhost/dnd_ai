@@ -164,12 +164,12 @@ The current PostgreSQL/API Compose services and development topology are retaine
 | 12 | Foundation delivered; remaining work reassigned | Existing AI/context/proposal foundation retained; product surfaces and real-provider acceptance move to Phase 20 |
 | 13 | Complete | Portal foundation, campaign reads, account/settings, invitations, and access management |
 | **14** | **Complete with accepted limitations** | **Shared authoring kernel plus world/timeline/campaign setup** (provenance presentation and prior-version history arrive with Phase 15) |
-| **15** | **In progress; acceptance pending** | **GM world, campaign, and session authoring, including the accepted shared-actor/public-profile/revelation scope.** Earlier completion checkpoints are implemented; P03-A and integrated acceptance remain active. [Project status](work-register.md), the active plan and acceptance ledger own recorded current state. |
-| — | Scoped roles integrated | Independent system, world and campaign roles govern the Phase 15 acceptance run. [Role decision](../adr/0020-scoped-system-world-and-campaign-roles.md) · [Current obligations](work-register.md#current-package-disposition) |
-| **16** | **Blocked by the Phase 15 completion gate** | **Player character authoring, notes, theories, contributions, and collaboration** |
+| **15** | **In progress; acceptance pending** | **GM world, campaign, and session authoring, including the accepted shared-actor/public-profile/revelation scope.** Earlier delivery checkpoints are implemented; current actor-contract work and integrated acceptance remain active. See [P15-C02-S03 and P15-C09](work-register.md#maintained-work-register) for current obligations. |
+| — | Scoped roles integrated | Independent system, world and campaign roles govern the Phase 15 acceptance run. [Role decision](../adr/0020-scoped-system-world-and-campaign-roles.md) · [Current obligations](work-register.md#maintained-work-register) |
+| **16** | **Delivery gated by Phase 15; scoped overlap only under ?6.1/checkpoint 31** | **Player character authoring, notes, theories, contributions, and collaboration** |
 | **17** | Planned | **Standalone-product acceptance and self-hosted production packaging** |
 | 18 | Planned | Session intelligence and controlled world/campaign import |
-| 19 | Planned; foundation checkpoints R19-P0/P2/P3 may start early (§6.1, 19.0) | Rules-aware character, creature, and encounter expansion. Full delivery (R19-P4) remains gated by Phase 17 |
+| 19 | Planned; foundation checkpoints P19-C01/C03/C04 may start early (§6.1, 19.0) | Rules-aware character, creature, and encounter expansion. Full delivery (P19-C05) remains gated by Phase 17 |
 | 20 | Planned | Grounded GM/player assistance and structured NPC scenes |
 | 21 | Planned | Foundry/VTT, bots, transcription, MCP, and other integrations |
 | 22 | Deferred | Hosted/paid offering and demonstrated-need scale work |
@@ -189,8 +189,8 @@ flowchart TD
     E --> G["Phase 20: Grounded assistance"]
     F --> G
     G --> H["Phase 21: Integrations"]
-    B15H["Phase 15H: shared actor refactor P03-A/B/C/S (= R19-P1)"] -.-> F0
-    F0["Phase 19 foundations: R19-P0, R19-P2, limited R19-P3"] -.-> C
+    B15H["Phase 15H: shared actor contracts P15-C02-S03 (legacy P03-A/B/C/S; P19-C02 consumes)"] -.-> F0
+    F0["Phase 19 foundations: P19-C01, P19-C03, limited P19-C04"] -.-> C
     F0 --> F
     B15H --> D
 ```
@@ -204,7 +204,7 @@ Rules for starting work:
 - Phase 16 delivery is gated on Phase 15 closure. The roadmap permits limited overlap only for work reusing already accepted commands and authorization rules. The phase exit record gates the start of Phase 16 on checkpoint 31. If scheduling an overlapping slice, resolve its eligibility explicitly against both provisions. See the [checkpoint exit record](phase-15-verification.md).
 - Phase 17 closes only after Phases 14–16 satisfy the standalone loop in §2.1.
 - Phase 18 may not promote imported content until the matching manual-authoring commands exist.
-- Phase 19 foundation checkpoints R19-P0, R19-P2 and a limited R19-P3 may proceed alongside Phases 15–17 under §6.1. R19-P1 is Phase 15 scope (15H). R19-P4 (full Phase 19 delivery) may not be released or accepted before Phase 17 closes.
+- Phase 19 foundation checkpoints P19-C01, P19-C03 and a limited P19-C04 may proceed alongside Phases 15–17 under §6.1. P19-C02 is Phase 15 scope (15H). P19-C05 (full Phase 19 delivery) may not be released or accepted before Phase 17 closes.
 - Phase 20 may not enable a user-facing AI feature until its source data, audience rules, citations, and human-control path are verified.
 - Phase 21 clients may not receive write behavior unavailable to the portal through the shared backend.
 
@@ -214,21 +214,21 @@ Early work on a later phase is allowed only when it is separable from the phases
 
 | Category | What it permits | Phase 19 examples |
 |---|---|---|
-| **1. May begin before prior phases complete** | Investigation, ADRs, contract and interface design, prototypes on branches, test fixtures for its own new modules. Nothing merged to `main` changes behavior of an in-progress phase. | R19-P0 architecture review and ADRs; drafting the R19-P2 rules-definition and source-authorization contracts; designing the R19-P3 calculation and explanation interfaces. |
-| **2. May merge as isolated, compatible infrastructure** | Additive schema, pure domain services, and internal APIs that no existing command, authorization rule, or portal surface depends on yet, behind no user-facing feature claim. It must pass the full suite and CI, must not change existing character, authorization, or build-command contracts, and must not be advertised as a delivered feature until a consuming phase accepts it (for example, Phase 16 showing an R19-P3 validation preview under Phase 16's own acceptance). | Additive `rules.*` definition, versioning and provenance extensions (R19-P2); a deterministic calculation service over existing build tables with explicit unsupported-result indicators (limited R19-P3); validation/preview interfaces that Phase 16 may call. |
-| **3. Cannot be released or accepted until dependencies complete** | User-facing features, changes to shared actor or authorization semantics, and anything that alters an accepted phase's exit scenario. | Rules-aware advancement, creature authoring, encounter analysis, and the Phase 19 portal (R19-P4) wait for Phase 17. Anything reading control or authoring responsibility waits for the matching Phase 15H checkpoint to be accepted. |
+| **1. May begin before prior phases complete** | Investigation, ADRs, contract and interface design, prototypes on branches, test fixtures for its own new modules. Nothing merged to `main` changes behavior of an in-progress phase. | P19-C01 architecture review and ADRs; drafting the P19-C03 rules-definition and source-authorization contracts; designing the P19-C04 calculation and explanation interfaces. |
+| **2. May merge as isolated, compatible infrastructure** | Additive schema, pure domain services, and internal APIs that no existing command, authorization rule, or portal surface depends on yet, behind no user-facing feature claim. It must pass the full suite and CI, must not change existing character, authorization, or build-command contracts, and must not be advertised as a delivered feature until a consuming phase accepts it (for example, Phase 16 showing the P19-C04 preview interface under Phase 16's own acceptance). | Additive `rules.*` definition, versioning and provenance extensions (P19-C03); a deterministic calculation service over existing build tables with explicit unsupported-result indicators (limited P19-C04); validation/preview interfaces that Phase 16 may call. |
+| **3. Cannot be released or accepted until dependencies complete** | User-facing features, changes to shared actor or authorization semantics, and anything that alters an accepted phase's exit scenario. | Rules-aware advancement, creature authoring, encounter analysis, and the Phase 19 portal (P19-C05) wait for Phase 17. Anything reading control or authoring responsibility waits for the matching P15-C02-S03 contract to be accepted. |
 
 **Coordinated ownership.** These areas are shared between workstreams. Each has one owner, and the other workstream proposes changes to the owner rather than editing them independently:
 
 | Shared area | Owner | Consumers and constraint |
 |---|---|---|
-| Character identity (`core.entities`, `character.characters`), NPC/PC subtype storage and its compatibility adapters | Phase 15 (15H, P03-C) | Phase 16 and Phase 19 consume. A Phase 19 branch must not add a competing actor abstraction or alter subtype storage. |
-| Campaign mechanical state (active build, HP, conditions, resources, item possession, state and attunement); mechanical event visibility and corrections; the item ownership/possession split | Phase 15 (15H, P03-S) | Phase 16 and Phase 19 consume through the actor contract. Phase 19 never writes mechanical state |
-| Campaign control assignments, revelation, public-profile projection, controller-derived rights | Phase 15 (15H, P03-A/B) | Phase 16 player authoring and Phase 19 creature control consume. Control is not canonical editing permission. |
-| Canonical authoring responsibility for characters | Phase 15 (15H, P03-C) | All authoring commands consume. Not inferred from control, kind, or first campaign. |
-| Character build commands (`create_character_build`, `activate_character_build`) and their approval/audit semantics | Phase 15 owns the command and transaction contract; Phase 16 adds player submission; Phase 19 adds rules-aware validation | One command family. Phase 16 and Phase 19 must not introduce a parallel builder or second build store. Validation is injected through the R19-P3 interface, not by forking the command. |
-| Rules definitions (`rules.*`), ruleset versioning, rules source/license provenance, campaign permitted options | Phase 19 (R19-P2) | Phase 15/16 continue to read existing definitions unchanged. Additive only until R19-P4. |
-| Calculation, validation-preview and explanation services | Phase 19 (R19-P3) | Phase 16 consumes through a stable interface. Results are derived, never authoritative. |
+| Character identity (`core.entities`, `character.characters`), NPC/PC subtype storage and its compatibility adapters | Phase 15 (15H, P15-C02-S03-T03) | Phase 16 and Phase 19 consume. A Phase 19 branch must not add a competing actor abstraction or alter subtype storage. |
+| Campaign mechanical state (active build, HP, conditions, resources, item possession, state and attunement); mechanical event visibility and corrections; the item ownership/possession split | Phase 15 (15H, P15-C02-S03-T04) | Phase 16 and Phase 19 consume through the actor contract. Phase 19 never writes mechanical state |
+| Campaign control assignments, revelation, public-profile projection, controller-derived rights | Phase 15 (15H, P15-C02-S03-T01/T02) | Phase 16 player authoring and Phase 19 creature control consume. Control is not canonical editing permission. |
+| Canonical authoring responsibility for characters | Phase 15 (15H, P15-C02-S03-T03) | All authoring commands consume. Not inferred from control, kind, or first campaign. |
+| Character build commands (`create_character_build`, `activate_character_build`) and their approval/audit semantics | Phase 15 owns the command and transaction contract; Phase 16 adds player submission; Phase 19 adds rules-aware validation | One command family. Phase 16 and Phase 19 must not introduce a parallel builder or second build store. Validation is injected through the P19-C04 interface, not by forking the command. |
+| Rules definitions (`rules.*`), ruleset versioning, rules source/license provenance, campaign permitted options | Phase 19 (P19-C03) | Phase 15/16 continue to read existing definitions unchanged. Additive only until P19-C05. |
+| Calculation, validation-preview and explanation services | Phase 19 (P19-C04) | Phase 16 consumes through a stable interface. Results are derived, never authoritative. |
 | Encounter records (`narrative.encounters`, `encounter_participants`) | Phase 15 (15F) for current behavior; Phase 19 for creature and analysis extensions | Phase 19 extensions must remain compatible with existing encounter rows, commands, the Foundry combat sync, and the member encounter projection. |
 
 A Phase 19 foundation branch must not merge changes into Phase 15 character contracts that are only partially implemented. When a foundation needs something from a Phase 15H contract that has not been accepted, it either waits or works against the current, unchanged contract behind its own interface.
@@ -381,9 +381,9 @@ Implement in independently verifiable increments. Each increment includes comman
 - Let authorized GMs compare revisions before approval.
 - Ensure published player views never expose draft or GM-only fields.
 
-### 15H. Shared actor identity, revelation, and control (P03-A/B/C)
+### 15H. Shared actor identity, revelation, and control (P15-C02-S03; legacy P03-A/B/C/S)
 
-**Delivery boundary.** Phase 15 owns shared actor identity, revelation and control. Phase 19 consumes these contracts. Use the [work register](work-register.md#current-package-disposition) for implemented slices, review and acceptance.
+**Delivery boundary.** Phase 15 owns shared actor identity, revelation and control. Phase 19 consumes these contracts. Use [P15-C02-S03](work-register.md#maintained-work-register) for current actor-contract obligations and acceptance.
 
 **Unified character identity (owner-confirmed requirement).** A Character is an individual actor in the world: a person, monster, animal, companion or other creature. It is not inherently a PC or an NPC. `core.entities` and `character.characters` remain the shared identity foundation. Whether a character is effectively a PC or an NPC in a campaign is determined by that campaign's control assignments, not by immutable subtype identity. A player-controlled monster, an NPC temporarily controlled by a player, or a character transferred between controllers keeps its UUID, history, relationships, builds, inventory and portrayal. The same identity may have different controllers in different campaigns. A character may have partial or absent mechanics: it must not need a full player build to exist, and a missing build is a supported empty state, not grounds to invent statistics.
 
@@ -393,21 +393,21 @@ Keep these concerns separate. None of them implies another:
 |---|---|---|
 | Identity | `core.entities` + `character.characters`; `character.npcs` / `character.player_characters` subtype markers | Preserve UUIDs. Subtype markers become legacy compatibility hints, not authorization. |
 | Mechanical definitions and builds | Immutable `character.character_builds` and children; active build is timeline state | Unchanged by 15H. Build eligibility moves from character kind to actor capability. |
-| Campaign control | `security.membership_character_relationships` and relationship-type capabilities; legacy `player_characters.player_user_id` (unset by current commands). `character.character_controllers` is described in `DATABASE_MODEL.md` §7.3 but has no table in the schema. | Explicit campaign-specific ongoing control assignments with start/revoke history (P03-B). |
-| Canonical authoring responsibility | Campaign `canon.edit` plus world authority, with a type-based PC exception; no owning-campaign association | Explicit authoring responsibility, independent of control (P03-C). |
-| Mechanical runtime state | `campaign.character_state`, conditions, resources, item state, inventory, attunements (keyed by timeline) | **Owner decision OD-1 (2026-11-02): campaigns sharing a world or timeline keep independent mechanical state.** P03-S adds campaign-keyed tables and lineage seeding, migrating through a reviewed manifest ([ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §3, Proposed). Controllers get only named, bounded operations (P03-B). |
-| Portrayal | `character.npc_portrayal_profiles`, keyed to `character.npcs` with `ON DELETE CASCADE` | Re-keyed to the common actor before any NPC subtype storage is retired (P03-C). |
+| Campaign control | `security.membership_character_relationships` and relationship-type capabilities; legacy `player_characters.player_user_id` (unset by current commands). `character.character_controllers` is described in `DATABASE_MODEL.md` §7.3 but has no table in the schema. | Explicit campaign-specific ongoing control assignments with start/revoke history (P15-C02-S03-T02). |
+| Canonical authoring responsibility | Campaign `canon.edit` plus world authority, with a type-based PC exception; no owning-campaign association | Explicit authoring responsibility, independent of control (P15-C02-S03-T03). |
+| Mechanical runtime state | `campaign.character_state`, conditions, resources, item state, inventory, attunements (keyed by timeline) | **Owner decision OD-1 (2026-11-02): campaigns sharing a world or timeline keep independent mechanical state.** P15-C02-S03-T04 adds campaign-keyed tables and lineage seeding, migrating through a reviewed manifest ([ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §3, Proposed). Controllers get only named, bounded operations (P15-C02-S03-T02). |
+| Portrayal | `character.npc_portrayal_profiles`, keyed to `character.npcs` with `ON DELETE CASCADE` | Re-keyed to the common actor before any NPC subtype storage is retired (P15-C02-S03-T03). |
 | Knowledge | `character.view_knowledge` perspective; knowledge domain | Separate from inspection and control. Control does not grant perspective. |
-| Publication, revelation, visibility | Canon/lifecycle status; role/relationship/grant-derived discovery | Publication is not revelation. A deliberate, source-tracked revelation of an explicitly released public profile (P03-A). |
+| Publication, revelation, visibility | Canon/lifecycle status; role/relationship/grant-derived discovery | Publication is not revelation. A deliberate, source-tracked revelation of an explicitly released public profile (P15-C02-S03-T01). |
 
 Control is not canonical editing permission, world authority, access management, or access to GM secrets.
 
 **Checkpoints:**
 
-- **P03-A — public profiles, revelation, and audience-safe character reads.** Independently sourced campaign revelation with a narrow reveal capability (not `access.manage`); an explicitly released public-profile projection; legacy background text kept restricted until deliberately reviewed and released; one discovery/profile policy applied to every list, count, search, detail, relationship, roster, session, encounter, quest, Knowledge and preview consumer.
-- **P03-B — ongoing campaign control and bounded player operations.** Campaign/actor/membership control assignments with explicit revocation and history; controller-derived rights tracked by source; a small, named allow-list of own-actor operations (for example HP, resources, selected conditions, equip/attune) under existing domain invariants. It does not open existing `canon.edit` commands to controllers. A sheet-only first checkpoint must be labeled as such.
-- **P03-C — explicit authoring responsibility and legacy NPC/PC subtype compatibility.** Explicit shared-world or identified-campaign authoring responsibility; a reviewed migration manifest with owner adjudication of ambiguous records; portrayal, build-eligibility and session-participant dependencies moved to the common actor; legacy NPC/PC routes and payloads kept working through guarded compatibility adapters.
-- **P03-S — campaign mechanical-state isolation (OD-1, OD-20, OD-21, owner-approved).** Character location and fictional/legal item ownership stay shared narrative; mechanical possession, inventory, equipment, attunement, charges and quantities are per campaign; inventory changes never change ownership automatically (OD-20). Campaign-keyed active build, HP, conditions, resources, item state, inventory and attunement; explicitly authorized lineage seeding and cross-campaign copy as separate commands (OD-21, owner-approved), which stay disabled until their enablement acceptance and are not required for isolation; campaign required on mechanical events; additive, reversible migration of timeline-scoped rows through a reviewed manifest, with no inference of historical campaign ownership. It must precede controller operations that write state. Phase 15 may fold it into P03-B/C.
+- **P15-C02-S03-T01 — public profiles, revelation, and audience-safe character reads.** Independently sourced campaign revelation with a narrow reveal capability (not `access.manage`); an explicitly released public-profile projection; legacy background text kept restricted until deliberately reviewed and released; one discovery/profile policy applied to every list, count, search, detail, relationship, roster, session, encounter, quest, Knowledge and preview consumer.
+- **P15-C02-S03-T02 — ongoing campaign control and bounded player operations.** Campaign/actor/membership control assignments with explicit revocation and history; controller-derived rights tracked by source; a small, named allow-list of own-actor operations (for example HP, resources, selected conditions, equip/attune) under existing domain invariants. It does not open existing `canon.edit` commands to controllers. A sheet-only first checkpoint must be labeled as such.
+- **P15-C02-S03-T03 — explicit authoring responsibility and legacy NPC/PC subtype compatibility.** Explicit shared-world or identified-campaign authoring responsibility; a reviewed migration manifest with owner adjudication of ambiguous records; portrayal, build-eligibility and session-participant dependencies moved to the common actor; legacy NPC/PC routes and payloads kept working through guarded compatibility adapters.
+- **P15-C02-S03-T04 — campaign mechanical-state isolation (OD-1, OD-20, OD-21, owner-approved).** Character location and fictional/legal item ownership stay shared narrative; mechanical possession, inventory, equipment, attunement, charges and quantities are per campaign; inventory changes never change ownership automatically (OD-20). Campaign-keyed active build, HP, conditions, resources, item state, inventory and attunement; explicitly authorized lineage seeding and cross-campaign copy as separate commands (OD-21, owner-approved), which stay disabled until their enablement acceptance and are not required for isolation; campaign required on mechanical events; additive, reversible migration of timeline-scoped rows through a reviewed manifest, with no inference of historical campaign ownership. It must precede controller operations that write state. Phase 15 may fold it into P15-C02-S03-T02/C.
 
 **Migration boundaries (binding on all three checkpoints):**
 
@@ -448,7 +448,7 @@ No SQL, seed script, importer, Foundry, or AI provider may be used.
 - Cross-world, cross-timeline, and cross-campaign requests are rejected without disclosure.
 - Audit and provenance identify real changes without storing reusable secrets.
 - The same commands are suitable for later import and integration clients.
-- The 15H shared actor contracts are accepted: P03-A revelation and audience-safe reads, P03-B ongoing control with the shipped operation allow-list stated, P03-C explicit authoring responsibility with compatibility adapters, and **P03-S campaign mechanical-state isolation** (OD-1, OD-20, OD-21): campaign-keyed state; origin-campaign event visibility and corrections; fail-closed effect classification, with every mechanical event effect withheld from every application audience until its classification and origin-campaign attribution are reviewed and recorded; split item revision checks; required ownership intent; family-atomic reviewed manifest migration with stopped-writer cutover; quarantine of incompatible migrated item state; seeding and copy still disabled ([ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §3, Proposed). The same character keeps its UUID and history through a control change, including a player-controlled monster. Destructive retirement of NPC/PC subtype storage is not required to close Phase 15. It may follow once compatibility is demonstrated.
+- The 15H shared actor contracts are accepted: P15-C02-S03-T01 revelation and audience-safe reads, P15-C02-S03-T02 ongoing control with the shipped operation allow-list stated, P15-C02-S03-T03 explicit authoring responsibility with compatibility adapters, and **P15-C02-S03-T04 campaign mechanical-state isolation** (OD-1, OD-20, OD-21): campaign-keyed state; origin-campaign event visibility and corrections; fail-closed effect classification, with every mechanical event effect withheld from every application audience until its classification and origin-campaign attribution are reviewed and recorded; split item revision checks; required ownership intent; family-atomic reviewed manifest migration with stopped-writer cutover; quarantine of incompatible migrated item state; seeding and copy still disabled ([ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §3, Proposed). The same character keeps its UUID and history through a control change, including a player-controlled monster. Destructive retirement of NPC/PC subtype storage is not required to close Phase 15. It may follow once compatibility is demonstrated.
 - Focused tests, full suites, migrations, lint, types, build, and final-head CI pass.
 
 ---
@@ -461,7 +461,7 @@ No SQL, seed script, importer, Foundry, or AI provider may be used.
 
 For characters the player is authorized to control:
 
-- maintain portrayal guidance, personality, ideals, bonds, flaws, goals, fears, loyalties, boundaries, speech patterns, and player notes. These are the eleven fields of the campaign-scoped player profile (P03-A D13, owner-approved 2026-11-11):
+- maintain portrayal guidance, personality, ideals, bonds, flaws, goals, fears, loyalties, boundaries, speech patterns, and player notes. These are the eleven fields of the campaign-scoped player profile (P15-C02-S03-T01 D13, owner-approved 2026-11-11):
   - "Player notes" is the profile field `profile_notes`, labelled "Notes for the GM and controllers". It is shared with the campaign's authorized GMs and the character's eligible controllers, and is not a personal notebook.
   - The private notes of 16B/16C need separate storage and authorization, with no automatic GM access.
   - `boundaries` and `profile_notes` are excluded from structured publication;
@@ -473,12 +473,12 @@ For characters the player is authorized to control:
 
 The full option engine, broad rules catalog, and rich advancement analysis belong to Phase 19. Phase 16 must not pretend unsupported rules content is complete.
 
-**Shared commands and rules contracts.** "Characters the player is authorized to control" means the 15H control assignment (P03-B), not a character kind or a legacy relationship label. Control alone does not grant canonical editing. Under OD-18 (clarified 2026-11-04), the portrayal guidance a controller maintains is the campaign-scoped player profile, edited through `character.edit_player_profile`; it is never `character.edit_narrative`, world canon or GM-private portrayal ([ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §2.5, §7, Proposed). Phase 16 player authoring must:
+**Shared commands and rules contracts.** "Characters the player is authorized to control" means the 15H control assignment (P15-C02-S03-T02), not a character kind or a legacy relationship label. Control alone does not grant canonical editing. Under OD-18 (clarified 2026-11-04), the portrayal guidance a controller maintains is the campaign-scoped player profile, edited through `character.edit_player_profile`; it is never `character.edit_narrative`, world canon or GM-private portrayal ([ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §2.5, §7, Proposed). Phase 16 player authoring must:
 
 - use the same character, build, and portrayal commands as GM authoring, with the same approval, lifecycle, idempotency, and audit semantics. A player build or advancement is a submission or proposal against `create_character_build` / `activate_character_build`, not a separate player-side builder or build store;
 - avoid a temporary character builder that Phase 19 would later have to replace;
 - support permitted manual authoring and proposal workflows, and say plainly in the UI and API when a submission has not been rules-validated;
-- call the R19-P3 validation-preview interface (Phase 19, 19.5) where that interface is accepted, and otherwise record the result as "not validated" rather than inventing checks. Phase 16 does not wait for Phase 19 to complete; it consumes whatever validation the stable interface reports, including "unsupported";
+- call the P19-C04 validation-preview interface (Phase 19, 19.5) where that interface is accepted, and otherwise record the result as "not validated" rather than inventing checks. Phase 16 does not wait for Phase 19 to complete; it consumes whatever validation the stable interface reports, including "unsupported";
 - leave advancement eligibility, available choices, prerequisite and mutual-exclusion checks, derived-stat previews, and advancement explanations to Phase 19, which extends the same submission and approval path rather than replacing it.
 
 ### 16B. Notes, bookmarks, and theories
@@ -602,7 +602,7 @@ Complete the self-hosted topology:
 - health/readiness checks;
 - startup migration procedure;
 - structured logs and bounded audit retention;
-- backup, restore, and rollback runbooks, including the P03-S mechanical-state tables and migration records (complete and pending families, quarantined state, the effect registry, event attributions), the stopped-writer cutover backups, and restore after post-cutover divergence;
+- backup, restore, and rollback runbooks, including the P15-C02-S03-T04 mechanical-state tables and migration records (complete and pending families, quarantined state, the effect registry, event attributions), the stopped-writer cutover backups, and restore after post-cutover divergence;
 - release/version metadata;
 - upgrade verification from the previous supported release.
 
@@ -612,7 +612,7 @@ Phase 17 closes only when a clean home-network/self-hosted deployment can perfor
 
 At this milestone the product is considered independently functional.
 
-Phase 17 acceptance remains the gate for full Phase 19 feature completion (R19-P4). Any Phase 19 foundation infrastructure merged earlier under §6.1 category 2 is part of the deployed schema. It is covered by Phase 17's migration, upgrade, and backup/restore verification, but it adds no user-facing requirement to the standalone loop.
+Phase 17 acceptance remains the gate for full Phase 19 feature completion (P19-C05). Any Phase 19 foundation infrastructure merged earlier under §6.1 category 2 is part of the deployed schema. It is covered by Phase 17's migration, upgrade, and backup/restore verification, but it adds no user-facing requirement to the standalone loop.
 
 ---
 
@@ -667,23 +667,23 @@ After session-note promotion is proven, add campaign documents and structured ex
 
 **Goal:** Make authoring mechanically trustworthy for the supported ruleset without attempting to reproduce every commercial rulebook.
 
-Phase 19 consumes the shared actor contracts that Phase 15 delivers (15H) and builds reusable, versioned, source-aware rules definitions plus a deterministic, explainable calculation layer on top of them. It extends the existing `rules` schema, ADR 0005's separation of rule definitions from world instances, and the immutable build model. It does not replace any of them. It does not introduce its own actor abstraction. Everything in this section beyond the "current baseline" column of 19.1 is proposed and not implemented.
+Phase 19 consumes the shared actor contracts owned by Phase 15 (15H), once those contracts are accepted, and builds reusable, versioned, source-aware rules definitions plus a deterministic, explainable calculation layer on top of them. It extends the existing `rules` schema, ADR 0005's separation of rule definitions from world instances, and the immutable build model. It does not replace any of them. It does not introduce its own actor abstraction. Everything in this section beyond the "current baseline" column of 19.1 is proposed and not implemented.
 
 ### 19.0 Delivery checkpoints
 
-Phase 19 is delivered as five checkpoints. The `R19-` prefix keeps them distinct from the Phase 14/15 repair package IDs (`P00`–`P17`, including P03-A/B/C).
+Phase 19 uses P19-C01 through P19-C05 for its delivery checkpoints. The detailed plan retains R19-P and lettered subcheckpoint labels as technical cross-references; the work register owns current disposition.
 
 | Checkpoint | Scope | Owner | May begin | May merge | Released/accepted |
 |---|---|---|---|---|---|
-| **R19-P0 — Architecture and contracts** | Review the existing rules and character architecture; write the creature-model ADR (19.3) and the rules-calculation/source-authorization ADR (19.1, 19.5); define calculation, validation and preview interfaces; define the source-authorization and ruleset-version contracts; identify migration dependencies and ownership against §6.1. | Phase 19 | Now, in parallel with Phases 15–17 | ADRs and documentation, once reviewed | When its ADRs are accepted |
-| **R19-P1 — Shared actor foundation** | Delivered by Phase 15H (P03-A/B/C). Phase 19 depends on it and does not duplicate it. Partial-build compatibility and stable identity are preserved there. | Phase 15 | Phase 15 | Phase 15 | With the matching 15H checkpoints |
-| **R19-P2 — Rules definition foundation** | Expand reusable, source-aware rules definitions; establish definition versioning and campaign ruleset/option selection; support a limited, testable set of open-content definitions and their validation. | Phase 19 | After the R19-P0 contracts it depends on are accepted | As isolated additive infrastructure (§6.1 category 2) | User-facing selection and catalog management with R19-P4 |
-| **R19-P3 — Deterministic mechanics foundation** | Implement the calculation and explanation contracts (19.5) for a limited initial mechanics subset; provide reusable previews and validation for Phase 16 and later Phase 19 authoring. | Phase 19 | After R19-P0's interface contract is accepted | As isolated infrastructure; Phase 16 may call the accepted interface | Player-visible rules validation with R19-P4; Phase 16 may show its results labeled with their support level |
-| **R19-P4 — Full Phase 19 delivery** | Expanded legally usable rules content; rules-aware character advancement (19.2); creature authoring and advanced actions (19.3); encounter analysis and party-specific risk assessment (19.4); full portal workflows and end-to-end acceptance (19.8). | Phase 19 | Design may start earlier; implementation that changes user-facing behavior waits for its dependencies | After Phase 17 closes and the 15H contracts it uses are accepted | After Phase 17; Phase 19 is not complete until 19.8 is satisfied |
+| **P19-C01 — Architecture and contracts** | Review the existing rules and character architecture; write the creature-model ADR (19.3) and the rules-calculation/source-authorization ADR (19.1, 19.5); define calculation, validation and preview interfaces; define the source-authorization and ruleset-version contracts; identify migration dependencies and ownership against §6.1. | Phase 19 | Now, in parallel with Phases 15–17 | ADRs and documentation, once reviewed | When its ADRs are accepted |
+| **P19-C02 — Shared actor foundation** | Owned by Phase 15H (P15-C02-S03); delivery and acceptance remain pending. Phase 19 depends on it and does not duplicate it. Partial-build compatibility and stable identity are preserved there. | Phase 15 | Phase 15 | Phase 15 | With the matching 15H checkpoints |
+| **P19-C03 — Rules definition foundation** | Expand reusable, source-aware rules definitions; establish definition versioning and campaign ruleset/option selection; support a limited, testable set of open-content definitions and their validation. | Phase 19 | After the P19-C01 contracts it depends on are accepted | As isolated additive infrastructure (§6.1 category 2) | User-facing selection and catalog management with P19-C05 |
+| **P19-C04 — Deterministic mechanics foundation** | Implement the calculation and explanation contracts (19.5) for a limited initial mechanics subset; provide reusable previews and validation for Phase 16 and later Phase 19 authoring. | Phase 19 | After P19-C01's interface contract is accepted | As isolated infrastructure; Phase 16 may call the accepted interface | Player-visible rules validation with P19-C05; Phase 16 may show its results labeled with their support level |
+| **P19-C05 — Full Phase 19 delivery** | Expanded legally usable rules content; rules-aware character advancement (19.2); creature authoring and advanced actions (19.3); encounter analysis and party-specific risk assessment (19.4); full portal workflows and end-to-end acceptance (19.8). | Phase 19 | Design may start earlier; implementation that changes user-facing behavior waits for its dependencies | After Phase 17 closes and the 15H contracts it uses are accepted | After Phase 17; Phase 19 is not complete until 19.8 is satisfied |
 
-R19-P0's deliverables are [ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md), [ADR 0022](../adr/0022-creature-templates-combatants-and-promotion.md), [ADR 0023](../adr/0023-rules-engine-calculation-validation-and-source-authorization.md) and [rules foundations](rules-foundations.md), which breaks R19-P2 and R19-P3 into reviewable checkpoints. ADRs 0021–0023 were accepted by the owner on 2026-11-06 as reviewed at `2ca4648`; the plan remains design-only and acceptance does not imply implementation or Phase 19 completion.
+P19-C01's deliverables are [ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md), [ADR 0022](../adr/0022-creature-templates-combatants-and-promotion.md), [ADR 0023](../adr/0023-rules-engine-calculation-validation-and-source-authorization.md) and [rules foundations](rules-foundations.md), which breaks P19-C03 and P19-C04 into reviewable checkpoints. ADRs 0021–0023 were accepted by the owner on 2026-11-06 as reviewed at `2ca4648`; the plan remains design-only and acceptance does not imply implementation or Phase 19 completion.
 
-R19-P0, R19-P2 and a limited R19-P3 may proceed concurrently with Phases 15–17 once their contracts are stable. R19-P1 remains owned by Phase 15. R19-P4 remains gated by §6. Merging a foundation checkpoint completes nothing in Phase 19 by itself.
+P19-C01, P19-C03 and a limited P19-C04 may proceed concurrently with Phases 15–17 once their contracts are stable. P19-C02 remains owned by Phase 15. P19-C05 remains gated by §6. Merging a foundation checkpoint completes nothing in Phase 19 by itself.
 
 **Design principles carried through every checkpoint:** human-controlled canon changes; audience-safe reads; explicit permissions and denials; reviewable, auditable mutations through the shared authoring commands; versioned source provenance; world/campaign separation; timeline-aware state; ruleset extensibility without premature generalization (D&D 5e is the only supported ruleset family until Phase 22); no mandatory AI dependency; no mandatory Foundry dependency for character or rules authoring.
 
@@ -695,7 +695,7 @@ R19-P0, R19-P2 and a limited R19-P3 may proceed concurrently with Phases 15–17
 - Complete legal/policy review before any private commercial source-import feature.
 - Keep PostgreSQL full-text search as the baseline; add embeddings only when measured retrieval quality requires them.
 
-**Current baseline and Phase 19 extensions (R19-P2).** Extend what exists. Do not build a parallel rules store.
+**Current baseline and Phase 19 extensions (P19-C03).** Extend what exists. Do not build a parallel rules store.
 
 | Capability | Current baseline (built) | Proposed Phase 19 extension |
 |---|---|---|
@@ -715,7 +715,7 @@ R19-P0, R19-P2 and a limited R19-P3 may proceed concurrently with Phases 15–17
 1. *Source access:* who may read a source document or passage. The reference corpus already distinguishes `general` from `campaign_restricted` sources with explicit campaign grants.
 2. *Retrieval authorization:* which purposes (player read, GM preparation, AI context) may retrieve it.
 3. *Permitted campaign options:* which definitions a campaign allows characters to use.
-4. *Mechanical validation:* whether a choice satisfies the rules (R19-P3).
+4. *Mechanical validation:* whether a choice satisfies the rules (P19-C04).
 5. *GM approval:* whether the canonical change is accepted (the shared approval path).
 
 A definition being permitted in a campaign does not grant access to its source text, and source access does not make a definition permitted. A player who contributes legitimately owned source material does not thereby give every campaign member access to that material. Its access, retrieval and option scope follow the rights recorded for it. Preserve copyright and source-ownership boundaries. Do not distribute licensed text beyond its recorded rights. No private commercial source ingestion is built without the required legal and policy review.
@@ -756,7 +756,7 @@ The ADR must decide, with compatibility evidence:
 - compatibility with existing encounter records. `narrative.encounter_participants` currently references one entity per participant (unique per encounter) and accepts only published characters of the world. Any encounter-only combatant model must keep existing rows, commands, the Foundry combat sync and the member encounter projection valid;
 - how player control of a creature uses the 15H control assignment rather than a creature-specific mechanism.
 
-Phase 15 implements no creature-template catalog or generator. Phase 19 makes the final creature storage decision through this ADR, as part of R19-P0, before implementing the model.
+Phase 15 implements no creature-template catalog or generator. Phase 19 makes the final creature storage decision through this ADR, as part of P19-C01, before implementing the model.
 
 ### 19.4 Encounter analysis
 
@@ -767,7 +767,7 @@ Phase 15 implements no creature-template catalog or generator. Phase 19 makes th
 
 Analysis reads the calculation layer (19.5) and the participants' audience-appropriate state. It reports incomplete or unsupported mechanics as uncertainty, never as zero. It is GM preparation output, not canon, and it never reaches a player projection unless deliberately shared.
 
-### 19.5 Deterministic mechanics and explanation (R19-P3)
+### 19.5 Deterministic mechanics and explanation (P19-C04)
 
 Add a deterministic, explainable rules-calculation foundation: a pure domain service with no AI dependency and no database writes of its own.
 
@@ -788,14 +788,14 @@ The validation-preview interface is shared. Phase 16 player submissions, GM buil
 
 ### 19.6 Phase 16 coordination
 
-Phase 16 implements player authoring against the shared character commands and, where accepted, the R19-P3 validation-preview interface (§9, 16A). Phase 19 then extends those same workflows with advancement eligibility, available choices, prerequisite checks, mutually exclusive options, derived-stat previews, rules-aware validation, and advancement explanations and history. Both phases use the same authoritative authoring commands, approval mechanisms and audit semantics. Neither creates a temporary builder that the other must replace.
+Phase 16 implements player authoring against the shared character commands and, where accepted, the P19-C04 validation-preview interface (§9, 16A). Phase 19 then extends those same workflows with advancement eligibility, available choices, prerequisite checks, mutually exclusive options, derived-stat previews, rules-aware validation, and advancement explanations and history. Both phases use the same authoritative authoring commands, approval mechanisms and audit semantics. Neither creates a temporary builder that the other must replace.
 
 ### 19.7 Phase 19 dependencies
 
-- **Phase 15H (R19-P1):** actor identity independent of kind; control assignments; authoring responsibility; audience-safe projections; build eligibility by capability. Phase 19 must not proceed with creature control, advancement for player-controlled actors, or creature instance identity on any other basis.
+- **Phase 15H (P19-C02):** actor identity independent of kind; control assignments; authoring responsibility; audience-safe projections; build eligibility by capability. Phase 19 must not proceed with creature control, advancement for player-controlled actors, or creature instance identity on any other basis.
 - **Phase 16:** the player submission and approval path that advancement extends.
-- **Phase 17:** gate for R19-P4 release and acceptance.
-- **ADRs (R19-P0):** creature model (19.3); rules calculation, explanation and source authorization (19.1, 19.5).
+- **Phase 17:** gate for P19-C05 release and acceptance.
+- **ADRs (P19-C01):** creature model (19.3); rules calculation, explanation and source authorization (19.1, 19.5).
 
 ### 19.8 Phase 19 exit criteria
 
@@ -912,8 +912,8 @@ Hosted work must not weaken self-hosting or create a second domain model.
 | Player-private discussions | Participant-controlled | No access unless shared | Never canon by default |
 | Corrections/session contributions | Submit | Accept/edit/reject | Canon only through matching domain command |
 | Imported or AI-proposed changes | Review only if assigned | Accept/edit/reject | Never automatic canon |
-| Character campaign control assignment (15H, P03-B; proposed) | Use bounded operations on an assigned actor | Assign/revoke through separately delegable authority | Not canon. Grants named operations only, never canonical editing or GM secrets |
-| Character revelation and public profile (15H, P03-A; proposed) | Read a revealed public profile | Release profile; reveal/revoke with a narrow capability | Not canon. Audience grant only. Publication alone reveals nothing |
+| Character campaign control assignment (15H, P15-C02-S03-T02; proposed) | Use bounded operations on an assigned actor | Assign/revoke through separately delegable authority | Not canon. Grants named operations only, never canonical editing or GM secrets |
+| Character revelation and public profile (15H, P15-C02-S03-T01; proposed) | Read a revealed public profile | Release profile; reveal/revoke with a narrow capability | Not canon. Audience grant only. Publication alone reveals nothing |
 | Homebrew rules, house rules, campaign permitted options (Phase 19; proposed) | View permitted options | Author homebrew and house rules; configure campaign options | Rule definitions follow the canon lifecycle; selection affects only that campaign |
 | Derived mechanics and validation previews (Phase 19; proposed) | View for own actor where permitted | View | Never canon; derived and rebuildable |
 
@@ -987,7 +987,7 @@ Every authoring increment must address the following before it is accepted.
 5. Update `DOMAIN_MODEL.md` to define player-owned `Theory` separately from truth, belief, rumor, and knowledge.
 6. Add a `collaboration` schema and application-privacy section to `DATABASE_MODEL.md` before Phase 16 implementation.
 7. Add explicit `Built`/`Planned` markers to logical schema inventories so planned portrayal, collaboration, creature, and campaign-state tables cannot be mistaken for implemented tables.
-8. Record the creature-template versus character-based-creature decision in an ADR before Phase 19 implementation (R19-P0, Phase 19 19.3).
+8. Record the creature-template versus character-based-creature decision in an ADR before Phase 19 implementation (P19-C01, Phase 19 19.3).
 9. Update UI design documentation with authoring form, lifecycle, conflict, unsaved-change, and private/shared content patterns.
 10. Keep project status and verification documents factual: distinguish source inspection, automated evidence, runtime evidence, manual evidence, and unverified behavior.
 11. Reconcile environment documentation with ADR 0012's disposable PostgreSQL 18 CI and self-hosted default.
@@ -995,12 +995,12 @@ Every authoring increment must address the following before it is accepted.
 
 Historical obligations identified on 2026-11-02. ADRs 0021–0023 were subsequently accepted, including the control and rules contracts. The [work register](work-register.md) owns remaining implementation and coordination gates.
 
-13. Record an ADR for shared actor identity, campaign control, revelation, and authoring responsibility before P03-B/P03-C schema work (15H).
+13. Record an ADR for shared actor identity, campaign control, revelation, and authoring responsibility before P15-C02-S03-T02/P15-C02-S03-T03 schema work (15H).
 14. Revise `DOMAIN_MODEL.md` §2.5 and §8.4–8.6 so that PC/NPC describes campaign control rather than subtype identity, once that ADR is accepted.
 15. Mark `character.character_controllers` in `DATABASE_MODEL.md` §7.3 as Planned or superseded. It is described there but has no table in the current schema. The 15H control-assignment design decides which.
 16. Add the 15H control, revelation, and authoring-responsibility commands to `ENTITY_LIFECYCLE.md` as each checkpoint is accepted.
-17. Complete the stub context and consequences of ADR 0005 when the creature-model ADR (R19-P0) is written, since templates versus instances extends it.
-18. Record an ADR for the rules calculation, explanation, and source-authorization contracts (R19-P0) before R19-P2/R19-P3 merge.
+17. Complete the stub context and consequences of ADR 0005 when the creature-model ADR (P19-C01) is written, since templates versus instances extends it.
+18. Record an ADR for the rules calculation, explanation, and source-authorization contracts (P19-C01) before P19-C03/P19-C04 merge.
 19. Commit the Phase 14/15 investigation and handoff documents that 15H cites, or replace those citations with their committed successors.
 
 ---

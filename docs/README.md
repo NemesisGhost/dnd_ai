@@ -35,7 +35,7 @@ Use the portal to author shared world content, operate a campaign and show each 
 
 ## Delivery and evidence
 
-- [Work register](delivery/work-register.md) for current obligations and recorded discrepancies. [Roadmap](delivery/roadmap.md) for phase order and dependencies.
+- [Work register](delivery/work-register.md) for the single maintained register, current obligations and ID migration crosswalk. [Roadmap](delivery/roadmap.md) for phase order and dependencies.
 - [Character work](delivery/shared-characters.md), [ownership design](delivery/ownership-design.md), [player profiles](delivery/player-profile-design.md), [context navigation](delivery/context-navigation.md) and [rules foundations](delivery/rules-foundations.md) for detailed scope and decisions.
 - [First-campaign acceptance script](delivery/first-campaign-acceptance.md), [companion scenarios](delivery/companion-scenarios.md), [coverage matrix](delivery/coverage.md) and [environment](delivery/acceptance-environment.md) for rehearsals. [Ledger](delivery/acceptance-ledger.md) for recorded outcomes.
 - [Defects](delivery/defects.md), [grading rubric](delivery/grading.md), [Phase 15 verification](delivery/phase-15-verification.md), [delivery history](delivery/history.md) and [migration record](delivery/migration.md) for traceability.

@@ -2,6 +2,8 @@
 
 Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
 
+Current delivery gate: [P15-C09-S01-T01](work-register.md#maintained-work-register). Historical checkpoint and run identifiers below remain unchanged.
+
 Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md) and [ADR 0015](../adr/0015-typed-world-content-authoring.md). **Status: implementation complete and merged (PR #65, `60d5bc9`); automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.1 is a **subset** of Phase 15: **Phase 15 as a whole is incomplete**, and the remaining campaign-operations and world-structure work is the checkpoint sequence in [PLAN.md Phase 15](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md). Phase 16 is blocked by the Phase 15 completion gate.
 
 **Disclosed limitations (2026-10-05):** audit rows written by the 15.1 commands *before checkpoint 15.2A-3* copy up to 1,000 characters of narrative per field into `audit.change_log.changed_fields`, and the 15.1 authoring routes stored the full authoring view, including GM-only notes and background, in idempotency replay rows. **New writes no longer do either (15.2A-3, resolved).** Existing rows were scrubbed by checkpoint 15.2A-4 (migration 135, owner decision recorded in the working session); only backups taken before it still hold the old content. Audience-preview reads are audited as of 15.2A-3.

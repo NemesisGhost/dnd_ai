@@ -2,6 +2,8 @@
 
 Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
 
+Current residual evidence mapping: [P15-C09-S03-T01](work-register.md#maintained-work-register); N/CNC identifiers remain trace references.
+
 **Status (reconciled 2026-11-11 at `d51e38a`):** implemented through `6cdc68b`;
 independent review recorded as PASS WITH NONBLOCKING VERIFICATION LIMITATION in
 [the closeout](#107-review-outcome-and-closeout-2026-11-11) (§10.7). Browser checks and
@@ -59,7 +61,7 @@ World-level pagination/search. Tracing found no case that needs these. CN-1's
 destinations are all existing routes the caller is already authorized for.
 
 **Deferred:** World-level pagination beyond the first 100 explicit worlds (finding F5;
-[backlog](work-register.md#other-explicit-follow-ups)).
+[backlog](work-register.md#focused-follow-up-evidence-and-dispositions)).
 
 ## 2. Findings and grading
 

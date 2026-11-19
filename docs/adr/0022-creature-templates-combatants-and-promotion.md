@@ -7,6 +7,8 @@
 - **Depends on**: [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md) (actor identity, control, build scope, campaign-aware active build); [ADR 0023](0023-rules-engine-calculation-validation-and-source-authorization.md) (adapters, payload validation, provenance, validation and review).
 - **Implementation gate**: Template definitions are R19-P2d. **Every encounter-integration change in this ADR (§4–§7) is R19-P4b**. That work happens after the Phase 17 gate, under Phase 15 encounter-command owner review. Nothing in §4–§7 is implemented by an early checkpoint.
 
+**Current delivery mapping:** this accepted design maps to [P19-C01, P19-C03 and P19-C05](../delivery/work-register.md#maintained-work-register); R19-P and lettered implementation labels below remain detailed technical references. Current gate status is in the [ID crosswalk](../delivery/work-register.md#id-migration-crosswalk).
+
 ## Context
 
 The owner chose three concepts:

@@ -71,7 +71,7 @@ Older retirements and preserved local-plan hashes are in [delivery history](hist
 
 ## Section-level consolidations
 
-- The old project status table and roadmap status paragraph now lead to the [package dispositions](work-register.md#current-package-disposition). The [R01 entry](work-register.md#r01--runtime-authorization-and-transaction-defects) owns backend acceptance, excluded routes and residuals.
+- The old project status table and roadmap status paragraph now lead to the [single maintained work register and ID crosswalk](work-register.md#maintained-work-register). The [R01 entry](work-register.md#r01--runtime-authorization-and-transaction-defects) owns backend acceptance, excluded routes and residuals.
 - The November backlog's 43-row interaction crosswalk, test commands and Fable's original acceptance criteria moved to the [dated review](review-2026-11-11.md). The [audited dispositions](work-register.md#documentation-drift-at-the-audited-head) own present status.
 - UI design §4.8 now lives in the [navigation contract](../reference/portal-navigation.md). The remaining portal behavior and style rules keep separate owners. The Phase 13 read-readiness matrix was replaced by the [read guide](../api/READ_API.md) and the complete [method/path catalog](../api/operations.md).
 - The former database model's logical table lists remain design material. The [declared inventory](../reference/tables.md) resolves built versus absent names. The earlier deployment diagram remains the production target, alongside the [current service list](../operations/deployment.md#runnable-services).

@@ -249,7 +249,7 @@ reconnect, and loop-suppression logic is covered by `test/` (`node --test`),
 run against the real backend contract via [the backend scenario](../tests/scenario/test_foundry_adapter_e2e.py) — but neither substitutes for actually installing this
 module in a real FoundryVTT client. Whoever has a licensed FoundryVTT
 instance available should run this procedure once and record the run head, Foundry/system versions and observed outcomes in
-[the delivery evidence](../docs/delivery/history.md), then update the live Foundry obligation in the [work register](../docs/delivery/work-register.md#current-package-disposition):
+[the delivery evidence](../docs/delivery/history.md), then update the live Foundry obligation in the [work register](../docs/delivery/work-register.md#maintained-work-register):
 
 1. Package and install the module (see "Install" above) in a fresh
    FoundryVTT v13 world running the dnd5e system.

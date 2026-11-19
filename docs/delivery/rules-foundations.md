@@ -36,6 +36,8 @@ As instructed, OD-6 is reconciled to permit campaign-scoped builds. **No owner q
 
 ---
 
+Current delivery IDs are owned by the [work register](work-register.md#maintained-work-register): R19-P0 maps to P19-C01, R19-P1 to P19-C02 (owned by Phase 15), R19-P2 to P19-C03, R19-P3 to P19-C04, and R19-P4 to P19-C05. The R19-P2a/P3a/P4a-style labels below remain technical subcheckpoint references within this detailed plan; they are not a second maintained backlog.
+
 ## 1. Decision traceability and verified discrepancies
 
 | Owner decision | Realised in | Implementing checkpoint |

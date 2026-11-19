@@ -1,76 +1,164 @@
-# Outstanding work and finding traceability
+# Delivery work register
 
-Updated 2026-11-18 on `881786c`. Phase 15 remains open. Use [the roadmap](roadmap.md) for the adopted Phase → Checkpoint → Slice → Task sequence. Finding IDs trace work into that sequence. [Defects](defects.md) records defect evidence, and the [acceptance ledger](acceptance-ledger.md) records manual results and decisions.
+Updated 2026-11-18 on `881786c`; reconciled on branch `phase15/completion`. The roadmap owns phase order and dependencies; this file owns current implementation, review, and acceptance obligations. Historical finding IDs (R01–R18, DEF-*, Fable C*, DR-*, OD-*, and similar) remain trace references and are not hierarchy levels. See the [ID migration crosswalk](#id-migration-crosswalk). Detailed evidence and scope remain in the sections below and their linked authoritative records.
 
-## Current package disposition
+## Maintained work register
 
-| Work | Current state / next obligation |
-|---|---|
-| R01 | **Complete** for the owner-accepted backend scope. [Acceptance and separate follow-ups](#r01--runtime-authorization-and-transaction-defects). |
-| Batch 1 / P01 / P07 pilots | Encounter audience, item-save feedback and record-time dialogs implemented; shared adoption and integrated/browser/owner acceptance remain. Do not rebuild the pilots. |
-| DEF-007 | Shared half-open membership predicate and portal recovery implemented; integrated G4/TC-06/TC-21 and owner acceptance remain. Travel still uses open-ended membership (R04/U1). No-clock policy is already decided. |
-| P02 | Owner-accepted at `81bf164`; B9/B16/B20 remain browser follow-ups, B21 is owner-deferred/unverified. |
-| Context-navigation correction | CNC-1–3 and owner-evidence/pending-state repairs implemented through `6cdc68b`; review outcome at `bdd541b`: PASS WITH NONBLOCKING VERIFICATION LIMITATION. Browser checks and retained follow-ups remain; see below. |
-| P03-A | A0–A4 and P0–P3 implemented and reviewed. A5a and A5b have independent review records, including nonblocking findings. A5c is implemented and its separate review remains outstanding in the [A5 record](player-profile-design.md). No production player-profile writer until P03-B. The DEF-019 prerequisite was closed within its agreed scope. A6 portal work and A7 reconciliation, optional preview and acceptance remain. |
-| P03-B/C/S | Ongoing campaign control/bounded player operations, explicit canonical authoring and subtype compatibility, and campaign mechanical-state isolation remain unimplemented under accepted ADR 0021. A4 backend delivery does not complete the character refactor. |
-| R19 | ADRs 0021–0023 accepted; implementation and primary-PC coordination gates remain in the [foundation plan](rules-foundations.md). Rules engine, content/provenance, creature templates and later combatant work are not delivered merely by ADR acceptance. |
-| P04–P17 | Detailed remaining scope and acceptance in R05–R18 below. Repairs, proposals and acceptance-only obligations are distinguished. |
-| Scoped roles and authoring kernel | The scoped-role upgrade was rehearsed on a retained snapshot. Preserve the rehearsal limits in [the deployment runbook](../operations/deployment.md). Phase 14 closed with accepted limitations at PR #64 (merge `3046714`, recorded CI 37227612984). Phase 13 portal/access and Phases 0–10 provide the delivered baseline. |
-| Earlier and later phases | Live licensed Foundry v13 acceptance and real-provider AI smoke/Phase 12 closure remain due. Phases 16–22 remain roadmap work; Phase 16 delivery waits for Phase 15. The [roadmap overlap provision](roadmap.md#6-dependency-order) and checkpoint 31 start gate must be reconciled before scheduling a specific Phase 16 slice early. Phase 17 still needs the complete deployment/operations envelope. |
+IDs use parent-qualified hierarchy: `Pnn`, `Pnn-Cnn`, `Pnn-Cnn-Snn`, `Pnn-Cnn-Snn-Tnn`. Numbering follows admitted implementation order; a dependency is listed only where the source records one. **Complete** means the cited scoped work is closed; it does not close neighboring review, browser, or owner acceptance. **Admitted** is approved work; **Deferred** is explicitly postponed; **Proposal** has not been admitted. Acceptance rows are separate from implementation rows.
 
-## Priority and dependencies
+| ID | Work / outcome | Status | Dependencies | Completion / next obligation |
+|---|---|---|---|---|
+| P14 | Shared authoring kernel and campaign setup | Complete | — | Phase 14 closed with accepted limitations; see [roadmap](roadmap.md#7-phase-14--shared-authoring-kernel-and-campaign-setup). |
+| P15 | GM authoring and campaign operations | In progress | P14 | Phase exit remains gated by the accepted 15H contracts and integrated portal journey. |
+| P15-C01 | Runtime authorization and transaction integrity | Complete (bounded R01 scope) | P14 | Owner accepted backend scope at `f21fb23`; preserve evidence and separate nonblocking follow-ups below. |
+| P15-C01-S01 | Accepted R01 authorization scope | Complete | — | Evidence-backed closure retained below. |
+| P15-C01-S02 | Approved R01 residuals | Admitted follow-up | P15-C01-S01 | Track separately; no reopening of accepted scope. |
+| [P15-C01-S01-T01](#r01--runtime-authorization-and-transaction-defects) | R01 accepted backend authorization scope | Complete | — | 187 finalized routes, zero pending, five world routes explicitly excluded; evidence and limits in [R01 detail](#r01--runtime-authorization-and-transaction-defects). |
+| [P15-C01-S02-T01](#r01--runtime-authorization-and-transaction-defects) | R01 residual authorization and transaction obligations | Admitted follow-up | P15-C01-S01-T01 | Reproduce/resolve DEF-020/021; disposition F-E4-2 policy and F-E4-3/4 defects; handle approved/deferred F-E4-5 and excluded-route follow-up; retain other named residuals in R01 detail. No Phase 15 or R01 scope reopening implied. |
+| P15-C02 | Character authorization, access groups, and shared actor contracts | In progress | P15-C01-S01-T01 | Reconcile operation-specific deny behavior and complete the accepted P03-A/B/C/S contracts; preserve access and compatibility requirements. |
+| [P15-C02-T01](#r02--character-specific-deny-consistency) | Character-specific deny matrix and approved mismatch corrections (R02 / DEF-016) | Admitted | ? | Record preserve/already-fixed/mismatch/unresolved per operation; implement only approved mismatches and verify the named personas, revocation, and wait cases. |
+| [P15-C02-T02](#r03--access-group-classification-and-duplicate-registration) | Access-group state/race classification (R03 / DEF-017) | Admitted | — | Cover both deactivation orderings, grant behavior, error classification, audit and receipts; DEF-002 duplicate registration is historical/closed. |
+| [P15-C02-T03](defects.md#def-012--recovery-cannot-restore-an-owner-when-a-custom-role-is-the-only-access-manager) | Recovery with custom access-manager roles (DEF-012) | Open policy/design obligation | Before granting `access.manage` to a non-owner role | Define recoverability and stranded-campaign semantics; verify recovery and reporting before enabling such grants. |
+| [P15-C02-S03](shared-characters.md) | P03-A/B/C/S actor, revelation, control, authoring and state contracts | In progress | P15-C01-S01-T01 | Separate accepted design from delivered implementation; per-character access-preserving migration and compatibility gates remain. See [shared-character design](shared-characters.md) and [R19 foundation plan](rules-foundations.md). |
+| [P15-C02-S03-T01](player-profile-design.md) | P03-A profile, revelation and audience-safe reads | Admitted; review/acceptance pending | — | Complete A5c independent review, A6 portal work, A7 reconciliation, optional preview decision, and scoped acceptance; no production profile writer before the P03-B gate. |
+| [P15-C02-S03-T02](shared-characters.md) | P03-B control assignment and bounded controller operations | Admitted | P15-C02-S03-T01 where controller projection is consumed | Freeze the contract, implement ongoing control/delegation and operation allow-list, then verify revocation and audience behavior. |
+| [P15-C02-S03-T03](shared-characters.md) | P03-C canonical authoring responsibility and subtype compatibility | Admitted | P15-C02-S03-T02 compatibility as specified in ADR 0021 | Migrate additively; preserve UUIDs/history/access; retain guarded adapters until consumers move; use reviewed per-character manifest. |
+| [P15-C02-S03-T04](shared-characters.md) | P03-S campaign mechanical-state isolation | Admitted | P15-C02-S03-T02 before controller state writes | Campaign-key state, origin attribution/effect classification, family-atomic reviewed migration and stopped-writer cutover; keep seeding/copy disabled pending enablement acceptance. |
+| P15-C03 | Membership, travel, and temporal behavior | In progress | P15-C02-S03-T04 for affected refactor integration | Keep half-open membership semantics and branch membership non-inheritance. |
+| [P15-C03-T01](#r04--effective-time-membership-and-travel) | DEF-007 integrated membership acceptance | Admitted acceptance | — | Exercise join/leave boundaries, no-clock/branch behavior, all affected readers/selectors, denies and independent authorities; source implementation alone does not close acceptance. |
+| [P15-C03-T02](#r04--effective-time-membership-and-travel) | U1 travel-at-time policy and command/preview alignment (R04) | Policy unresolved; implementation admitted after decision | P15-C03-T01 | Decide action-time versus campaign-Now fallback and preview-change behavior; then resolve once, share predicate, revalidate at commit, and cover temporal boundaries/concurrency. Existing recommendation is not approval. |
+| P15-C04 | Shared save, error, and recovery behavior | Admitted | — | Repair only evidenced deviations; preserve confirmed-write receipts while clearing inaccessible data. See [R05 detail](#r05--save-error-and-recovery-consistency). |
+| [P15-C04-T01](#r05--save-error-and-recovery-consistency) | Recovery adoption and Knowledge/startup preference repairs (R05) | Admitted | — | Verify confirmed/unread/unknown outcomes and owner-bound retries; fix Knowledge reread and matching startup-preference confirmation; migrate each form with its domain work. No generic token persistence. |
+| [P15-C04-T02](#r05--save-error-and-recovery-consistency) | Reuse Batch 1/P01/P07 interaction pilots | Pilot behavior implemented; adoption/acceptance pending | P15-C04-T01 where shared recovery applies | Reuse encounter-audience, item-save feedback and record-time dialog outcomes in their owning workflows; verify shared adoption and integrated/browser/owner acceptance without rebuilding pilots. |
+| P15-C05 | Campaign Home, events, and world workflows | Admitted | P15-C02-S03-T04 for mechanical event projection | Implement only reproduced defects and admitted usability outcomes. |
+| P15-C05-S01 | Campaign event projection | Admitted | P15-C02-S03-T04 for mechanical event projection | Reproduce before changing the audience-safe projection. |
+| P15-C05-S02 | Platform Users administration | Admitted | — | Stage changes with explicit outcomes and recovery. |
+| P15-C05-S03 | World sharing | Admitted | — | Search remains policy-gated. |
+| [P15-C05-S01-T01](#r06--campaign-event-tiles-and-details) | Event tile/detail context (R06) | Admitted, reproduction first | P15-C02-S03-T04 where effects are shown | Reproduce route/persona/data; use audience-safe explanation DTO; do not expose private reasons or add member-safe fields without separate admission. |
+| [P15-C05-S02-T01](#r07--platform-users-administration) | Platform Users role editing workflow (R07) | Admitted | — | Separate creation/list navigation; stage role deltas with honest per-operation outcomes and authoritative reconciliation; preserve activation/reset secret handling. |
+| [P15-C05-S03-T01](#r08--world-sharing) | World sharing workflow (R08) | Admitted UI refinement; picker policy unresolved | — | Improve current panels; admit search only after discoverability fields, bounds, paging and non-disclosure policy are decided. |
+| [P15-C05-S04](#r09--smaller-layout-list-and-form-repairs) | Smaller layout/list/form repairs (R09) | Admitted, split by outcome | — | Preserve filters and navigation context; keep unrelated first-100-world limitation deferred. |
+| [P15-C05-S04-T01](#r09--smaller-layout-list-and-form-repairs) | Worlds active-plus-archived selection | Admitted | — | Union eligible visible worlds without duplicates; preserve URL/Back state and picker eligibility. |
+| [P15-C05-S04-T02](#r09--smaller-layout-list-and-form-repairs) | Planned-session default ordering | Admitted | — | Sort by scheduled timestamp, nulls last, deterministic ties; preserve explicit user sort. |
+| [P15-C05-S04-T03](#r09--smaller-layout-list-and-form-repairs) | Dungeon-area scalar authoring fields | Admitted | — | Add supported summary/dimensions/environment fields with existing validation and round-trip behavior. |
+| [P15-C05-T04](defects.md#def-008--a-future-dated-organization-status-is-immediately-displayed-as-now) | Future-dated organization status projection (DEF-008) | Policy unresolved | — | Decide effective-clock projection versus latest-recorded labeling, then retest G7/TC-36. |
+| P15-C06 | Session operation and quest workflows | Admitted | P15-C02-S03-T04 for mechanical consequences | Keep session execution references distinct from proposed preparation links. |
+| P15-C06-S01 | Run Session operation | Admitted | — | Reproduce navigation symptom before changing focus behavior. |
+| P15-C06-S02 | Invitation roles | Policy unresolved | — | Decide role eligibility before storage/API implementation. |
+| [P15-C06-S01-T01](#r10--run-session-navigation-and-width) | Run Session log handoff and layout (R10) | Admitted, browser reproduction first | — | Explicit log action focuses/scrolls even when already selected; preserve drafts, normal history, and read-only behavior. |
+| [P15-C06-S02-T01](#r11--campaign-roles-in-invitations) | Invitation role assignment (R11 / DEF-010 adjacent) | Policy unresolved; implementation admitted after decision | — | Decide eligible role classes/custom/owner roles; then store nullable campaign role intent and assign atomically under current authority. Keep one-time-token recovery separate. |
+| [P15-C06-T03](defects.md#def-010--leaving-the-invitations-page-can-abandon-an-accepted-issue-response-and-lose-the-one-time-token) | One-time invitation issue response ownership and recovery (DEF-010 / P02 F-1) | Open design obligation | — | Guard and own the issue operation; decide revoke/reissue and duplicate handling; clear on logout, owner/session/authority loss. Keep tokens out of generic receipt persistence. |
+| [P15-C06-S03](#r12--time-entry-and-duration-arithmetic) | Time entry and duration arithmetic (R12) | Partly admitted; arithmetic policy unresolved | — | Improve current input first; before arithmetic schema/API work decide eligible anchors, precision, boundaries, negative durations and provenance. |
+| [P15-C06-S03-T01](#r12--time-entry-and-duration-arithmetic) | Time-entry interaction using current model | Admitted | — | Deliver specified interaction improvement without changing calendar semantics or advancing Now. |
+| [P15-C06-S03-T02](#r12--time-entry-and-duration-arithmetic) | Duration arithmetic contract and implementation | Proposal pending policy/admission | P15-C06-S03-T01 | Define exact eligible calendar anchors and server-recomputed preview before implementation; narrative/partial anchors must not be treated as exact. |
+| [P15-C06-S04](#r13--quest-objective-authoring) | Quest objective and outcome workflows | Admitted with capability boundaries | — | Preserve progressed-quest structural lock and distinguish authored descriptions from applied state. |
+| [P15-C06-S04-T01](#r13--quest-objective-authoring) | Quest objective action placement (R13a) | Admitted | — | Separate disclosure/content from management actions; preserve focus and existing objective behavior. |
+| [P15-C06-S04-T02](#r13--quest-objective-authoring) | Missing manual objective categories (R13b) | Proposal pending inventory | — | Admit only if an actual missing category is demonstrated; `other` already exists and manual categories are not evaluators. |
+| [P15-C06-S04-T03](#r13--quest-objective-authoring) | Automatic objective evaluator contract (R13c) | Deferred | Separate domain/API decision | Define triggers, visibility, reversal/repeat behavior and causal state changes before any implementation. |
+| [P15-C06-S05](#r14--guided-quest-outcome-review) | Guided quest outcome review and consequences | Admitted with deferred extensions | — | Keep presentation separate from state-changing consequence design. |
+| [P15-C06-S05-T01](#r14--guided-quest-outcome-review) | Guided quest outcome review (R14) | Admitted | — | Map UI to existing reads/commands, guide status/review with per-step recovery; never imply authored rewards were applied. |
+| [P15-C06-S05-T02](#r14--guided-quest-outcome-review) | Persistent outcome choice / automatic consequence engine | Deferred proposal | P15-C02-S03-T04 and separate domain/API decision | No new state or reward writes until explicit admission and P03-S-compatible design. |
+| P15-C07 | Knowledge and location discovery | Admitted | — | Preserve lifecycle, audience and hidden-ancestor boundaries. |
+| P15-C07-S01 | Knowledge author browsing | Admitted | P15-C04-T01 | Use existing authorized queries and recovery contract. |
+| P15-C07-S02 | Location hierarchy browsing | Admitted | — | Add bounded child discovery over existing containment. |
+| [P15-C07-S01-T01](#r15--unpublished-knowledge-author-browsing) | Unpublished Knowledge author browsing (R15) | Admitted | P15-C04-T01 for recovery integration | Add explicit author/publication filter through existing authorized queries; filter before counts/paging; keep lifecycle and perspective distinct. |
+| [P15-C07-S02-T01](#r16--location-hierarchy) | Bounded location hierarchy browsing (R16) | Admitted | — | Authorized child navigation/search with hidden-chain truncation and deterministic paging; reuse existing containment and reparent commands. |
+| P15-C08 | Session preparation links | Proposal only | — | No general link model admitted; preserve existing execution associations. |
+| P15-C08-S01 | Cross-domain preparation-link model | Proposal only | Separate scope/authorization decision | Decide target kinds, scope, cardinality, visibility and provenance before admission. |
+| [P15-C08-S01-T01](#r17--session-preparation-links-and-operational-navigation) | General session preparation links (R17 / S04) | Proposal, not admitted | Separate scope/authorization decision | Keep existing encounter/session execution links; no general link model until target kinds, scope, cardinality, visibility and provenance are accepted. |
+| P15-C09 | Integrated Phase 15 completion gate | Admitted acceptance gate | All accepted Phase 15 implementation checkpoints | Keep implementation, independent review, browser evidence and owner acceptance distinct. |
+| P15-C09-S01 | Integrated portal and release acceptance | Admitted acceptance gate | — | Final-head reconciliation and evidence. |
+| [P15-C09-S01-T01](#r18--integrated-acceptance-and-release-preparation) | Integrated Phase 15 acceptance and release preparation (R18) | Admitted acceptance gate | All accepted Phase 15 implementation checkpoints | Reconcile guide/coverage/defects on final head; run required automated, migration, browser/persona, independent review and owner acceptance as distinct evidence. Existing verification records remain historical. |
+| P15-C09-S02 | Typed-state branch inheritance disposition | Scope decision unresolved | — | Compare the accepted ancestry contract to dungeon/quest readers; implement or explicitly defer with a precise limitation. |
+| [P15-C09-S02-T01](#documentation-drift-at-the-audited-head) | Fable C1 branch-state discrepancy | Scope/decision unresolved | P15-C09-S02 | Record an owner-approved implementation or deferral disposition before claiming this discrepancy closed. |
+| P15-C09-S03 | Remaining defect and acceptance evidence reconciliation | Admitted acceptance | — | Carry documented discrepancies and browser/persona obligations to their evidence owner; record dispositions without inferring closure. |
+| [P15-C09-S03-T01](#focused-follow-up-evidence-and-dispositions) | DEF-DOC-01, DEF-009 adjacent references, and unreproduced I01/E02/S03/A02 | Admitted disposition/acceptance work | P15-C09-S03 | Amend G6 or collect the reason; retain encounter and browser follow-ups; reproduce remaining interaction hypotheses before closure. |
+| P16 | Player authoring, contribution and collaboration | Planned; delivery gated, limited overlap needs checkpoint 31 reconciliation | P15-C09-S01-T01 | Schedule an early slice only after eligibility is resolved under the roadmap overlap provision; full delivery waits for Phase 15 closure. |
+| P16-C01 | Player character authoring | Planned behind Phase 15 gate | P15-C09-S01-T01; P15-C02-S03 | Shared build/profile commands; label unvalidated submissions; consume the P19-C04 interface only when accepted. |
+| P16-C02 | Notes, bookmarks, theories and private collaboration | Planned behind Phase 15 gate | P15-C09-S01-T01 | Distinct ownership/audience/lifecycle; GM-role APIs/search/exports/context cannot read unshared material; preserve host-admin privacy limit. |
+| P16-C03 | Player session contributions and dashboard | Planned behind Phase 15 gate | P15-C09-S01-T01 | Submissions remain proposals; accepted material uses Phase 15 commands; no automated extraction (Phase 18). |
+| P17 | Standalone-product acceptance and self-hosted packaging | Planned | P15-C09-S01-T01; P16 exit for full loop | Browser/accessibility, deploy/upgrade, backup/restore and final-head CI evidence in the planned verification record. |
+| P18 | Session intelligence and controlled import | Planned | Manual authoring paths P14–P16; P17 standalone gate for milestone order | Immutable owned sources, reviewable proposals and promotion through existing commands; no direct domain-table writes. |
+| P19 | Rules-aware character, creature and encounter expansion | Planned; limited foundations may proceed | P15-C02-S03; P17 gates full delivery | Keep P19-C01 architecture decisions and isolated P19-C03/C04 infrastructure distinct from P19-C05 user-facing delivery; see [rules foundations](rules-foundations.md). |
+| [P19-C01](rules-foundations.md) | Architecture and contracts (R19-P0) | Admitted design work | — | Accept creature-model and rules/source-authorization decisions and stable interfaces before dependent infrastructure. |
+| P19-C02 | Shared actor foundation (R19-P1) | Pending Phase 15 delivery | P15-C02-S03 | Phase 15 owns this contract; Phase 19 does not duplicate the actor model. |
+| [P19-C03](rules-foundations.md) | Rules definition foundation (R19-P2) | Planned; isolated compatible work may proceed | P19-C01 | Additive source-aware definitions/versioning; user-facing selection waits for P19-C05. |
+| [P19-C04](rules-foundations.md) | Deterministic mechanics foundation (R19-P3) | Planned; isolated compatible work may proceed | P19-C01 | Limited deterministic calculation/preview; explicit unsupported indicators; user-facing features wait for P19-C05. |
+| [P19-C05](roadmap.md#12-phase-19--rules-aware-character-creature-and-encounter-expansion) | Full Phase 19 delivery (R19-P4) | Planned; gated | P17; P19-C02–P19-C04 | User-facing rules/content/creature/encounter delivery after standalone gate. |
+| P20 | Grounded assistance and structured NPC scenes | Planned | P15–P19 audience/authoring contracts as specified in roadmap | Verify provider and local-model paths, gates and purpose-specific context before enabling surfaces. |
+| P20-C01 | Provider and feature-gate verification | Planned | P17 | Provider and request-gate evidence before enabling each surface. |
+| P20-C02 | Interaction audience policy | Policy unresolved | — | Resolve C4 semantics and cover direct/indirect readers. |
+| P20-C01-T01 | Provider, local-model and feature-gate verification (Fable C2/C3) | Planned | P17; P20 surface gates | Correct runtime dependency packaging, verify real-provider/local-model paths, and decide/enforce request-level feature semantics before enabling surfaces. |
+| P20-C02-T01 | Interaction audience policy (Fable C4) | Policy unresolved | — | Decide whether `is_visible_to_players` is enforced, replaced or narrowed; verify direct and indirect projections before claiming disclosure behavior. |
+| P21 | Integrations and adapters | Planned | Stable commands; Phase 17 standalone gate | Finish licensed Foundry acceptance and add optional adapters without alternate sources of truth. |
+| P22 | Hosted offering and demonstrated-need expansion | Deferred | Stable self-hosted product and demonstrated demand | No admitted implementation; revisit only on demonstrated need. |
 
-1. Reconcile admitted/deferred scope now (R18a). Compare character-deny policy by operation (R02a).
-2. Preserve R01 and its same-key serialization and commit-before-response guarantees. Track separately excluded routes and deferred defects under the accepted scope below.
-3. Complete the remaining P03-A/B/C/S contracts and acceptance. A5 is optional for entry to A6, not a reason to mark all player-profile work complete.
-4. Finish membership acceptance and settle travel time policy (R04). Establish shared recovery (R05), then adopt it with each affected form family.
-5. Group bounded work by shared workflows: Campaign Home/events (R06/R09), sessions (R09/R10), administration/sharing/invitations (R07/R08/admitted R11), Knowledge (R05/R15), locations/dungeon areas (R09/R16), quests (R13/R14). These groups need not form a strict chain.
-6. Admit and design new search, duration arithmetic, evaluators, consequences and session links separately. Existing repairs need not wait for them. Final integrated exit is R18.
-7. C1 remains an implementation gap. C2 and C3 share the September dependency and feature-setting work. C4 still needs an audience-policy disposition.
+## ID migration crosswalk
 
-## Other open defects and acceptance obligations
+This is traceability, not a second work register. Review IDs remain unchanged in defect evidence and historical records; links below identify their current delivery destinations. Old P01/Pxx and CP labels found in dated reviews are also historical unless explicitly mapped here.
 
-| ID / work | Remaining disposition |
-|---|---|
-| DEF-001/005/006 | Fixes and scripted browser evidence exist (including `88ee96a`); carry remaining coverage variants, human/owner acceptance and final-head evidence. Do not revive superseded fix proposals. R05's remaining recovery gaps are separately scoped. |
-| DEF-008 | Organization status reads latest stored state as “Now”; decide effective-clock projection versus latest-recorded labeling, then retest G7/TC-36. Unscored semantics triage. |
-| DEF-DOC-01 | Relationship restore cannot collect the reason the guide requests. Add reason entry or amend G6; do not manufacture audit evidence. |
-| DEF-009 | Encounter projection implemented; integrated API/owner acceptance remains. `active_encounter_id` filtering was implemented by A0 (`fca3ac7`), so it is no longer missing work. Sync-state encounter-reference policy and dungeon-area discovery limitation remain separately scoped. |
-| DEF-010 / P02 F-1 | Pending or displayed invitation tokens can be lost on departure. Guard/own the issue operation; decide revoke-and-reissue and duplicate handling. Token recovery must stay within the same authenticated, authorized issuer/campaign and clear on logout/owner/session/authority loss. Sanitized replay cannot recover the token. Distinct from R01's F-1. |
-| DEF-012 | Recovery/stranded detection accepts a custom access manager without a built-in owner. Resolve before enabling an application path that grants `access.manage` to a non-owner role. |
-| DEF-016/017/019–021, DEF-015 F-1 | See R01–R03 for current disposition. The original grades and identifiers remain historical. |
-| P02 browser evidence | B20 keyboard activation; B9 physical Escape and separate backdrop checks; B16 actual 200%/400% zoom. B21 remains deferred/unverified. Preserve reload/new-tab/history, focus, touch, narrow layout and reduced-motion coverage obligations where not executed. |
-| Context-navigation browser evidence | Real user/browser-session owner transitions, sign-out/in; NVDA/VoiceOver (respect the owner's AT deferral), Edge/other browsers, physical keyboard, 400% zoom, Back/Forward beyond the chooser case, two-tab revocation. See correction plan §10.4/§10.7. |
-| Context-navigation follow-ups | N3 unexplained load-sensitive intermittency (Low); N5 `TimelinePage` breadcrumbs built from typed IDs (informational); Q1 possible World-selection chooser improvement (proposal). First-100-worlds limit remains owner-deferred. N4's obsolete ignored probe was removed in this cleanup, with its bytes preserved; production regression tests remain. |
-| Test-harness follow-ups | A1 wait-observation flake not generally closed by A3's diagnosed process-stall correction. A3/A4 retain best-effort thread cleanup after join timeouts, fixed-budget waits elsewhere, one undiagnosed migration-test failure under triple-runner load, and the unidentified source of process freezes. Historical failed runs remain evidence, not current failure counts. |
+| Historical reference | Current delivery ID(s) | Migration note |
+|---|---|---|
+| R01 | P15-C01-S01-T01; P15-C01-S02-T01 | Accepted bounded scope is complete; only separately listed residuals remain. Historical F/S/E slice names and evidence are preserved. |
+| Batch 1 / P01 / P07 pilots | P15-C04-T02 | Encounter-audience, item-save feedback and record-time dialog pilots exist; shared adoption and acceptance remain. |
+| Context-navigation CNC-1–3 and owner-evidence/pending-state repairs | P15-C09-S03-T01 for residual browser evidence | Implemented through `6cdc68b`; review outcome at `bdd541b` was PASS WITH NONBLOCKING VERIFICATION LIMITATION. Preserve the stated browser and owner-evidence limits. |
+| R02 / DEF-016 | P15-C02-T01 | Operation-by-operation deny reconciliation. |
+| R03 / DEF-002, proposed DEF-017 | P15-C02-T02 | DEF-002 closed; DEF-017 remains a distinct race/classification obligation. |
+| R04 / DEF-007, U1 | P15-C03-T01; P15-C03-T02 | Membership acceptance and travel policy/implementation are separate. |
+| R05 / P01 | P15-C04-T01 | Shared recovery foundation/adoption; already delivered helper behavior is not rebuilt. |
+| R06 / P04 | P15-C05-S01-T01 | Event projection and audience-safe explanation work. |
+| R07 / P05 | P15-C05-S02-T01 | Platform Users administration. |
+| R08 / P06 | P15-C05-S03-T01 | Existing sharing panels; account search remains policy-gated. |
+| R09 / P08 | P15-C05-S04 and its three task IDs | Split by independent outcomes, no blanket layout rewrite. |
+| R10 / P09 | P15-C06-S01-T01 | Run Session operation. |
+| R11 / P10 / DEF-010 | P15-C06-S02-T01 | Role intent is separate from one-time invitation-token recovery. |
+| R12 / P11 | P15-C06-S03 and its two task IDs | Input improvement versus unresolved arithmetic contract. |
+| R13 / P12 | P15-C06-S04 and its three task IDs | UX admitted; category/evaluator work is proposal/deferred. |
+| R14 / P13 | P15-C06-S05-T01; P15-C06-S05-T02 | Guided review admitted; persistent outcomes/consequences deferred. |
+| R15 / P14 | P15-C07-S01-T01 | Author browsing; not a world-only workspace. |
+| R16 / P14 | P15-C07-S02-T01 | Child hierarchy browse; containment storage already exists. |
+| R17 / P15/P16, S04 | P15-C08-S01-T01 | Proposal only; existing execution links stay. |
+| R18 / P17 | P15-C09-S01-T01 | Integrated Phase 15 gate; separate acceptance evidence types remain. |
+| DEF-001/005/006 | P15-C04-T01; P15-C09-S01-T01 | Shared recovery fixes exist; retain distinct final-head/browser evidence and unread-write obligations. |
+| DEF-007 | P15-C03-T01 | Integrated temporal-membership acceptance. |
+| DEF-008 | P15-C05-T04 | Effective-time versus latest-recorded projection decision and retest. |
+| DEF-DOC-01 | P15-C09-S03-T01 | Guide/UI restore-reason discrepancy; amend G6 or collect the reason. |
+| DEF-009 | P15-C09-S03-T01; P15-C05-S01-T01 | Audience fix and `active_encounter_id` work are recorded; retain integrated/owner acceptance and scoped adjacent limitations. |
+| DEF-010 | P15-C06-T03; P15-C06-S02-T01 | Token response recovery is separate from intended invitation role behavior. |
+| DEF-011/013/014/015 | Disposition recorded in [defect register](defects.md) | Implementation fixes are recorded; independent review/acceptance status remains exactly as stated in the defect register. |
+| DEF-012 | P15-C02-T03 | Recovery design before custom roles can grant `access.manage`. |
+| DEF-016 | P15-C02-T01 | Operation matrix and approved mismatch corrections. |
+| DEF-017 (proposed) | P15-C02-T02 | Group-state race classification. |
+| DEF-018/019 | Disposition recorded in [defect register](defects.md) and R01 detail | Existing fixes/accepted bounded work; no stale pending proposal restored. |
+| DEF-020/021 | P15-C01-S02-T01 | Production-path reproduction and verification obligations. |
+| Fable C1—C4 | P15-C09-S02-T01; P20-C01-T01; P20-C02-T01 | C1 disposition, C2/C3 provider/gate work, and C4 policy are distinct. |
+| Fable D1—D11 | Historical review IDs | Dispositions remain in the dated documentation review; no outstanding task is recreated where already reconciled. |
+| DR-1 | P15-C09-S03-T01 | Guide correction and TC-10/TC-31 acceptance; recorded policy remains unchanged. |
+| DR-2 | P15-C02-T01 | Inventory capability/deny matrix; accepted access policy remains in the access contract. |
+| DR-3 | P15-C09-S03-T01 | Member-safe session roster acceptance. |
+| DR-4 / DR-6 | P15-C05-S01-T01; P15-C09-S03-T01 | Event cause/explanation contract and audience-safe acceptance; do not add schema absent demonstrated need. |
+| DR-5 | P15-C07-S01-T01 | Knowledge archive-browse eligibility and publication/lifecycle distinction. |
+| DR-7 | P15-C02-S03 | Scoped-role defaults remain accepted; no reopen from renumbering. |
+| DR-8/DR-9 | P15-C09-S03-T01 | Fixture equivalence and explicit residual-risk acceptance remain acceptance records, not implementation scope. |
+| C4/C7/C9/C10 deferred refactors | P16-C01 or P18 per the deferred-refactoring section | Preserve the stated revisit condition; no task is admitted solely by assigning a future phase. |
+| Recovery episode map / single-router assumption | No active delivery ID | Current known limits lack a demonstrated user-facing failure; revisit on a reproduced regression or multi-router support requirement. |
+| CP-4/6/7/8/9a/9b/11 | P15-C02-S03; P15-C02-T01; P15-C07-S01-T01; P15-C09-S03-T01; P15-C05-S01-T01 | Earlier checkpoint labels remain trace references; their decision/acceptance meanings map to the cited current work or recorded disposition. |
+| P03-A/B/C/S | P15-C02-S03-T01 through P15-C02-S03-T04 | Accepted design identifiers retained in ADRs/history; current obligations are split by contract. |
+| R19-P0/P1/P2/P3/P4 | P19-C01/C02/C03/C04/C05 (legacy aliases retained in rules-foundations) | Phase 19 foundation package names retained as cross-references; roadmap gates remain authoritative. |
+| P16–P22 roadmap phases | P16–P22 | Phase IDs were already stable; their planned/deferred disposition is now represented in the maintained register. |
 
-[Original 43 findings and November review evidence](review-2026-11-11.md#finding-by-finding-traceability)
+## Current source ownership
 
-## Consolidated implementation work (R01–R18)
+- [Roadmap](roadmap.md) owns delivery sequence, phase boundaries and cross-phase dependency gates.
+- This register owns current status, next obligation, and historical finding-to-delivery mapping.
+- [Defect register](defects.md) owns defect evidence and defect disposition; [acceptance ledger](acceptance-ledger.md) owns runs and owner decisions.
+- Active detailed contracts stay in [shared-character design](shared-characters.md), [ownership design](ownership-design.md), [player-profile design](player-profile-design.md), [context-navigation correction plan](context-navigation.md), and [rules foundations](rules-foundations.md). This register links to them instead of duplicating their full requirements.
 
-The detailed entries replace the two November 9 local reports and the duplicate package
-briefs. Existing contracts govern implementation; recommendations below do not override
-accepted policy. Browser hypotheses remain hypotheses until reproduced.
+## Historical review and disposition detail
 
-| Review ID | Existing package / finding |
-|---|---|
-| R01 | DEF-019–021; DEF-015 follow-up F-1 (stale authorization) |
-| R02 | DEF-016; P03-A/B/C/S operation policy |
-| R03 | DEF-002 and proposed DEF-017 |
-| R04 | DEF-007 acceptance and U1 travel |
-| R05 | P01; remaining save/recovery adoption |
-| R06 | P04 events |
-| R07 | P05 Platform Users |
-| R08 | P06 World sharing |
-| R09 | P08 layouts/lists/forms |
-| R10 | P09 Run Session |
-| R11 | P10 invitation roles; DEF-010 remains distinct |
-| R12 | P11 time entry/duration |
-| R13 | P12 quest objectives |
-| R14 | P13 guided quest outcomes |
-| R15 / R16 | P14 unpublished Knowledge / location hierarchy |
-| R17 | P15/P16 session links |
-| R18 | P17 integrated exit |
+The original R01–R18 findings, evidence, accepted scope, unresolved questions, and limitations continue below. Those IDs are historical reference labels, not backlog hierarchy IDs.
+
+The current record links to the preserved [fresh authorization plan](../R01_FRESH_AUTHORIZATION_PLAN_2026-11-12.md), [S6 readiness assessment](../R01_S6_READINESS_ASSESSMENT_2026-11-18.md), and historical [E4 reference-corpus design](../R01_E4_REFERENCE_CORPUS_DESIGN_2026-11-18.md). The E4 document remains design evidence; its F-E4 follow-ups below were not closed by R01 acceptance.
 
 ### R01 — Runtime authorization and transaction defects
 
@@ -199,6 +287,8 @@ accepted policy. Browser hypotheses remain hypotheses until reproduced.
 
 **Acceptance:** existing objectives and progressed quests remain valid; no accidental toggle/remove; authorized actors only; unsupported types refused; manual categories never advertised as automatically tracked. Keep the structural-progress lock. Do not silently weaken historical invariants to make editing easier.
 
+<a id="r14--guided-quest-outcome-review"></a>
+
 ### R14 — Guided quest outcome/review
 
 **Source evidence:** [definition sections](../../portal/src/components/quests/QuestCompletionSections.tsx) author outcomes/rewards; [runtime UI](../../portal/src/components/quests/QuestProgressPanel.tsx) invokes status operations. [QuestActionRequest](../../src/dnd_ai/api/quest_runtime.py) has status, party, time and note, not outcome/reward execution. [The command](../../src/dnd_ai/commands/quest_runtime.py) records the quest state/event; it does not distribute authored rewards.
@@ -251,7 +341,9 @@ accepted policy. Browser hypotheses remain hypotheses until reproduced.
 
 ## Decisions still needed for proposed additions
 
-The November 9 review proposed these rubric grades; they are retained for triage,
+The maintained table above owns delivery status. This decision record preserves the earlier triage recommendations and unresolved policy context; it does not admit work by itself.
+
+The November 9 review proposed these rubric grades; this historical triage record is retained,
 not adopted as new defect-register dispositions or owner risk acceptance:
 
 | Finding | Proposed factors / severity | Evidence and readiness |
@@ -278,7 +370,9 @@ Check for later accepted decisions first; do not reopen settled choices.
 | Time arithmetic | Current entry model first; exact eligible calendar anchors and fixed durations before broader calendars. | R12b/c; entry UI can proceed when specified. |
 | New capabilities | Defer evaluators, automatic consequences, member-safe reason storage and general session links unless already admitted. | R13c, expanded R14, R06c, R17. Manual categories also need an actual missing-category requirement. |
 
-## Other explicit follow-ups
+## Focused follow-up evidence and dispositions
+
+The maintained table above owns current status and next obligations. This section retains the source evidence and detailed criteria for those rows; it is not a second work register.
 
 Local usability notes (observations, no acceptance or new priority): party membership entry should offer the campaign’s Now, screen left edges vary, and Character → Relationship can highlight both World and Character. Check role-appropriate Quest layouts and consistent publication badges across Quests and Knowledge. Publication and discovery remain separate. Cross-reference R04, R09, R12 and the accepted navigation contract when triaging.
 
@@ -373,7 +467,7 @@ Keep unresolved findings visible without importing its old severity labels as a 
 | 9 | Tests not type-checked | Review scope/cost under ISSUE_GRADING_RUBRIC; current CI mypy targets src and the CI helper, not all tests. |
 | 10 | CI type-checks only one script | Still a limited script scope in CI at baseline; decide proportionate follow-up. |
 | 11 | Portal flake under coverage/load | Old reproduction, not proven current cause. Retain alongside later unattributed intermittencies; no passing rerun establishes a cause. |
-| 12 | Stale PROJECT_STATUS | Historical report (current disposition D1 above): Fable D1 reports stale PR #68/A4 status in PROJECT_STATUS, docs index and context-navigation plan at `b0910c4`. Reconcile with the already-current P03-A row above; no test results refreshed. |
+| 12 | Stale PROJECT_STATUS | Historical report (current D1 disposition in the Fable review record): Fable D1 reports stale PR #68/A4 status in PROJECT_STATUS, docs index and context-navigation plan at `b0910c4`. Reconcile with the current P15-C02-S03 row in the maintained register; no test results refreshed. |
 | 13 | Old PLAN AWS-CI contradiction | Superseded operational prose retired; DEVELOPMENT/ADR 0012 govern CI. |
 | 14 | AI feature flag differs from boundary behavior | Expanded by Fable C3: the three `feature_*` settings are used only in config startup validation, no route checks them, and the Discord flag has no consumer. `.env.example` promises AI NPC dialogue is disabled by default. Reconcile intended gates, request enforcement and feature manifest; verify disabled/enabled behavior on affected entry points. Do not claim startup validation enforces requests or fabricate a Discord consumer. |
 | 15 | Built/planned schema labels mixed | Expanded by Fable D4 (schema inventory) and D7 (architecture labels). Reconcile DATABASE_MODEL against imported metadata, label absent tables planned/deferred, document built omissions, and separate current architecture from target architecture. Accepted R19 design is not implemented tables or workers. See D4 and D7 below. |

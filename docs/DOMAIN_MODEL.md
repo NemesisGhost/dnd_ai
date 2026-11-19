@@ -489,7 +489,7 @@ In the implemented access model, a campaign membership can have a relationship t
 
 ### 8.5 Player character
 
-The current PC authoring command creates a typed draft. The owning user is not stored on the character. Publication and character relationships control the available perspective. Shared identity and narrative include canonical location and ownership. The accepted design separates campaign-specific mechanical possession, builds and other mechanical state. It requires reviewed migration and scoped player contributions. [Delivery boundaries](delivery/work-register.md#current-package-disposition)
+The current PC authoring command creates a typed draft. The owning user is not stored on the character. Publication and character relationships control the available perspective. Shared identity and narrative include canonical location and ownership. The accepted design separates campaign-specific mechanical possession, builds and other mechanical state. It requires reviewed migration and scoped player contributions. [Delivery boundaries](delivery/work-register.md#maintained-work-register)
 
 ### 8.6 NPC
 
