@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { characterSheetFixture } from "./fixtures/characterSheet"
+import { liveBody, MARKER_FIELDS, NULL_PROFILE, PUBLIC_SECTIONS, publicBody } from "./fixtures/publicCharacter"
 import { CharacterPerspectiveContext } from "./context/CharacterPerspectiveContext"
 import { CharacterSheetRoutePage } from "./pages/CharacterSheetRoutePage"
 import { bootstrapFor, installCampaignShellMocks, openApp } from "./test/campaignRoutes"
@@ -518,5 +519,220 @@ describe("Character record: an answer without `sections` (a server that predates
         fireEvent.click(sectionLink("Inventory"))
         expect(await screen.findByRole("link", { name: "Longsword" })).toBeInTheDocument()
         expect(calls("/inventory")).toHaveLength(1)
+    })
+})
+
+// The public tier (A4 §12): what a revelation confers. Each case asserts the rendered page and the
+// request log; "markers" are values in fields the tier must never render.
+describe("Character record: public tier", () => {
+    const PC = "/campaigns/mundivita/characters/pc-1"
+    const ENDPOINTS = ["/sheet", "/builds", "/relationships", "/inventory", "/parties", "/public-profile"]
+    const MARKERS = /LIVE-|MARKER|\b777\b|\b888\b/
+    const LIVE_ONLY = /Hit points|Conditions|Current state|Not recorded|Additional character details/
+    const unavailable = () => screen.findByRole("heading", { name: "Character unavailable" })
+
+    function answer(...bodies: Array<object>) {
+        let next = 0
+        server.on("GET", PC, () => {
+            const item = bodies[Math.min(next++, bodies.length - 1)]
+            return "status" in item ? (item as { status: number; body: unknown }) : { body: item }
+        })
+    }
+    const requestedEndpoints = () => ENDPOINTS.filter((suffix) => calls(suffix).length > 0)
+    const without = (body: object, key: string) => {
+        const copy = { ...body } as Record<string, unknown>
+        delete copy[key]
+        return copy
+    }
+
+    it("renders the released profile on /characters/:id, with Profile and Details, and requests nothing else (A1)", async () => {
+        answer(publicBody({ ...MARKER_FIELDS }))
+        openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        await ready()
+        expect(await screen.findByRole("heading", { level: 1, name: "Aldric" })).toBeInTheDocument()
+        expect(screen.getByText("Player character")).toBeInTheDocument()
+        expect(screen.getByRole("heading", { level: 2, name: "Public profile" })).toBeInTheDocument()
+        expect(screen.getByText("A wary river guide.")).toBeInTheDocument()
+        expect(screen.getByText("Released Elf")).toBeInTheDocument()
+        expect(rowNames()).toEqual(["Details", "Profile"])
+        expect(sectionLink("Profile")).toHaveAttribute("aria-current", "page")
+        expect(sectionLink("Details")).toHaveAttribute("href", WORLD)
+        expect(screen.queryByRole("link", { name: "Sheet" })).toBeNull()
+        expect(document.body.textContent).not.toMatch(MARKERS)
+        expect(document.body.textContent).not.toMatch(LIVE_ONLY)
+        expect(calls("")).toHaveLength(1)
+        expect(requestedEndpoints()).toEqual([])
+        expect(server.calls.some((c) => c.method !== "GET")).toBe(false)
+    })
+
+    it("renders the same content on /world/character/:id for a reader, without a sheet link (A2)", async () => {
+        answer(publicBody({ ...MARKER_FIELDS }))
+        openApp(WORLD, ["campaign.view"], NO_PERSPECTIVE)
+        await ready()
+        expect(await screen.findByRole("heading", { level: 1, name: "Aldric" })).toBeInTheDocument()
+        expect(screen.getByText("Released Medium")).toBeInTheDocument()
+        expect(rowNames()).toEqual(["Details"])
+        expect(document.body.textContent).not.toMatch(MARKERS)
+        expect(requestedEndpoints()).toEqual([])
+    })
+
+    it("offers inventory and parties only as the sections grant, and reads them only when chosen (A3)", async () => {
+        install()
+        answer(publicBody({ sections: { ...PUBLIC_SECTIONS, inventory: true, parties: true } }))
+        server.on("GET", `${PC}/parties`, { body: { character_id: "pc-1", parties: [] } })
+        openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        await ready()
+        expect(rowNames()).toEqual(["Details", "Profile", "Inventory", "Parties"])
+        expect(requestedEndpoints()).toEqual([])
+        fireEvent.click(sectionLink("Inventory"))
+        expect(await screen.findByRole("link", { name: "Longsword" })).toBeInTheDocument()
+        expect(calls("/inventory")).toHaveLength(1)
+        expect(calls("/sheet")).toHaveLength(0)
+    })
+
+    it("omits null fields and shows the neutral line when all are null, with no placeholder text (A5)", async () => {
+        answer(publicBody({ public_profile: NULL_PROFILE }))
+        openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        expect(await screen.findByText("No public details have been shared.")).toBeInTheDocument()
+        expect(document.body.textContent).not.toMatch(/not recorded|unknown|withheld|not released/i)
+    })
+
+    it("shows the live Overview and the released profile apart at summary, and nothing at all with no release (A6, A7)", async () => {
+        answer(liveBody("summary"))
+        const first = openApp(WORLD, ["campaign.view"], NO_PERSPECTIVE)
+        await screen.findByRole("heading", { name: "Public profile" })
+        expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument()
+        expect(screen.getByText("LIVE-SPECIES-MARKER")).toBeInTheDocument()
+        expect(screen.getByText("Released Elf")).toBeInTheDocument()
+        first.unmount()
+        answer(liveBody("summary", { public_profile: null, sections: { ...SUMMARY, public_profile: false } }))
+        openApp(WORLD, ["campaign.view"], NO_PERSPECTIVE)
+        await screen.findByRole("heading", { name: "Overview" })
+        expect(screen.queryByRole("heading", { name: "Public profile" })).toBeNull()
+        expect(document.body.textContent).not.toMatch(/public profile|withheld|not released|no public details/i)
+    })
+
+    it("keeps the sheet and adds the profile to the Details route at full (A8)", async () => {
+        answer(liveBody("full", { sections: { ...FULL, public_profile: true } }))
+        server.on("GET", `${PC}/sheet`, { body: { ...characterSheetFixture, character_id: "pc-1", name: "Aldric" } })
+        const { router } = openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        await ready()
+        expect(sectionLink("Sheet")).toHaveAttribute("aria-current", "page")
+        expect(await screen.findByRole("heading", { level: 1, name: "Aldric" })).toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: "Public profile" })).toBeNull()
+        await act(async () => {
+            await router.navigate(WORLD)
+        })
+        expect(await screen.findByRole("heading", { name: "Public profile" })).toBeInTheDocument()
+        expect(screen.getByRole("heading", { name: "Current state" })).toBeInTheDocument()
+    })
+
+    it("opens from the Characters list with its URL state, and Back returns there (A9)", async () => {
+        answer(publicBody())
+        const list = "/app/mundivita/characters/all?type=player_character"
+        const { router } = openApp(list, ["campaign.view"], NO_PERSPECTIVE)
+        await act(async () => {
+            await router.navigate(SHEET, { state: { charactersReturn: list } })
+        })
+        await ready()
+        expect(await screen.findByRole("heading", { name: "Public profile" })).toBeInTheDocument()
+        expect(crumb("Characters")).toHaveAttribute("href", list)
+        await act(async () => {
+            await router.navigate(-1)
+        })
+        expect(router.state.location.pathname + router.state.location.search).toBe(list)
+    })
+
+    it("leaves no full-tier content after a later public answer (A10)", async () => {
+        answer(liveBody("full", { sections: { ...FULL, public_profile: true } }), publicBody())
+        server.on("GET", `${PC}/sheet`, { body: { ...characterSheetFixture, character_id: "pc-1", name: "Aldric" } })
+        const { router } = openApp(WORLD, ["campaign.view"], NO_PERSPECTIVE)
+        expect(await screen.findByText("MARKER-CONDITION")).toBeInTheDocument()
+        await act(async () => {
+            await router.navigate("/app/mundivita/characters/all")
+        })
+        await act(async () => {
+            await router.navigate(WORLD)
+        })
+        await waitFor(() => expect(screen.queryByText("MARKER-CONDITION")).toBeNull())
+        expect(await screen.findByRole("heading", { name: "Public profile" })).toBeInTheDocument()
+        expect(document.body.textContent).not.toMatch(/LIVE-|MARKER|Hit points|Conditions/)
+    })
+
+    it.each([
+        ["404", NOT_FOUND],
+        ["403", FORBIDDEN],
+    ])("replaces the released text with the one unavailable page for %s and drops the breadcrumb name (A11)", async (_s, refusal) => {
+        answer(publicBody(), refusal)
+        const { router } = openApp(WORLD, ["campaign.view"], NO_PERSPECTIVE)
+        await screen.findByText("A wary river guide.")
+        await act(async () => {
+            await router.navigate("/app/mundivita/characters/all")
+        })
+        await act(async () => {
+            await router.navigate(WORLD)
+        })
+        await unavailable()
+        expect(screen.queryByText("A wary river guide.")).toBeNull()
+        expect(document.body.textContent).not.toMatch(/Aldric|Released/)
+    })
+
+    it("renders each answer as its own tier: public to summary, then summary to public (A12)", async () => {
+        answer(publicBody(), liveBody("summary"), publicBody())
+        const { router } = openApp(WORLD, ["campaign.view"], NO_PERSPECTIVE)
+        await screen.findByRole("heading", { name: "Public profile" })
+        expect(screen.queryByRole("heading", { name: "Overview" })).toBeNull()
+        const reopen = async () => {
+            await act(async () => {
+                await router.navigate("/app/mundivita/characters/all")
+            })
+            await act(async () => {
+                await router.navigate(WORLD)
+            })
+        }
+        await reopen()
+        await screen.findByRole("heading", { name: "Overview" })
+        expect(screen.getByText("LIVE-SPECIES-MARKER")).toBeInTheDocument()
+        await reopen()
+        await waitFor(() => expect(screen.queryByRole("heading", { name: "Overview" })).toBeNull())
+        expect(screen.getByRole("heading", { name: "Public profile" })).toBeInTheDocument()
+        expect(document.body.textContent).not.toMatch(MARKERS)
+    })
+
+    it("shows no character content for a 401 (A14)", async () => {
+        answer({ status: 401, body: { error: { code: "unauthenticated", message: "m", correlation_id: "c" } } })
+        openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        await waitFor(() => expect(calls("")).toHaveLength(1))
+        expect(screen.queryByRole("heading", { name: "Public profile" })).toBeNull()
+        expect(document.body.textContent).not.toMatch(/Aldric|Released/)
+    })
+
+    it.each([
+        ["a 500", { status: 500, body: { error: { code: "server_error", message: "m", correlation_id: "c" } } }],
+        ["an unknown tier", publicBody({ view_tier: "everything" })],
+        ["a public tier without its profile", without(publicBody(), "public_profile")],
+        ["a public-shaped body without a tier", without(publicBody(), "view_tier")],
+    ])("shows the retryable error and no character content for %s (A15)", async (_label, body) => {
+        answer(body)
+        openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        expect(await screen.findByRole("heading", { name: "Character information unavailable" })).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument()
+        expect(document.body.textContent).not.toMatch(/Aldric|Released|LIVE-|wary river guide/)
+        expect(requestedEndpoints()).toEqual([])
+    })
+
+    it("recovers from a refused answer on Try again (A15)", async () => {
+        answer(publicBody({ view_tier: "everything" }), publicBody())
+        openApp(SHEET, ["campaign.view"], NO_PERSPECTIVE)
+        fireEvent.click(await screen.findByRole("button", { name: "Try again" }))
+        expect(await screen.findByRole("heading", { name: "Public profile" })).toBeInTheDocument()
+        expect(calls("")).toHaveLength(2)
+    })
+
+    it("reads a genuine pre-tier body without view_tier as before (D-3)", async () => {
+        answer(character(FULL))
+        openApp(WORLD, ["campaign.view"], NO_PERSPECTIVE)
+        expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: "Public profile" })).toBeNull()
     })
 })

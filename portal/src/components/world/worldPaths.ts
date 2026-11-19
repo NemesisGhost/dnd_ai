@@ -1,4 +1,4 @@
-import type { CharacterDetail } from "../../types/character"
+import type { CharacterRead } from "../../types/character"
 import type { LocationDetail, OrganizationDetail, ReligionDetail } from "../../types/world"
 import type { WorkspaceCategory } from "./worldStages"
 
@@ -6,7 +6,7 @@ const enc = encodeURIComponent
 
 // The audience-safe detail the workspace's Details section reads, by category. The same responses
 // the World readers use, read through the authoring resource so a refresh keeps the page mounted.
-export type WorkspaceDetail = LocationDetail | OrganizationDetail | ReligionDetail | CharacterDetail
+export type WorkspaceDetail = LocationDetail | OrganizationDetail | ReligionDetail | CharacterRead
 
 export function worldDetailPath(campaignId: string, category: WorkspaceCategory, entityId: string): string {
     switch (category) {

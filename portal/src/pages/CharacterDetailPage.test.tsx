@@ -8,6 +8,8 @@ import {
     it,
 } from "vitest"
 import type { CharacterDetail } from "../types/character"
+import { normalizeCharacterRead } from "../api/character"
+import { liveBody, MARKER_FIELDS, publicBody } from "../fixtures/publicCharacter"
 import { CharacterDetailPage } from "./CharacterDetailPage"
 
 const fullCharacterFixture: CharacterDetail = {
@@ -151,5 +153,61 @@ describe("CharacterDetailPage", () => {
         expect(
             screen.queryByRole("meter"),
         ).not.toBeInTheDocument()
+    })
+})
+describe("CharacterDetailPage tiers", () => {
+    const publicCharacter = normalizeCharacterRead(publicBody({ ...MARKER_FIELDS }))
+    const NOISE = /not recorded|additional character details|withheld|not released|\b777\b|MARKER/i
+
+    it("renders only the released profile at the public tier (A4)", () => {
+        const { container } = render(<CharacterDetailPage character={publicCharacter} />)
+        expect(screen.getByRole("heading", { level: 1, name: "Aldric" })).toBeInTheDocument()
+        expect(screen.getByRole("heading", { name: "Public profile" })).toBeInTheDocument()
+        expect(screen.getByText("Released Elf")).toBeInTheDocument()
+        expect(screen.getByText("Only this character's public profile is available to you.")).toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: "Overview" })).toBeNull()
+        expect(container.textContent).not.toMatch(NOISE)
+    })
+
+    it("renders the live Overview and the released profile apart at summary (A6)", () => {
+        render(<CharacterDetailPage character={normalizeCharacterRead(liveBody("summary"))} />)
+        const overview = screen.getByRole("heading", { name: "Overview" }).closest("section") as HTMLElement
+        const profile = screen.getByRole("heading", { name: "Public profile" }).closest("section") as HTMLElement
+        expect(overview).not.toBe(profile)
+        expect(overview).toHaveTextContent("LIVE-SPECIES-MARKER")
+        expect(overview).not.toHaveTextContent("Released Elf")
+        expect(profile).toHaveTextContent("Released Elf")
+        expect(profile).not.toHaveTextContent("LIVE-SPECIES-MARKER")
+        // The summary tier's mechanics stay absent, as before.
+        expect(screen.queryByRole("heading", { name: "Current state" })).toBeNull()
+    })
+
+    it("shows the profile beside the full panels (A8)", () => {
+        render(<CharacterDetailPage character={normalizeCharacterRead(liveBody("full"))} />)
+        expect(screen.getByRole("heading", { name: "Public profile" })).toBeInTheDocument()
+        expect(screen.getByRole("heading", { name: "Current state" })).toBeInTheDocument()
+        expect(screen.getByText("MARKER-CONDITION")).toBeInTheDocument()
+    })
+
+    it.each([
+        ["no release", { public_profile: null, sections: { details: true, sheet: false, relationships: true, inventory: false, parties: false, public_profile: false } }],
+        ["a section flag without a profile", { public_profile: null }],
+        ["a profile with the flag false", { sections: { details: true, sheet: false, relationships: true, inventory: false, parties: false, public_profile: false } }],
+    ])("shows nothing about a public profile with %s (A7)", (_label, overrides) => {
+        const { container } = render(
+            <CharacterDetailPage character={normalizeCharacterRead(liveBody("summary", overrides))} />,
+        )
+        expect(screen.queryByRole("heading", { name: "Public profile" })).toBeNull()
+        expect(container.textContent).not.toMatch(/public profile|withheld|not released|no public details/i)
+        expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument()
+    })
+
+    it("does not read missing conditions and resources keys as the full tier", () => {
+        const body = liveBody("summary") as Record<string, unknown>
+        delete body.conditions
+        delete body.resources
+        render(<CharacterDetailPage character={body as unknown as CharacterDetail} />)
+        expect(screen.queryByRole("heading", { name: "Conditions" })).toBeNull()
+        expect(screen.getByText("Additional character details are not available.")).toBeInTheDocument()
     })
 })

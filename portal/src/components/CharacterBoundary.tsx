@@ -2,13 +2,13 @@ import type { ReactNode } from "react"
 import { ArrivalHeadingFocus } from "../navigation/ArrivalHeadingFocus"
 import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
 import { useCharacter } from "../hooks/useCharacter"
-import type { CharacterDetail } from "../types/character"
+import type { CharacterRead } from "../types/character"
 import PlaceholderPage from "../pages/PlaceholderPage"
 
 interface CharacterBoundaryProps {
     campaignId: string
     characterId: string
-    children: (character: CharacterDetail) => ReactNode
+    children: (character: CharacterRead) => ReactNode
 }
 
 export function CharacterBoundary({

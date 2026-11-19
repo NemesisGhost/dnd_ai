@@ -2,6 +2,7 @@ import { fireEvent, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
+import { MARKER_FIELDS, publicBody } from "../fixtures/publicCharacter"
 import { NpcRuntimePanel } from "./NpcRuntimePanel"
 
 const BASE = "/campaigns/c1/characters/n1"
@@ -33,6 +34,8 @@ function setup(
     lifecycle = "active",
     hitPoints: { current: number | null; maximum: number | null } = { current: 12, maximum: 20 },
     optionsFail = false,
+    // A character answer to use in place of the NPC's own (a tier test).
+    readBody?: object,
 ) {
     const server = installMockServer()
     // The NPC's authoring view is the world's private side: a campaign GM with no world role is refused
@@ -49,7 +52,7 @@ function setup(
             : OPTIONS,
     )
     server.on("GET", BASE, {
-        body: {
+        body: readBody ?? {
             character_id: "n1",
             name: "Mira",
             canon_status: canon,
@@ -99,6 +102,19 @@ afterEach(() => {
 })
 
 describe("NpcRuntimePanel", () => {
+    it.each([
+        ["a public-tier answer", publicBody({ character_id: "n1", name: "Mira", character_kind: "npc", ...MARKER_FIELDS })],
+        ["an unknown tier", { ...publicBody({ character_id: "n1", view_tier: "everything" }) }],
+        ["a public-shaped answer without a tier", (() => { const b = publicBody({ character_id: "n1" }) as Record<string, unknown>; delete b.view_tier; return b })()],
+    ])("offers no controls and sends no command for %s (A17)", async (_label, body) => {
+        const server = setup("canon", ["canon.edit"], "active", { current: 12, maximum: 20 }, false, body)
+        expect(await screen.findByText("This NPC is not available to run.")).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Move this NPC" })).not.toBeInTheDocument()
+        expect(document.body.textContent).not.toMatch(/MARKER|777|Released|wary river guide/)
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
+
     it("shows the state of a published NPC", async () => {
         setup()
         expect(await screen.findByText("12 of 20")).toBeInTheDocument()

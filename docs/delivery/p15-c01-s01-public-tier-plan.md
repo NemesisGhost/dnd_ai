@@ -1,6 +1,6 @@
 # D/P15-C01-S01 implementation plan: render the public character tier
 
-**Status:** proposal, prepared 2026-11-19 for Sonnet. Nothing in this plan is implemented. Work-register row: [D/P15-C01-S01](work-register.md#p15-c01-s01), task [T01](work-register.md#p15-c01-s01-t01). Parent PR: [D/P15-C01](work-register.md#p15-c01).
+**Status:** T01 implemented 2026-11-19; Luna review pending (see the [implementation record](#113-implementation-record)). Prepared 2026-11-19 for Sonnet. Work-register row: [D/P15-C01-S01](work-register.md#p15-c01-s01), task [T01](work-register.md#p15-c01-s01-t01). Parent PR: [D/P15-C01](work-register.md#p15-c01).
 
 **Baseline.** Read at `2a9599e89b332c8cbe0aca32ff6928433d0632f5` ("Adopt delivery hierarchy documentation") on `phase15/completion`, the expected documentation baseline. Porcelain status was clean before this plan. No `AGENTS.md` exists on the repository path. The user-level `~/.codex/AGENTS.md` was empty when the [register](work-register.md#baseline-and-authority) was adopted; this plan did not re-read it.
 
@@ -313,4 +313,53 @@ These are the only open points. Each has a recommendation, and none blocks Sonne
 
 ### 11.3 Implementation record
 
-*Empty. Sonnet appends here.*
+Recorded by Sonnet, 2026-11-19. Real-browser, accessibility, checkpoint-merge and owner events (§8) are not claimed here.
+
+**Base and head.**
+
+- Review base (implementation base): `4645d243e3825586985926f9677ffead71e5976c` on `phase15/completion` ("Improve delivery register execution presentation"), the commit the plan names. HEAD had not advanced, and `git status --short` was clean before work. No `AGENTS.md` exists on the repository path.
+- T01 head: the commit titled `P15-C01-S01-T01: render the public character tier` (the child of the base). Its SHA is not written inside itself; read it with `git log --oneline -1 --grep "P15-C01-S01-T01"` and it is reported in the handoff. Nothing was pushed.
+
+**Source assumptions (§1.2, §4).** Re-read at the base before editing; all held. `grep` still found no `view_tier` or `public_profile` in `portal/src`. The allowlist in the normalizer equals `PublicCharacterResponse` and `CharacterPublicProfileResponse` in `src/dnd_ai/api/characters.py` at this head (`view_tier`, `character_id`, `name`, `character_kind`, `sections`, `public_profile`; `summary`, `appearance`, `background`, `species`, `size`).
+
+**What was implemented (all under `portal/` and `docs/`).**
+
+- Types: `CharacterIdentityValue`, `CharacterPublicProfile`, `PublicCharacterDetail`, the union `CharacterRead`, `isPublicTier`; `CharacterSections.public_profile?`; `CharacterDetail` keeps its name as the summary/full shape.
+- `api/character.ts`: `normalizeCharacterRead` (fail-closed, allowlist projection) and `CharacterContractError`; `fetchCharacter` returns `CharacterRead`. `editorCharacterRead` is the lenient variant for the two raw-JSON editor paths (below).
+- `sectionsOf` carries `public_profile` (true only when `=== true`; the fallback sets false).
+- New `CharacterPublicProfilePanel`; `CharacterPanels` branches on tier, uses `Array.isArray` for the live-state guard, and adds the panel at summary/full when `sections.public_profile` and a non-null profile. The public tier shows the one-line "Only this character's public profile is available to you." note.
+- `CharacterRecordNav` (D-1: "Profile" at the public tier), `CharacterSheetRoutePage`, `CharacterContextDetails` (released labels only at the public tier), `WorldRecordWorkspace`/`worldPaths`, `NpcRuntimePanel`, `CharacterBoundary`, `useCharacter` (type changes; a contract error reaches the existing `error` state).
+- Docs: READ_API (portal consumption bullet, replacing "unchanged until A6"), portal-behavior §5.5 paragraph, this record, the register rows.
+
+**D-3 rule used (precise).** A body is read as summary/full without `view_tier` only when ALL hold: it is an object; `character_id` and `name` are strings; `character_kind` is `npc`, `player_character` or `character`; `species_code` and `size_category` are strings; `conditions` and `resources` are each present as an array or `null`; there is no `public_profile` key; and `sections` is absent or an object. Anything else without a tier (including a public-shaped body whose `view_tier` is missing, and a body without the live definition) throws `CharacterContractError`. This matches the existing `sections`-absent precedent and the pre-tier `CharacterDetail` type, whose live definition and the two state keys were always present. With `view_tier` of `summary` or `full`, the identity fields and an object `sections` are required and a present profile must be well formed. Missing `view_tier` alone never manufactures full access.
+
+**Deviations from §4 (each with its reason).**
+
+1. **Editor paths use a lenient reader.** `WorldRecordWorkspace` and `NpcRuntimePanel` hold raw JSON through `useAuthoringResource` and their existing tests use partial bodies (for example no `character_kind`). A strict reader there broke 15 `NpcRuntimePanel` tests and one `App.characterBuilds` case on the first run. `editorCharacterRead` applies only the tier rules (public tier rebuilt from the allowlist; unknown tier or a public-shaped body without a tier refused; a body with no tier and no profile passes as before). Refused workspace reads show "Character information is unavailable."; the NPC panel shows "This NPC is not available to run." with no controls.
+2. **`authoringOf` parameter type widened** to `object | null | undefined` (`utils/recordAuthoring.ts`) so a public-tier body, which carries no `authoring`, type-checks. Behavior is unchanged: no `authoring` means no rights.
+3. **Files beyond §4's list:** `utils/recordAuthoring.ts`, the new `fixtures/publicCharacter.ts` (shared exact A4 bodies and markers), and `App.characterBuilds.test.tsx` (below).
+4. **Panel structure.** Inside the profile panel the three text fields use `h3` labels (Summary, Appearance, Background) under the panel's `h2`; species and size use `FactGrid`. Plan §4 left this open.
+5. A14 is asserted at route level as "no character content" and at hook level through the existing unauthorized-reload test; the route harness does not expose the session `reload` mock. A13 is asserted at hook level (superseded read), not as a route test.
+
+**Existing assertions changed.** None weakened. Beyond fixture additions, only:
+
+- `utils/characterSections.test.ts`: the `NONE` and `ALL` constants and the legacy-fallback expected object gained `public_profile` (false/true/false). This is an expected-value change because `sectionsOf`' output gained a key; the assertions are otherwise identical.
+- `App.characterBuilds.test.tsx`: the character fixture gained `character_kind: "player_character"` (a field the real body always carries and the type requires). Without it the non-editor read is not the recognized pre-tier shape and is refused.
+
+**Verification runs (portal/, PowerShell; Git Bash cannot run Vitest here, as the plan noted).** Focused files were run throughout (`api/character`, `characterSections`, `useCharacter`, `CharacterDetailPage`, `CharacterPublicProfilePanel`, `CharacterContextDetails`, `App.characterRecord`, `NpcRuntimePanel`, `WorldRecordWorkspace`, `App.characterBuilds`).
+
+| Run | Result |
+|---|---|
+| First `npm test` after the strict editor reader | 20 failed / 5121 passed (3 files: the 4 `characterSections` expected-value changes above, 15 `NpcRuntimePanel`, 1 `App.characterBuilds`); also 1 `App.knowledgeMemberPreview` failure in the first full run that passed alone (load-sensitive, unrelated) |
+| Fixes | lenient editor reader (deviation 1); fixture addition; expected-value additions |
+| Second full `npm test` | 1 failed / 5215 passed: `App.readRecovery` "keeps focus on the retry button" (focus assertion on an event page, unrelated to characters); it passed alone (12/12) |
+| Third full `npm test` (after a type fix in two new test files) | 426 files, 5216 tests, all passed |
+| `npm run lint` | passed (first run and rerun) |
+| `npm run build` | first run failed with two type errors in my new tests (`api/character.test.ts`, `App.characterRecord.test.tsx`); passed on rerun after the casts were fixed |
+| Mutation probe | Replaced `Array.isArray` with `!== null` in `CharacterPanels`. The first test version did not fail (it deleted only one key); the test now deletes both and fails under the mutation, and passes restored. The probe was reverted; the working file is the unmutated source |
+
+The documentation check and `git diff --check` results are recorded in the handoff for this commit. No backend, Foundry, migration or OpenAPI file changed.
+
+**Acceptance coverage.** A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12, A14 (route), A15 in `App.characterRecord.test.tsx`; A4 and A15 (normalizer, allowlist, D-3) in `api/character.test.ts`; A5 in the panel and detail-page tests; A6/A7/A8 also in `CharacterDetailPage.test.tsx`; A10–A13, A15 and the 401 reload in `useCharacter.test.ts`; A16 in `CharacterContextDetails.test.tsx`; A17 in `WorldRecordWorkspace.test.tsx` and `NpcRuntimePanel.test.tsx`; A18 by the unchanged existing suites (426 files passed).
+
+**Remaining limitations.** The route harness does not exercise a session-expiry reload at route level (A14), and a superseded read is covered at hook level only (A13). A real-browser run, accessibility checks and owner acceptance are separate (§8). Revocation while a page is open is seen on the next request only.

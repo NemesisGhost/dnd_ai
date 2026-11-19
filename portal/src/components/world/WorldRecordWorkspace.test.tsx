@@ -7,6 +7,7 @@ import type { MockServer } from "../../test/authoringHarness"
 import { CAMPAIGN_ONLY_RECORD_AUTHORING, FULL_RECORD_AUTHORING, REVIEWER_RECORD_AUTHORING } from "../../test/recordAuthoring"
 import { installRecordReads } from "../../test/worldWorkspaceMocks"
 import type { RevisionFixture } from "../../test/worldWorkspaceMocks"
+import { MARKER_FIELDS, publicBody } from "../../fixtures/publicCharacter"
 import { CampaignWorldDetailPage } from "../../pages/CampaignWorldDetailPage"
 
 const C = "c1"
@@ -1968,6 +1969,33 @@ describe("World record workspace: characters", () => {
             },
         })
     }
+
+    it.each([
+        ["a public-tier read", () => publicBody({ character_id: "n1", name: "Mira", character_kind: "npc", ...MARKER_FIELDS })],
+        ["an unknown tier", () => publicBody({ character_id: "n1", name: "Mira", view_tier: "everything" })],
+    ])("renders %s without throwing and without live content or runtime controls (A17)", async (label, build) => {
+        const { server } = setup({
+            category: "character",
+            entityId: "n1",
+            typeCode: "npc",
+            detailPath: `/campaigns/${C}/characters/n1`,
+            detail: build(),
+            lifecycle: lifecycle({ entity_id: "n1", entity_type_code: "npc", available_actions: [] }),
+            extra: (s) => {
+                s.on("GET", `/campaigns/${C}/authoring/npcs/n1`, { body: { canon_status: "canon", available_actions: ["update"], blocked_actions: [] } })
+            },
+        })
+        await screen.findByRole("heading", { level: 1, name: "Mira" })
+        if (label === "a public-tier read") {
+            expect(screen.getByRole("heading", { name: "Public profile" })).toBeInTheDocument()
+            expect(screen.getByText("Released Elf")).toBeInTheDocument()
+        } else {
+            expect(screen.getByText("Character information is unavailable.")).toBeInTheDocument()
+        }
+        expect(document.body.textContent).not.toMatch(/MARKER|777/)
+        expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
 
     it("gives an NPC Run and Inventory under Use in play, and the NPC's edit link", async () => {
         character("npc")

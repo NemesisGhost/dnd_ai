@@ -10,7 +10,9 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
+import { isPublicTier } from "../types/character"
 import type { CharacterDetail } from "../types/character"
+import { editorCharacterRead } from "../api/character"
 import type { RuntimeOptions } from "../types/npcPortrayal"
 import { useAnnounce } from "./authoring/announcer"
 import { SelectField, TextField } from "./authoring/fields"
@@ -90,6 +92,16 @@ function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged, bl
     // two controls withheld and a way to read them again; a read still loading shows nothing yet.
     if (characterView === null || (optionsView === null && options.state.kind === "loading")) {
         return null
+    }
+    // Only a summary/full read is a character this panel can run. A public-tier or unrecognized
+    // answer has no hit points, conditions or resources to show or change: no controls, no command.
+    const read = editorCharacterRead(characterView)
+    if (read === null || isPublicTier(read)) {
+        return (
+            <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
+                <p>This NPC is not available to run.</p>
+            </PanelFrame>
+        )
     }
     // Reads only: trying again never repeats a command.
     const notice =

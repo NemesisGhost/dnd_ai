@@ -20,7 +20,9 @@ import { CharacterPanels } from "../../pages/CharacterDetailPage"
 import { LocationPanels } from "../../pages/WorldLocationDetailPage"
 import { OrganizationPanels } from "../../pages/WorldOrganizationDetailPage"
 import { ReligionPanels } from "../../pages/WorldReligionDetailPage"
-import type { CharacterDetail } from "../../types/character"
+import { isPublicTier } from "../../types/character"
+import type { CharacterRead } from "../../types/character"
+import { editorCharacterRead } from "../../api/character"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import type { Provenance } from "../../types/provenance"
 import type { RevisionHistory } from "../../types/review"
@@ -140,7 +142,7 @@ function Loaded({ campaignId, category, entityId }: Props) {
     useBreadcrumbLabel({
         route: "characters.detail",
         params: { campaignId, characterId: entityId },
-        name: category === "character" && detail.state.kind === "ready" ? (detail.state.data as CharacterDetail).name : undefined,
+        name: category === "character" && detail.state.kind === "ready" ? (detail.state.data as CharacterRead).name : undefined,
         denied: category === "character" && (detail.state.kind === "denied" || detail.state.kind === "unavailable"),
         authority: category === "character" ? detail.authority : null,
     })
@@ -308,7 +310,7 @@ function typeCodeOf(category: WorkspaceCategory, data: WorkspaceDetail): string 
         case "location":
             return (data as LocationDetail).location_type_code
         case "character":
-            return (data as CharacterDetail).character_kind
+            return (data as CharacterRead).character_kind
         default:
             return null
     }
@@ -339,7 +341,7 @@ function describe(category: WorkspaceCategory, kind: WorldKind, data: WorkspaceD
             return { name: d.name, eyebrow: "Religion", summary: d.summary }
         }
         case "character": {
-            const d = data as CharacterDetail
+            const d = data as CharacterRead
             return {
                 name: d.name,
                 eyebrow: kind === "npc" ? "NPC" : kind === "pc" ? "Player character" : "Character",
@@ -911,7 +913,11 @@ function DetailsSection({
             )
         }
         case "character": {
-            const character = data as CharacterDetail
+            // The raw read, recognized before anything is shown: an answer that is not a known shape
+            // shows no character content, and the public tier shows only the released profile.
+            const character = editorCharacterRead(data)
+            if (character === null) return <p role="alert">Character information is unavailable.</p>
+            if (isPublicTier(character)) return <CharacterPanels character={character} />
             const id = character.character_id
             const editPath = `${root}/characters/${encodeURIComponent(id)}/edit`
             // Exactly one edit link, by the character's kind (and the portrayal link only for an

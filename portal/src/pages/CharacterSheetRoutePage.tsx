@@ -5,7 +5,8 @@ import { CharacterBreadcrumb } from "../components/characters/CharacterBreadcrum
 import { CharactersCreateAction } from "../components/characters/CharactersCreateAction"
 import { CharacterRecordSections } from "../components/characters/CharacterRecordNav"
 import { CharacterSheetBoundary } from "../components/CharacterSheetBoundary"
-import type { CharacterDetail } from "../types/character"
+import { isPublicTier } from "../types/character"
+import type { CharacterRead } from "../types/character"
 import { characterKindLabel } from "../utils/characterKind"
 import { sectionsOf } from "../utils/characterSections"
 import { CharacterPanels } from "./CharacterDetailPage"
@@ -20,12 +21,16 @@ import PlaceholderPage from "./PlaceholderPage"
 // navigation row away, each offered only when the character read says the caller may open it, and
 // the sheet is requested only when the server offered it.
 // The summary tier's view where the sheet would be: no mechanics beyond the audience-safe fields.
-function SummaryPanels({ character }: { character: CharacterDetail }) {
+function SummaryPanels({ character }: { character: CharacterRead }) {
     return (
         <section aria-labelledby="character-summary-heading">
             <p className="character-sheet__eyebrow">{characterKindLabel(character.character_kind)}</p>
             <h1 id="character-summary-heading">{character.name}</h1>
-            <p className="authoring-note">The full sheet is not available to you.</p>
+            <p className="authoring-note">
+                {isPublicTier(character)
+                    ? "Only this character's public profile is available to you."
+                    : "The full sheet is not available to you."}
+            </p>
             <CharacterPanels character={character} />
         </section>
     )
@@ -43,7 +48,7 @@ function CharacterSheetRoute({ campaignId, characterId }: { campaignId: string; 
                             campaignId={campaignId}
                             characterId={characterId}
                             kind={character.character_kind}
-                            authoring={character.authoring}
+                            authoring={isPublicTier(character) ? undefined : character.authoring}
                         />
                         <CharacterRecordSections
                             campaignId={campaignId}
@@ -51,7 +56,7 @@ function CharacterSheetRoute({ campaignId, characterId }: { campaignId: string; 
                             character={character}
                             route="sheet"
                             main={
-                                sectionsOf(character).sheet ? (
+                                sectionsOf(character).sheet && !isPublicTier(character) ? (
                                     <CharacterSheetBoundary
                                         campaignId={campaignId}
                                         characterId={characterId}

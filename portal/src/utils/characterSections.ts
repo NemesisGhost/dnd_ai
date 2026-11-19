@@ -1,4 +1,4 @@
-import type { CharacterDetail, CharacterSections } from "../types/character"
+import type { CharacterRead, CharacterSections } from "../types/character"
 
 // What a character answer without `sections` (a server that predates them) is read as. Missing
 // contract data is not eligibility: the pages keep what they did before sections existed and add
@@ -16,11 +16,12 @@ const WITHOUT_SECTIONS: CharacterSections = {
     relationships: true,
     inventory: false,
     parties: false,
+    public_profile: false,
 }
 
 // A present `sections` is always the server's answer: a flag that is false, or missing from it, is
 // not offered. Only an absent `sections` falls back, and the fallback never grants inventory.
-export function sectionsOf(character: Pick<CharacterDetail, "sections">): CharacterSections {
+export function sectionsOf(character: Pick<CharacterRead, "sections">): CharacterSections {
     const sections = character.sections
     if (sections === undefined || sections === null) return WITHOUT_SECTIONS
     return {
@@ -29,5 +30,6 @@ export function sectionsOf(character: Pick<CharacterDetail, "sections">): Charac
         relationships: sections.relationships === true,
         inventory: sections.inventory === true,
         parties: sections.parties === true,
+        public_profile: sections.public_profile === true,
     }
 }
