@@ -34,7 +34,7 @@ interface PickerProps {
 // Every target kind reuses an existing audience-filtered, campaign.view-
 // gated read contract 13D already delivered — never a new resource-
 // directory endpoint, which would risk disclosing resources the actor
-// cannot see (docs/UI_DESIGN.md §9). §5.3/P-8 of
+// cannot see (docs/reference/portal-behavior.md §9). §5.3/P-8 of
 // PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md: the "entity" selector
 // deliberately excludes character/event/quest/knowledge_item categories
 // from world/search, since each of those has its own dedicated target

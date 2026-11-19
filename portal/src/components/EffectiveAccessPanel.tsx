@@ -100,7 +100,7 @@ interface EffectiveAccessPanelProps {
 }
 
 // The GM-facing "why can this person see this?" explanation (docs/
-// UI_DESIGN.md §6.4 "Effective-access explanation" / §8.3, checkpoint 13).
+// docs/reference/portal-behavior.md §6.4 "Effective-access explanation" / §8.3, checkpoint 13).
 // One disclosure per member row rather than a single shared side panel —
 // each disclosure's own EffectiveAccessContent only ever mounts (and
 // therefore only ever fetches) while that specific member's own toggle is

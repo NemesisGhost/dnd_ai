@@ -11,7 +11,7 @@ Both commands re-read the caller's owner assignment under lock and again at a fr
 instant after their last lock wait and before the write (DEF-013), reusing the D3 gate and the
 shared live-owner predicate.
 
-Lock order of a grant (R01 S5-E2 lock-order correction C1, docs/R01_S5E2_LOCK_ORDER_CORRECTION_DESIGN_
+Lock order of a grant (R01 S5-E2 lock-order correction C1, historical local record: docs/R01_S5E2_LOCK_ORDER_CORRECTION_DESIGN_
 2026-11-15.md): **each lock class in one ascending-id pass, every row at the mode it needs.** The rows are
 discovered first by one unlocked read (the caller's live owner row and the grantee's unrevoked built-in `gm`
 rows of this campaign, ordered by `membership_role_id`) and then locked one statement per row, each bound to a
@@ -85,7 +85,7 @@ class RevealDelegationRecipientNotGmError(SafeMessageError):
 
 class RevealDelegationRecipientChangedError(SafeMessageError):
     """The grantee's live built-in `gm` assignment appeared after the grant had chosen the rows to lock (C1,
-    docs/R01_S5E2_LOCK_ORDER_CORRECTION_DESIGN_2026-11-15.md BA-1): the delegation would have bound to a row the
+    historical local record: docs/R01_S5E2_LOCK_ORDER_CORRECTION_DESIGN_2026-11-15.md BA-1): the delegation would have bound to a row the
     grant never held. Nothing was written; a retry locks the new row first. 409."""
 
     safe_status_code = 409

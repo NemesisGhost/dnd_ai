@@ -1,5 +1,7 @@
 # Phase 14/15 coverage matrix (CP-11 restart)
 
+Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
+
 Traceability from every original case and required variant to the guide task, evidence methods and ledger row. Written 2026-10-26 for `9ab549ddbc78cb9b5c1aac9c99f3a967112edc62`. **Nothing here is a result.** Retest class is from the integration plan §8 (F full rerun · T targeted · D defect retest · X expectation corrected · N not yet executed); the restart reruns every row regardless.
 
 Evidence methods: **H** human/manual in the portal · **S** scripted real-browser (needs an owner login) · **D** database corroboration · **A** automated (representative modules named; never a case pass) · **X** accessibility/AT.
@@ -211,7 +213,7 @@ Evidence methods: **H** human/manual in the portal · **S** scripted real-browse
 | CP-9a | Event explanations (party join, build activation, clock, correction) | G3, G4, I2, I3 | 19.explain, 21.explain, 25.wrong-title, 15.cause |
 | CP-9b | Optional clock cause + member-safe explanation | I3 | 15.cause |
 | CP-10 | Confirmed-write/failed-refresh for quest, item, claim; shared plumbing | RC-04…RC-07; RC-10 for the deferred callers | RC-04…RC-10, NV-* |
-| DEF-001 fix (candidate `7990225…`, not frozen) | The same contract for every other write that reads its result back (26 operations: [RC-10 operation inventory](#rc-10-operation-inventory)) | RC-10 (rewritten); retest set in the environment document §9.2 | RC-03…RC-10, TC-14/15/19/20/21/24/25/33/34/35/36/37/38/42/43/44/50/51/53 and the lifecycle-step rows; **no human row executed**. Scripted browser retest on the reviewed candidate `38d2865…` (2026-10-26): RC-03…RC-09 and the exercised variants of all 26 operations pass except DEF-005 (reproduced) and DEF-006 (RC-06 authoring-read variant); remaining coverage per operation in [PHASE15_DEF001_BROWSER_RETEST.md](PHASE14_15_ACCEPTANCE_LEDGER.md) §3; candidate not frozen |
+| DEF-001 fix (candidate `7990225…`, not frozen) | The same contract for every other write that reads its result back (26 operations: [RC-10 operation inventory](#rc-10-operation-inventory)) | RC-10 (rewritten); retest set in the environment document §9.2 | RC-03…RC-10, TC-14/15/19/20/21/24/25/33/34/35/36/37/38/42/43/44/50/51/53 and the lifecycle-step rows; **no human row executed**. Scripted browser retest on the reviewed candidate `38d2865…` (2026-10-26): RC-03…RC-09 and the exercised variants of all 26 operations pass except DEF-005 (reproduced) and DEF-006 (RC-06 authoring-read variant); remaining coverage per operation in [PHASE15_DEF001_BROWSER_RETEST.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE15_DEF001_BROWSER_RETEST.md#3-evidence-map-the-26-operations-def-001-inventory-41) §3; candidate not frozen |
 
 ## 5. Reverse index — guide task to cases
 
@@ -311,20 +313,20 @@ Proposed by plan §8 (P02-8). **All four are marked *not executed*: no browser, 
 | 23.history | History retention and restoration | Back/Forward, reload, new tab, bfcache, `history.state` retention of `task` and `ctx` | H, S, A | **Not executed** | portal `selectedContext.history.integration`, `entryStamp` tests |
 | 55.context-guard | Selection departure, guards and loss handling | Dirty Stay/Leave, native modal close, destination-heading focus, immediate and deferred arrival, announcements, withdrawal after authority loss, two-tab revocation | H, S, A | **Not executed** | portal `selectionDeparture.integration`, `selectionArrival*` tests |
 
-The actionable [B1–B22 checklist](PHASE14_15_COMPANION_SCENARIOS.md#p02-browser-checklist) is a specification. Current per-check results and the explicit P02 owner decision are in the [ledger](PHASE14_15_ACCEPTANCE_LEDGER.md#current-decision-summary-after-documentation-reconciliation); the original “all not executed” wording is historical. DOM/live-region inspection is not screen-reader evidence.
+The actionable [B1–B22 checklist](companion-scenarios.md#p02-browser-checklist) is a specification. Current per-check results and the explicit P02 owner decision are in the [ledger](acceptance-ledger.md#current-decision-summary-after-documentation-reconciliation); the original “all not executed” wording is historical. DOM/live-region inspection is not screen-reader evidence.
 
 ## Consolidated specification and evidence sources
 
 All TC-01–TC-58 IDs and variants above retain their original meaning and source history.
 The retired manual guide is available as an immutable specification/evidence baseline in
-[delivery history](DELIVERY_HISTORY.md); its historical result markings are not new passes.
+[delivery history](history.md); its historical result markings are not new passes.
 Use the accepted expectation corrections in this matrix and the current journey/scenarios
 when executing a new run. If an old step is not represented by a current task, retain it
 as an explicit unexecuted variant rather than silently dropping it.
 
 TC-55's complete former page/panel matrix, staged Run Session and Knowledge requirements,
 Member preview, travel, Relationships and Organization checks are retained in
-[companion scenarios](PHASE14_15_COMPANION_SCENARIOS.md#tc-55-page-and-panel-obligations).
+[companion scenarios](companion-scenarios.md#tc-55-page-and-panel-obligations).
 The former manual matrix's date/tester, browser/AT version, failures/fixes, accepted risks,
 final-head CI and owner completion decision must be recorded in the acceptance ledger.
 

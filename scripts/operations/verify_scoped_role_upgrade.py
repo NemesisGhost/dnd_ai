@@ -1,7 +1,7 @@
 """Verify the scoped-role upgrade (revisions 137 and 138) against a database you control.
 
 Two read-only steps, run before and after `alembic upgrade head` on the SAME database, so the
-offline upgrade in docs/LOCAL_DEPLOYMENT.md can be checked on a restored copy of a real database
+offline upgrade in docs/operations/deployment.md can be checked on a restored copy of a real database
 before it is trusted with the real one (docs/adr/0020-scoped-system-world-and-campaign-roles.md):
 
     # on a copy at revision 136_world_viewer_role

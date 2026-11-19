@@ -17,4 +17,4 @@ Derived stores may be rebuilt; writes to canon go through application commands a
 
 ## References
 
-- [PLAN.md §2.1](../README.md) and [README.md § Design Philosophy](../../README.md#design-principles)
+- [PLAN.md §2.1 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#21-postgresql-is-the-source-of-truth) and [Core modeling principles](../DOMAIN_MODEL.md#2-core-modeling-principles)

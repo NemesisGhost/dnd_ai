@@ -701,7 +701,7 @@ E4_ROUTES: frozenset[tuple[str, str]] = frozenset(
 
 #: The five world routes, an explicit **planned exclusion** from campaign-scoped R01 work (owner decision 4, plan
 #: 6.21.1; S5-F bookkeeping). Neither finalized nor pending, and not migrated or accepted: their plan lookup fails
-#: closed (`dnd_ai.api.r01_route_plans`). Their unkeyed-window follow-up is recorded in `docs/BACKLOG.md`.
+#: closed (`dnd_ai.api.r01_route_plans`). Their unkeyed-window follow-up is recorded in `docs/delivery/work-register.md`.
 EXCLUDED_WORLD_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {
         ("POST", "/worlds/{world_id}/ownership-transfer"),

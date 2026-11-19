@@ -1,18 +1,23 @@
 # P03-A implementation plan: public profiles, revelation and audience-safe character reads
 
+Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
+
+
+## Historical handoff through A5c
+
 **Status (reconciled 2026-11-11 at `d51e38a`):** Approved plan with implementation through A4. Dated implementation and review entries below preserve their original evidence.
 
 - **Implemented and reviewed:** A0, A1, P0, P1, A2a, A2a-R, A2b-1, A2b-2, P2, P3, A3a, A3b and A4a/b. A4 production correctness was accepted; its HTTP-race and disclosure-sweep gaps are resolved. The A3 harness closeout records 7,550/7,550 tests at `1cb3b2b`, with retained nonblocking findings; see the 2026-11-11 closeout below.
 - **CI and PR:** historical run 42755362414 passed at `bfa64f2`; later closeout entries refer to PR evidence. Current-head CI/PR/merge status was not queried for this reconciliation and is not established by the earlier pass.
 - **Merged checkpoint (recorded 2026-11-11):** PR #68 (head `d51e38a`) merged into `main` as `b0910c48a8a54e8b9b4d2283ed30d371d704f80c` at 2026-11-11 22:38:32 UTC. The post-merge `main` push CI run 43113470050 completed with conclusion success on `b0910c4`; both were queried with `gh`. This is a merge checkpoint for the work through A4, not Phase 15 completion.
-- **Decisions:** D1–D12 are approved (D6 on 2026-11-10). A5's D13–D18 were approved by the owner on 2026-11-11 (see "Decisions still needed"; the rules are in [the A5 design](PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md) §4). No owner decision is open for A5.
-- **Remaining:** A5a (storage and GM reads) is **implemented and passed independent re-review (current-head CI pending)**; A5b (provenance and restriction) **passed independent review with nonblocking findings (current-head CI pending)**; A5c (the GM-selected copy) is **implemented and awaiting independent review** (A5 design §17). A5 is **designed and finalized (2026-11-11)**: [the A5 design](PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md), slices A5a–A5c in order. A5 is infrastructure: it has no production profile writer until P03-B. A6 and A7 are outlined in §4 and not started. Fix DEF-019 before A6; A5 is optional for entry to A6. A7's audience preview is optional. See [BACKLOG](BACKLOG.md) for the consolidated work and acceptance gates.
+- **Decisions:** D1–D12 are approved (D6 on 2026-11-10). A5's D13–D18 were approved by the owner on 2026-11-11 (see "Decisions still needed"; the rules are in [the A5 design](player-profile-design.md) §4). No owner decision is open for A5.
+- **Remaining:** A5a (storage and GM reads) is **implemented and passed independent re-review (current-head CI pending)**; A5b (provenance and restriction) **passed independent review with nonblocking findings (current-head CI pending)**; A5c (the GM-selected copy) is **implemented and awaiting independent review** (A5 design §17). A5 is **designed and finalized (2026-11-11)**: [the A5 design](player-profile-design.md), slices A5a–A5c in order. A5 is infrastructure: it has no production profile writer until P03-B. A6 and A7 are outlined in §4 and not started. Fix DEF-019 before A6; A5 is optional for entry to A6. A7's audience preview is optional. See [BACKLOG](work-register.md) for the consolidated work and acceptance gates.
 - **History:** the plan was committed on its own as the design commit (`3b3d637`) before A2a's code. The dated entries below record each step.
 
 *Superseded status line (2026-11-08), for the record:* A0, A1, P0, P1, A2a and A2a-R are implemented and independently reviewed (A2a and A2a-R: PASS WITH NONBLOCKING FINDINGS; handoff `523ae5c`). D7 and D8 are approved (recorded 2026-11-07). A2b-1 and A2b-2 are implemented and reviewed (handoff `a9ec4c4`). A3a (storage, create/revoke/list, lifecycle hooks) is implemented locally and awaits independent review (see the A3a implementation record); A3b is not started. A3 is designed and finalized (§10; D4, D5 and D9–D12 approved, §10.15, including the D9-a candidate-statement cutoff approved 2026-11-08) and not implemented. P2, the shared idempotency key lock, is implemented at `d36d565` and independently reviewed (PASS WITH NONBLOCKING FINDINGS; record below §10). A3a now needs P3, committing the request transaction before the response (DEF-022, §11), which is designed and not implemented.
 
 - **A0** is implemented at `fca3ac7`.
-- **A1** is implemented at `68dc902` through `6a5773d`. That covers the D3 ownership gate, DEF-011, DEF-013 and the reveal delegation. Its record is in [the A1 design](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md) §8. The independent re-review passed at `fc20e8d`. CI is pending until push, and an intermittent race-test timeout is still unresolved. It has now been seen in the A1 lock-wait tests twice in full suites (`test_campaign_owner_caller_expiry.py` once, and `test_character_reveal_delegation.py::test_a_grant_that_waits_on_ending_the_gms_membership_is_refused` once: the request was alive but no session waited on a lock within 15 s), each passing on every rerun. That test now observes its blocker through `pg_blocking_pids` (A2 handoff, below); the cause of the missing wait is not established.
+- **A1** is implemented at `68dc902` through `6a5773d`. That covers the D3 ownership gate, DEF-011, DEF-013 and the reveal delegation. Its record is in [the A1 design](ownership-design.md) §8. The independent re-review passed at `fc20e8d`. CI is pending until push, and an intermittent race-test timeout is still unresolved. It has now been seen in the A1 lock-wait tests twice in full suites (`test_campaign_owner_caller_expiry.py` once, and `test_character_reveal_delegation.py::test_a_grant_that_waits_on_ending_the_gms_membership_is_refused` once: the request was alive but no session waited on a lock within 15 s), each passing on every rerun. That test now observes its blocker through `pg_blocking_pids` (A2 handoff, below); the cause of the missing wait is not established.
 - **D1 and D2** were approved by the owner and recorded on 2026-11-07 (see "Decisions still needed").
 - **D3** was approved on 2026-11-06.
 - **D8** was approved by the owner on 2026-11-07 as proposed (see "Decisions still needed").
@@ -150,11 +155,11 @@ Every code claim was checked by reading source at the stated commit. No applicat
 
 **Governing documents:**
 
-- [PLANv2.md](PLANv2.md) §15H (P03-A checkpoint and migration boundaries).
-- [R19_FOUNDATION_IMPLEMENTATION_PLAN.md](R19_FOUNDATION_IMPLEMENTATION_PLAN.md): R19-P1, §5.1 actor contract, §8 tests T6, T7, T82, T85.
-- Accepted ADRs [0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) (§2.5, §2.7–§2.9, §4.1, §4.7–§4.8, §6, §7), [0022](adr/0022-creature-templates-combatants-and-promotion.md) and [0023](adr/0023-rules-engine-calculation-validation-and-source-authorization.md).
-- [The A1 design](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md): §3 lock order and §8 implementation record. A2 must keep both unchanged.
-- Design inputs: [PHASE14_15_APP_INTERACTION_INVESTIGATION_2026-11-01.md](PHASE14_15_APP_INTERACTION_INVESTIGATION_2026-11-01.md) §D6 and [PHASE14_15_REMAINING_WORK_AND_HANDOFF_2026-11-02.md](PHASE14_15_REMAINING_WORK_AND_HANDOFF_2026-11-02.md) §6, including the owner-approved 2026-11-06 reveal-authority and encounter-reference policies, which this plan treats as requirements.
+- [roadmap](roadmap.md) §15H (P03-A checkpoint and migration boundaries).
+- [rules foundations](rules-foundations.md): R19-P1, §5.1 actor contract, §8 tests T6, T7, T82, T85.
+- Accepted ADRs [0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) (§2.5, §2.7–§2.9, §4.1, §4.7–§4.8, §6, §7), [0022](../adr/0022-creature-templates-combatants-and-promotion.md) and [0023](../adr/0023-rules-engine-calculation-validation-and-source-authorization.md).
+- [The A1 design](ownership-design.md): §3 lock order and §8 implementation record. A2 must keep both unchanged.
+- Design inputs: [PHASE14_15_APP_INTERACTION_INVESTIGATION_2026-11-01.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE14_15_APP_INTERACTION_INVESTIGATION_2026-11-01.md#d6-character-architecture-dependency-identity-revelation-projections-and-control) §D6 and [PHASE14_15_REMAINING_WORK_AND_HANDOFF_2026-11-02.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE14_15_REMAINING_WORK_AND_HANDOFF_2026-11-02.md#6-npc-versus-pc-visibility-and-control) §6, including the owner-approved 2026-11-06 reveal-authority and encounter-reference policies, which this plan treats as requirements.
 
 ---
 
@@ -210,8 +215,8 @@ The rest of the A2 track:
 
 **What exists today.** No `character.reveal` code, table or delegation exists.
 
-- Role capabilities are the union of `security.role_capabilities` rows ([access.py:1029-1046](../src/dnd_ai/domain/access.py#L1029-L1046)).
-- The resource-grant catalog leaves out administrative codes and `character.discover` ([access.py:129-141](../src/dnd_ai/domain/access.py#L129-L141)).
+- Role capabilities are the union of `security.role_capabilities` rows ([access.py:1029-1046](../../src/dnd_ai/domain/access.py#L1029-L1046)).
+- The resource-grant catalog leaves out administrative codes and `character.discover` ([access.py:129-141](../../src/dnd_ai/domain/access.py#L129-L141)).
 
 **Storage.**
 
@@ -241,26 +246,26 @@ This makes a GM role revocation or delegation revocation serialize with an in-fl
 
 **Why bind to the `gm` role row.** It enforces "restoring GM status requires a fresh grant" across every path:
 
-- re-assigning a role always inserts a new row ([memberships.py:454](../src/dnd_ai/commands/memberships.py#L454), [:743](../src/dnd_ai/commands/memberships.py#L743), [:919](../src/dnd_ai/commands/memberships.py#L919));
+- re-assigning a role always inserts a new row ([memberships.py:454](../../src/dnd_ai/commands/memberships.py#L454), [:743](../../src/dnd_ai/commands/memberships.py#L743), [:919](../../src/dnd_ai/commands/memberships.py#L919));
 - there is no command that updates `expires_at`;
-- `end_campaign_membership` revokes every role row ([memberships.py:1112-1123](../src/dnd_ai/commands/memberships.py#L1112-L1123)).
+- `end_campaign_membership` revokes every role row ([memberships.py:1112-1123](../../src/dnd_ai/commands/memberships.py#L1112-L1123)).
 
-So a restored GM always holds a different row, and the old delegation can never come back. Close delegations explicitly (with an `end_reason`) inside the commands rather than through a trigger chain, per §20.4 and the precedent in [memberships.py:1125-1162](../src/dnd_ai/commands/memberships.py#L1125-L1162).
+So a restored GM always holds a different row, and the old delegation can never come back. Close delegations explicitly (with an `end_reason`) inside the commands rather than through a trigger chain, per §20.4 and the precedent in [memberships.py:1125-1162](../../src/dnd_ai/commands/memberships.py#L1125-L1162).
 
 ### Every path that changes grant eligibility
 
 | Path | Grantor (owner) | Recipient (GM) / delegation | Required P03-A handling |
 |---|---|---|---|
-| `create_campaign` (creator gets owner + gm) [campaigns.py:613](../src/dnd_ai/commands/campaigns.py#L613) | gains | gains GM status, no grant | none |
-| `assign_membership_role` [memberships.py:337](../src/dnd_ai/commands/memberships.py#L337) | owner may be assigned | `gm` assigned → new row, no grant | none |
-| `add_campaign_member` with initial role [memberships.py:779](../src/dnd_ai/commands/memberships.py#L779) | same | same | none |
-| `revoke_membership_role` [memberships.py:484](../src/dnd_ai/commands/memberships.py#L484) | owner loses | `gm` row revoked → grant ends | close delegation with `end_reason` |
-| `change_membership_role` [memberships.py:591](../src/dnd_ai/commands/memberships.py#L591) | either direction | `gm`→X ends it; X→`gm` is a new row | close on the `gm` side |
-| `end_campaign_membership` [memberships.py:964](../src/dnd_ai/commands/memberships.py#L964) | loses | ends | close delegations, plus member-target and snapshot revelations (§2) |
-| `transfer_campaign_ownership` [memberships.py:1206](../src/dnd_ai/commands/memberships.py#L1206) | new owner gains now; relinquishing owner loses (keeps `gm`) | **existing grants survive**: grantor is provenance (ADR 0020 decision 7, OD-4a analogy); new owner may revoke | test only |
+| `create_campaign` (creator gets owner + gm) [campaigns.py:613](../../src/dnd_ai/commands/campaigns.py#L613) | gains | gains GM status, no grant | none |
+| `assign_membership_role` [memberships.py:337](../../src/dnd_ai/commands/memberships.py#L337) | owner may be assigned | `gm` assigned → new row, no grant | none |
+| `add_campaign_member` with initial role [memberships.py:779](../../src/dnd_ai/commands/memberships.py#L779) | same | same | none |
+| `revoke_membership_role` [memberships.py:484](../../src/dnd_ai/commands/memberships.py#L484) | owner loses | `gm` row revoked → grant ends | close delegation with `end_reason` |
+| `change_membership_role` [memberships.py:591](../../src/dnd_ai/commands/memberships.py#L591) | either direction | `gm`→X ends it; X→`gm` is a new row | close on the `gm` side |
+| `end_campaign_membership` [memberships.py:964](../../src/dnd_ai/commands/memberships.py#L964) | loses | ends | close delegations, plus member-target and snapshot revelations (§2) |
+| `transfer_campaign_ownership` [memberships.py:1206](../../src/dnd_ai/commands/memberships.py#L1206) | new owner gains now; relinquishing owner loses (keeps `gm`) | **existing grants survive**: grantor is provenance (ADR 0020 decision 7, OD-4a analogy); new owner may revoke | test only |
 | Role `expires_at` lapsing (time-based, no write) | owner lapses | read-time liveness fails; a later re-assignment is a new row | read-time check only |
-| `recover_campaign_access_manager` [recovery.py:153-195](../src/dnd_ai/commands/recovery.py#L153-L195) | admin creates an owner; can flip an open membership's status to `active` | status flip could revive a delegation bound to a still-live `gm` row | close that membership's delegations when status is changed |
-| Invitation acceptance reopens a membership in place [campaign_invitations.py:247-262](../src/dnd_ai/commands/campaign_invitations.py#L247-L262) | none (roles were revoked at end) | none | none, because end already closed everything |
+| `recover_campaign_access_manager` [recovery.py:153-195](../../src/dnd_ai/commands/recovery.py#L153-L195) | admin creates an owner; can flip an open membership's status to `active` | status flip could revive a delegation bound to a still-live `gm` row | close that membership's delegations when status is changed |
+| Invitation acceptance reopens a membership in place [campaign_invitations.py:247-262](../../src/dnd_ai/commands/campaign_invitations.py#L247-L262) | none (roles were revoked at end) | none | none, because end already closed everything |
 | Campaign archived/deleted (route refuses) / account deactivated (auth fails) | unusable meanwhile | unusable meanwhile | none; the rows are unchanged, so authority returns with no new grant. Read as "not a GM status loss"; reviewer to confirm |
 | Role template `is_active` toggle; membership `suspended` | DB-only; no app path exists | fails closed while inactive | document as DB-only |
 
@@ -290,18 +295,18 @@ So a restored GM always holds a different row, and the old delegation can never 
 
 - **Member target:** ends when the membership ends. Invitation reactivation reuses the membership UUID, so this follows the existing precedent that a reopened membership starts with nothing.
 - **Group target:** live while the group is active and the member has a live group membership.
-  - [access_groups.py:597](../src/dnd_ai/commands/access_groups.py#L597) and [:806](../src/dnd_ai/commands/access_groups.py#L806) change who is covered.
-  - `deactivate_access_group` [access_groups.py:408](../src/dnd_ai/commands/access_groups.py#L408) should revoke group revelations just as it revokes group grants.
+  - [access_groups.py:597](../../src/dnd_ai/commands/access_groups.py#L597) and [:806](../../src/dnd_ai/commands/access_groups.py#L806) change who is covered.
+  - `deactivate_access_group` [access_groups.py:408](../../src/dnd_ai/commands/access_groups.py#L408) should revoke group revelations just as it revokes group grants.
 - **`campaign_current`:** snapshot rows only; ended memberships get `removed_at` set.
 - **`campaign_current_and_future`:** any active membership, so a returning member counts as a "future" member.
 
-**Enforcement inside `AccessContext`.** Add a separate, source-tagged field (for example `revealed_characters`) to [AccessContext](../src/dnd_ai/domain/access.py#L248). It is resolved in `resolve_access_context` with the same character filters as relationships: lifecycle `active` and canon `canon` ([access.py:1068-1070](../src/dnd_ai/domain/access.py#L1068-L1070)).
+**Enforcement inside `AccessContext`.** Add a separate, source-tagged field (for example `revealed_characters`) to [AccessContext](../../src/dnd_ai/domain/access.py#L248). It is resolved in `resolve_access_context` with the same character filters as relationships: lifecycle `active` and canon `canon` ([access.py:1068-1070](../../src/dnd_ai/domain/access.py#L1068-L1070)).
 
 - A revelation confers only `character.discover` and a new `character.view_public_profile`.
 - It never confers `view_summary`, `view_full`, `view_inventory`, `view_knowledge` or `view_private`.
 - `has_capability` adds it to the baseline, so existing denies still win. A whole-character `campaign.view` deny suppresses it, and a deny of `character.discover` alone hides only discovery (ADR 0021 §2.9).
 - Revoking a revelation touches only its own row, so legacy viewer relationships and resource grants survive (T6).
-- The access-overview explanation ([effective_access.py:82](../src/dnd_ai/queries/effective_access.py#L82)) must show revelation as a distinct source.
+- The access-overview explanation ([effective_access.py:82](../../src/dnd_ai/queries/effective_access.py#L82)) must show revelation as a distinct source.
 
 **Migration and existing records.** All additive. A1 used `141_character_reveal_delegations`, so A2a is expected to be 142.
 
@@ -309,48 +314,48 @@ So a restored GM always holds a different row, and the old delegation can never 
 - `character.character_descriptions` is untouched. It stays reachable only through the authoring reads, which already keeps legacy background restricted.
 - After migration, every existing character has no profile and no revelation. Discovery through roles, relationships and grants is unchanged.
 - The one intended behavior change is A0.
-- New columns must be registered in [data_classification.py](../src/dnd_ai/domain/data_classification.py#L128): release fields `CAMPAIGN_VISIBLE`, draft `GM_ONLY`.
+- New columns must be registered in [data_classification.py](../../src/dnd_ai/domain/data_classification.py#L128): release fields `CAMPAIGN_VISIBLE`, draft `GM_ONLY`.
 
 ---
 
 ## 3. Discovery surfaces and `active_encounter_id`
 
-**Most consumers update together.** Almost every consumer reads the same bundle, so revelation reaches them through one change: add the revealed IDs to the `mentioned` set in [resolve_world_character_visibility](../src/dnd_ai/api/world_explorer.py#L98-L130). Consumers that inherit it:
+**Most consumers update together.** Almost every consumer reads the same bundle, so revelation reaches them through one change: add the revealed IDs to the `mentioned` set in [resolve_world_character_visibility](../../src/dnd_ai/api/world_explorer.py#L98-L130). Consumers that inherit it:
 
-- World search and counts ([queries/world_explorer.py:255-296](../src/dnd_ai/queries/world_explorer.py#L255-L296))
-- `discoverable_entity_ids` and `all_participants_discoverable_sql` ([queries/world_explorer.py:492-620](../src/dnd_ai/queries/world_explorer.py#L492-L620))
-- relationships ([api/relationships.py:366](../src/dnd_ai/api/relationships.py#L366))
-- organization members ([api/organization_members.py:68](../src/dnd_ai/api/organization_members.py#L68))
-- the session roster ([api/sessions.py:184](../src/dnd_ai/api/sessions.py#L184))
-- event explanations ([api/event_explanations.py:197-214](../src/dnd_ai/api/event_explanations.py#L197-L214))
-- Knowledge subjects ([api/knowledge.py:347](../src/dnd_ai/api/knowledge.py#L347), [:405](../src/dnd_ai/api/knowledge.py#L405))
-- the encounter member projection ([api/encounters.py:428](../src/dnd_ai/api/encounters.py#L428))
-- the clock reads ([api/campaign_clock.py:107](../src/dnd_ai/api/campaign_clock.py#L107))
+- World search and counts ([queries/world_explorer.py:255-296](../../src/dnd_ai/queries/world_explorer.py#L255-L296))
+- `discoverable_entity_ids` and `all_participants_discoverable_sql` ([queries/world_explorer.py:492-620](../../src/dnd_ai/queries/world_explorer.py#L492-L620))
+- relationships ([api/relationships.py:366](../../src/dnd_ai/api/relationships.py#L366))
+- organization members ([api/organization_members.py:68](../../src/dnd_ai/api/organization_members.py#L68))
+- the session roster ([api/sessions.py:184](../../src/dnd_ai/api/sessions.py#L184))
+- event explanations ([api/event_explanations.py:197-214](../../src/dnd_ai/api/event_explanations.py#L197-L214))
+- Knowledge subjects ([api/knowledge.py:347](../../src/dnd_ai/api/knowledge.py#L347), [:405](../../src/dnd_ai/api/knowledge.py#L405))
+- the encounter member projection ([api/encounters.py:428](../../src/dnd_ai/api/encounters.py#L428))
+- the clock reads ([api/campaign_clock.py:107](../../src/dnd_ai/api/campaign_clock.py#L107))
 - the subject side of preview, which resolves the subject's own `AccessContext`.
 
 **Surfaces that need explicit change:**
 
-- **Projection tier:** add one next to [resolve_character_view_tier](../src/dnd_ai/api/access.py#L455-L490): `public_profile` < `summary` < `full` < `gm`.
-- **Link decisions:** [can_open_participant](../src/dnd_ai/api/access.py#L533) and the session roster's [_can_open_character](../src/dnd_ai/api/sessions.py#L169) must treat `public_profile` as openable. Otherwise a revealed character is listed but cannot be opened.
-- **Character detail** ([api/characters.py:465](../src/dnd_ai/api/characters.py#L465)):
+- **Projection tier:** add one next to [resolve_character_view_tier](../../src/dnd_ai/api/access.py#L455-L490): `public_profile` < `summary` < `full` < `gm`.
+- **Link decisions:** [can_open_participant](../../src/dnd_ai/api/access.py#L533) and the session roster's [_can_open_character](../../src/dnd_ai/api/sessions.py#L169) must treat `public_profile` as openable. Otherwise a revealed character is listed but cannot be opened.
+- **Character detail** ([api/characters.py:465](../../src/dnd_ai/api/characters.py#L465)):
   - Return a public-tier response carrying the latest release.
   - `species_code` and `size_category` become null at that tier unless released.
-  - `sections` gains `public_profile`; the sheet, inventory and parties sections stay false (sections at [api/characters.py:439](../src/dnd_ai/api/characters.py#L439)).
+  - `sections` gains `public_profile`; the sheet, inventory and parties sections stay false (sections at [api/characters.py:439](../../src/dnd_ai/api/characters.py#L439)).
   - Direct entry and browse must agree.
-- **Unchanged, regression-test only:** the inventory gate ([api/access.py:496](../src/dnd_ai/api/access.py#L496)), the sheet, and bootstrap perspectives (`view_knowledge`, [queries/bootstrap.py:107](../src/dnd_ai/queries/bootstrap.py#L107)). A revelation must open none of them.
-- **Party roster** ([api/parties.py:134-147](../src/dnd_ai/api/parties.py#L134-L147)) deliberately names every current party member without discovery. See D4.
+- **Unchanged, regression-test only:** the inventory gate ([api/access.py:496](../../src/dnd_ai/api/access.py#L496)), the sheet, and bootstrap perspectives (`view_knowledge`, [queries/bootstrap.py:107](../../src/dnd_ai/queries/bootstrap.py#L107)). A revelation must open none of them.
+- **Party roster** ([api/parties.py:134-147](../../src/dnd_ai/api/parties.py#L134-L147)) deliberately names every current party member without discovery. See D4.
 - **Derived mechanics stay outside P03-A.** The public tier never calls `character_sheet` or `character_calculations`.
 
-**`active_encounter_id` today.** It is selected by timeline and `status='active'` only ([queries/character.py:181-193](../src/dnd_ai/queries/character.py#L181-L193)), with no campaign check. `LIMIT 1` therefore picks across campaigns that share a timeline, and campaign-less encounters (`campaign_id` is nullable with `SET NULL`) are also returned.
+**`active_encounter_id` today.** It is selected by timeline and `status='active'` only ([queries/character.py:181-193](../../src/dnd_ai/queries/character.py#L181-L193)), with no campaign check. `LIMIT 1` therefore picks across campaigns that share a timeline, and campaign-less encounters (`campaign_id` is nullable with `SET NULL`) are also returned.
 
 **The fix:**
 
 - Add a required `campaign_id` to `get_character_view`.
 - Filter `e.campaign_id = :campaign` before the `ORDER BY … LIMIT 1`.
-- Apply the encounter member-read rule ([queries/encounter.py:100-115](../src/dnd_ai/queries/encounter.py#L100-L115)) through a shared, exported predicate, so the two surfaces can't drift.
+- Apply the encounter member-read rule ([queries/encounter.py:100-115](../../src/dnd_ai/queries/encounter.py#L100-L115)) through a shared, exported predicate, so the two surfaces can't drift.
 - Apply it to every full-tier reader, including `canon.edit` holders and the Foundry paired-device route.
 
-The second caller, AI NPC context ([domain/context_assembly.py:362-396](../src/dnd_ai/domain/context_assembly.py#L362-L396)), must pass the route campaign as well.
+The second caller, AI NPC context ([domain/context_assembly.py:362-396](../../src/dnd_ai/domain/context_assembly.py#L362-L396)), must pass the route campaign as well.
 
 ---
 
@@ -370,7 +375,7 @@ The second caller, AI NPC context ([domain/context_assembly.py:362-396](../src/d
 | **A2b-2** (designed, revised after review; for Sonnet) | The copy command and route, `legacy_copy` in the GM read, the copy audit row (§9.4, §9.6) | A2b-1 | §9.8–§9.9: copy rules, recopy, excerpt regressions through the real copy, disclosure sweep, copy races |
 | **A3** (designed in §10; split into A3a and A3b, §10.10) | Revelations: audience kinds, snapshot, create/revoke, membership-end and group-deactivate hooks, `AccessContext` source, discovery bundle | A2 (a revelation requires an existing release, D9-d); D4-C, D5-c, D9, D10 (approved) | T82 audiences, including the late joiner; T6 independent-grant survival; whole vs operation deny; cross-surface matrix from investigation D6.4 (lists, counts, pagination, relationships, organizations, roster, events, encounters, Knowledge, preview), with **response-body ID assertions**; bootstrap, inventory and sheet unchanged |
 | **A4** (designed 2026-11-10 in §12; for Sonnet as A4a and A4b) | Migration 146 (D6 draft controls, the release's identity snapshot, the retry key); the public-profile tier and its DTO; the `public_profile` section for summary and full readers; `sections`; `can_open_character` | A3b (done); D6 (approved 2026-11-10), D11, D12 | §12.9, §12.11: browse/detail agreement; the public tier carries no species, size or mechanics unless released; revocation takes effect on the next request |
-| **A5** (designed 2026-11-11 in [the A5 design](PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md); finalized after D13–D18 approval; for Sonnet as A5a–A5c) | OD-18 player-profile storage plus GM read (editing is P03-B, T85); GM-selected copy of an eligible field via A2 provenance. Infrastructure: no production profile writer until P03-B. Migrations 147 (storage) and 148 (provenance) | A2; D13–D18 (approved 2026-11-11) | Readable only by A's GMs; nothing in B; no write path for players yet. Full criteria: design §11 and §13 |
+| **A5** (designed 2026-11-11 in [the A5 design](player-profile-design.md); finalized after D13–D18 approval; for Sonnet as A5a–A5c) | OD-18 player-profile storage plus GM read (editing is P03-B, T85); GM-selected copy of an eligible field via A2 provenance. Infrastructure: no production profile writer until P03-B. Migrations 147 (storage) and 148 (provenance) | A2; D13–D18 (approved 2026-11-11) | Readable only by A's GMs; nothing in B; no write path for players yet. Full criteria: design §11 and §13 |
 | **A6** | Portal: reveal/delegation management, draft and release editor, revelation list and revoke, public character view, effective-access sources | A4 (A5 optional) | jsdom; type contract; non-disclosing errors; real-browser checks recorded as pending |
 | **A7** | Character-profile audience preview (investigation D6.3, optional), docs reconciliation, corrected Sella acceptance (investigation D6.8) | A4, A6 | Manual T82/D6.8 on namespaced fixtures, not the owner's campaign |
 
@@ -397,7 +402,7 @@ Docs to update in the same change: `DOMAIN_MODEL`, `DATABASE_MODEL` §19, `PHASE
   - Nothing written in A changes what B's GMs or audiences see.
   - The world definition (`core.entities`, `character.character_descriptions`) is never written.
 - **Editing (D2, refined by D8).** Editing requires **effective character-scoped `canon.edit`**, which means both of these:
-  - the caller holds role `canon.edit` in the route campaign (assistant GMs included), re-checked under lock by `lock_authoring_scope` ([_content.py:95](../src/dnd_ai/commands/_content.py#L95)), as every authoring write does;
+  - the caller holds role `canon.edit` in the route campaign (assistant GMs included), re-checked under lock by `lock_authoring_scope` ([_content.py:95](../../src/dnd_ai/commands/_content.py#L95)), as every authoring write does;
   - no deny removes it for this character (§5.7a).
 
   A `canon.edit` allow targeting the character does not by itself confer editing (D8).
@@ -419,7 +424,7 @@ Docs to update in the same change: `DOMAIN_MODEL`, `DATABASE_MODEL` §19, `PHASE
 
 | Field | Draft | Release | Classification | Notes |
 |---|---|---|---|---|
-| `public_appearance` | `TEXT NULL`, at most 4000 characters | snapshot | draft `GM_ONLY`, release `CAMPAIGN_VISIBLE` | The limit is `NPC_TEXT_MAX_LENGTH` ([npc_authoring.py:14](../src/dnd_ai/domain/npc_authoring.py#L14)), the source field's limit, so a copied text always fits |
+| `public_appearance` | `TEXT NULL`, at most 4000 characters | snapshot | draft `GM_ONLY`, release `CAMPAIGN_VISIBLE` | The limit is `NPC_TEXT_MAX_LENGTH` ([npc_authoring.py:14](../../src/dnd_ai/domain/npc_authoring.py#L14)), the source field's limit, so a copied text always fits |
 | `public_background` | same | snapshot | same | same |
 | `<field>_origin_id` | FK to the origins lookup | snapshot | `STRUCTURAL` | `authored`, `legacy_appearance` or `legacy_background`. `player_profile` is reserved for A5 and inserted then |
 | `<field>_origin_entity_row_version` | `BIGINT NULL` | snapshot | `STRUCTURAL` | The character's `core.entities.row_version` when the text was copied. Present only for a legacy origin |
@@ -476,7 +481,7 @@ Constraints:
 **Other database changes:**
 
 - **Grants.** Follow migration 141's pattern. The application role gets SELECT, INSERT and UPDATE on drafts; SELECT and INSERT on releases; SELECT on the lookup. Nothing gets DELETE.
-- **Entity reference classification.** Both `character_id` foreign keys are registered as `BLOCKING` in `ENTITY_REFERENCE_CLASSIFICATION` ([entity_lifecycle.py:101](../src/dnd_ai/commands/entity_lifecycle.py#L101)). A character with a profile is therefore never physically deleted (ENTITY_LIFECYCLE §14). Legal removal would need its own reviewed administrative procedure; that is outside A2.
+- **Entity reference classification.** Both `character_id` foreign keys are registered as `BLOCKING` in `ENTITY_REFERENCE_CLASSIFICATION` ([entity_lifecycle.py:101](../../src/dnd_ai/commands/entity_lifecycle.py#L101)). A character with a profile is therefore never physically deleted (ENTITY_LIFECYCLE §14). Legal removal would need its own reviewed administrative procedure; that is outside A2.
 - **Downgrade.** Lossy but supported: it drops the tables, triggers and lookup, as 141 does.
 
 ### 5.4 The draft's concurrency token
@@ -535,21 +540,21 @@ All routes are under `/campaigns/{campaign_id}/characters/{character_id}/public-
   - A caller who has lost authority cannot replay a stored response.
 - **The character checks come after the lookup.** The whole-character deny and the character checks give 404s, and run after it.
 
-**Idempotency fingerprint (review correction).** All three POST routes put the path's `character_id` into the fingerprinted payload: `{"character_id": str(character_id), **body.model_dump(mode="json")}`. This is the pattern `update_player_character` already uses ([player_character_authoring.py](../src/dnd_ai/api/player_character_authoring.py), `{"player_character_id": …, **body}`).
+**Idempotency fingerprint (review correction).** All three POST routes put the path's `character_id` into the fingerprinted payload: `{"character_id": str(character_id), **body.model_dump(mode="json")}`. This is the pattern `update_player_character` already uses ([player_character_authoring.py](../../src/dnd_ai/api/player_character_authoring.py), `{"player_character_id": …, **body}`).
 
 - **Why it matters.** The store's scope is (actor, campaign, key). The release body `{expected_draft_row_version, release_note}` does not identify the character. Without `character_id`, a reused key with the same body on character Y would replay X's stored 201 for Y. Y would then appear released when it was not.
 - **With it,** the fingerprints differ and the request gets the existing non-disclosing idempotency 409. This is pinned by A2a criterion 13.
 
 ### 5.7a Reading, editing and releasing under denies (proposed, D8)
 
-**Which deny keys apply.** `campaign.view` and `canon.edit` are generic-target capabilities. A resource grant can name them for a character only through the `entity_id` target (`RESOURCE_GRANT_CAPABILITY_CATALOG`, [access.py:228](../src/dnd_ai/domain/access.py#L228)).
+**Which deny keys apply.** `campaign.view` and `canon.edit` are generic-target capabilities. A resource grant can name them for a character only through the `entity_id` target (`RESOURCE_GRANT_CAPABILITY_CATALOG`, [access.py:228](../../src/dnd_ai/domain/access.py#L228)).
 
 *Correction (A2a review, §8):* the catalog permits that key, but `create_resource_grant`'s CTI guard refuses a character entity under `entity_id`. So at `0b4704c` neither deny below can be created through the application, only by direct SQL. A2a-R (§8) removes that refusal for exactly these two denies. The read keys below are unchanged.
 
-- **Whole-character deny:** `not access.has_capability("campaign.view", entity_id=character_id)`. This is the test `resolve_character_inventory_access` uses ([api/access.py:514](../src/dnd_ai/api/access.py#L514)).
+- **Whole-character deny:** `not access.has_capability("campaign.view", entity_id=character_id)`. This is the test `resolve_character_inventory_access` uses ([api/access.py:514](../../src/dnd_ai/api/access.py#L514)).
 - **`canon.edit` deny on the character:** a `deny` for `canon.edit` under `("entity_id", character_id)` in `grant_effects`. A deny under `("character_id", character_id)` counts too, so that a stray row also fails closed.
   - `has_capability("canon.edit", character_id=…)` alone is **not** enough: it consults only the `character_id` key, under which no `canon.edit` grant can be created.
-  - That mistake already exists in `resolve_character_view_tier` ([api/access.py:482](../src/dnd_ai/api/access.py#L482)) and `resolve_character_inventory_access` ([:515](../src/dnd_ai/api/access.py#L515)), so neither sees a per-character `canon.edit` deny. It predates A2 and is outside it: proposed **DEF-016**. A2 must not copy the pattern.
+  - That mistake already exists in `resolve_character_view_tier` ([api/access.py:482](../../src/dnd_ai/api/access.py#L482)) and `resolve_character_inventory_access` ([:515](../../src/dnd_ai/api/access.py#L515)), so neither sees a per-character `canon.edit` deny. It predates A2 and is outside it: proposed **DEF-016**. A2 must not copy the pattern.
 - **Effective character-scoped `canon.edit`:** role `canon.edit`, no whole-character deny, and no `canon.edit` deny on the character. An `allow` grant of `canon.edit` on the character does **not** confer editing on a member without role `canon.edit` (D8). Otherwise a resource grant would become the first per-character authoring path, which ADR 0021 §4 reserves for stewardship and delegations.
 
 | Deny on the caller | Read draft and releases | Edit draft | Release |
@@ -585,7 +590,7 @@ Each command is one transaction, and the audit row commits with the write. The o
 | `copy_legacy_text_to_public_profile_draft` (A2b) | As for a draft save, with the kind's world capability resolved under the world lock. The character's `row_version` and its source text are read in separate statements under the entity `FOR SHARE` lock, which every description writer conflicts with (§9.6) |
 | `release_character_public_profile` after A2b-1 | **World (S) first**, then the row above unchanged; the withheld check runs after the natural-retry and stale steps (§9.6) |
 
-**Correction to the first A2a design.** The first design locked the character's entity before the caller's membership. `create_resource_grant` locks the grantee's membership `FOR UPDATE`, then the campaign `FOR UPDATE`, then the target entity `FOR UPDATE` ([access_grants.py:1341](../src/dnd_ai/commands/access_grants.py#L1341)). A grant to the releaser naming the character would therefore hold the membership and wait for the entity, while the release held the entity and waited for the membership: a deadlock.
+**Correction to the first A2a design.** The first design locked the character's entity before the caller's membership. `create_resource_grant` locks the grantee's membership `FOR UPDATE`, then the campaign `FOR UPDATE`, then the target entity `FOR UPDATE` ([access_grants.py:1341](../../src/dnd_ai/commands/access_grants.py#L1341)). A grant to the releaser naming the character would therefore hold the membership and wait for the entity, while the release held the entity and waited for the membership: a deadlock.
 
 The release now takes membership, then campaign, then entity. That is the order `create_resource_grant`, `grant_character_relationship` and `lock_authoring_scope` already use. The last lock wait is still the draft row, so the fresh-instant re-check (DEF-013 pattern) still follows every wait.
 
@@ -631,12 +636,12 @@ The release now takes membership, then campaign, then entity. That is the order 
 
 | Reader | Gate | Returns legacy text? |
 |---|---|---|
-| `GET …/authoring/player-characters/{id}` ([player_character_authoring.py:191](../src/dnd_ai/api/player_character_authoring.py#L191)) through `get_character_authoring` ([queries/npc_authoring.py:85](../src/dnd_ai/queries/npc_authoring.py#L85)) | campaign `canon.edit`; any character of the campaign's world (ADR 0021 §4.1) | `background`, `appearance`, and the GM-only `notes` |
-| `GET …/authoring/npcs/{id}` ([npc_authoring.py:192](../src/dnd_ai/api/npc_authoring.py#L192)) | campaign `canon.edit` **and** world `world.canon.read_private` | the same three fields |
-| Revision history and comparison ([review_queue.py:120](../src/dnd_ai/api/review_queue.py#L120), [:150](../src/dnd_ai/api/review_queue.py#L150)) | `canon.edit` and `world.canon.read_private` | yes, as diffs of the authoring snapshot (`capture_revision`) |
-| Audit history ([audit_history.py](../src/dnd_ai/api/audit_history.py)) | `access.manage` | no: an allowlist of commands, and only `previous_membership_role_id` is read from `changed_fields` |
-| Provenance ([provenance.py](../src/dnd_ai/queries/provenance.py)) | `canon.edit` | no: lifecycle actor and time, "never the free-text reason or the changed fields" |
-| Character detail, world explorer, bootstrap, sheet, inventory, relationships, sessions, encounters, Knowledge, AI context, Foundry routes | various | **no.** Only [commands/npcs.py](../src/dnd_ai/commands/npcs.py) and [queries/npc_authoring.py](../src/dnd_ai/queries/npc_authoring.py) reference `character.character_descriptions` in `src/` |
+| `GET …/authoring/player-characters/{id}` ([player_character_authoring.py:191](../../src/dnd_ai/api/player_character_authoring.py#L191)) through `get_character_authoring` ([queries/npc_authoring.py:85](../../src/dnd_ai/queries/npc_authoring.py#L85)) | campaign `canon.edit`; any character of the campaign's world (ADR 0021 §4.1) | `background`, `appearance`, and the GM-only `notes` |
+| `GET …/authoring/npcs/{id}` ([npc_authoring.py:192](../../src/dnd_ai/api/npc_authoring.py#L192)) | campaign `canon.edit` **and** world `world.canon.read_private` | the same three fields |
+| Revision history and comparison ([review_queue.py:120](../../src/dnd_ai/api/review_queue.py#L120), [:150](../../src/dnd_ai/api/review_queue.py#L150)) | `canon.edit` and `world.canon.read_private` | yes, as diffs of the authoring snapshot (`capture_revision`) |
+| Audit history ([audit_history.py](../../src/dnd_ai/api/audit_history.py)) | `access.manage` | no: an allowlist of commands, and only `previous_membership_role_id` is read from `changed_fields` |
+| Provenance ([provenance.py](../../src/dnd_ai/queries/provenance.py)) | `canon.edit` | no: lifecycle actor and time, "never the free-text reason or the changed fields" |
+| Character detail, world explorer, bootstrap, sheet, inventory, relationships, sessions, encounters, Knowledge, AI context, Foundry routes | various | **no.** Only [commands/npcs.py](../../src/dnd_ai/commands/npcs.py) and [queries/npc_authoring.py](../../src/dnd_ai/queries/npc_authoring.py) reference `character.character_descriptions` in `src/` |
 
 **Design.**
 
@@ -675,12 +680,12 @@ The release now takes membership, then campaign, then entity. That is the order 
 
 **The two lock sequences.**
 
-- `lock_authoring_scope` ([_content.py:95](../src/dnd_ai/commands/_content.py#L95)) takes, in order:
+- `lock_authoring_scope` ([_content.py:95](../../src/dnd_ai/commands/_content.py#L95)) takes, in order:
   1. the world `FOR SHARE`;
   2. the caller's unrevoked role rows and open membership `FOR SHARE`;
   3. the account `FOR SHARE`;
-  4. the campaign row `FOR SHARE` ([_content.py:169](../src/dnd_ai/commands/_content.py#L169)).
-- `recover_campaign_access_manager` ([recovery.py:153](../src/dnd_ai/commands/recovery.py#L153)) takes the campaign row `FOR NO KEY UPDATE`, then asks for the promoted user's open membership `FOR UPDATE` ([recovery.py:166-170](../src/dnd_ai/commands/recovery.py#L166-L170)).
+  4. the campaign row `FOR SHARE` ([_content.py:169](../../src/dnd_ai/commands/_content.py#L169)).
+- `recover_campaign_access_manager` ([recovery.py:153](../../src/dnd_ai/commands/recovery.py#L153)) takes the campaign row `FOR NO KEY UPDATE`, then asks for the promoted user's open membership `FOR UPDATE` ([recovery.py:166-170](../../src/dnd_ai/commands/recovery.py#L166-L170)).
 
 **The cycle.** `FOR SHARE` conflicts with `FOR NO KEY UPDATE`. So an authoring write by the member being promoted can hold the membership while waiting for the campaign, while recovery holds the campaign and waits for the membership. PostgreSQL aborts one with SQLSTATE 40P01, which the API reports as a 500.
 
@@ -712,7 +717,7 @@ Change the campaign statement in `lock_authoring_scope` from `FOR SHARE` to **`F
 
 | Protection | Mechanism | After P0 |
 |---|---|---|
-| Campaign archive, reactivate and settings edit serialize with an authoring write | `archive_campaign`, `reactivate_campaign` and `update_campaign` all take the campaign row `FOR UPDATE` first, through `_lock_campaign_for_manage` ([campaigns.py:682](../src/dnd_ai/commands/campaigns.py#L682)). These are the only application `UPDATE`s of `campaign.campaigns` (`campaigns.py:723`, `:801`); migration 024's `UPDATE`s are a one-time backfill | `FOR UPDATE` conflicts with `KEY SHARE`, so this is preserved. In READ COMMITTED, an author who waited reads the archived status after its lock and fails with `CampaignArchivedError`. *R01 S5-E1 (2026-11-14): the three routes now run as keyed pre-write plans (`dnd_ai.commands.campaign_lifecycle_plans`) and take the actor's role rows, membership and account `FOR SHARE` before the campaign `FOR UPDATE` (and the world and timeline `FOR SHARE` before those, for reactivation); the direct commands keep the order described here.* |
+| Campaign archive, reactivate and settings edit serialize with an authoring write | `archive_campaign`, `reactivate_campaign` and `update_campaign` all take the campaign row `FOR UPDATE` first, through `_lock_campaign_for_manage` ([campaigns.py:682](../../src/dnd_ai/commands/campaigns.py#L682)). These are the only application `UPDATE`s of `campaign.campaigns` (`campaigns.py:723`, `:801`); migration 024's `UPDATE`s are a one-time backfill | `FOR UPDATE` conflicts with `KEY SHARE`, so this is preserved. In READ COMMITTED, an author who waited reads the archived status after its lock and fails with `CampaignArchivedError`. *R01 S5-E1 (2026-11-14): the three routes now run as keyed pre-write plans (`dnd_ai.commands.campaign_lifecycle_plans`) and take the actor's role rows, membership and account `FOR SHARE` before the campaign `FOR UPDATE` (and the world and timeline `FOR SHARE` before those, for reactivation); the direct commands keep the order described here.* |
 | Role loss (`revoke_membership_role`, `change_membership_role`) and membership end (`end_campaign_membership`) serialize with an authoring write | The role rows and membership `FOR SHARE`, taken before the campaign row; the deferred retention trigger takes the campaign `FOR UPDATE` at commit | Unchanged. The helper's comment about why the membership comes before the campaign still holds, because `KEY SHARE` still conflicts with the trigger's `FOR UPDATE` |
 | Account deactivation | The account `FOR SHARE` | Unchanged |
 | World archive, end of a world role, world ownership transfer and world recovery | The world `FOR SHARE` | Unchanged |
@@ -728,7 +733,7 @@ Change the campaign statement in `lock_authoring_scope` from `FOR SHARE` to **`F
 
 ### 6.3 Callers of the shared helper (traced at `6a5773d`)
 
-There are 64 call sites across 28 command modules. `lock_operation_scope` ([_operations.py:30](../src/dnd_ai/commands/_operations.py#L30)) delegates to `lock_authoring_scope` (`:43`) and adds only the read of the campaign's timeline id.
+There are 64 call sites across 28 command modules. `lock_operation_scope` ([_operations.py:30](../../src/dnd_ai/commands/_operations.py#L30)) delegates to `lock_authoring_scope` (`:43`) and adds only the read of the campaign's timeline id.
 
 **Direct calls of `lock_authoring_scope`** (29, in 13 modules):
 
@@ -781,7 +786,7 @@ Where a test must stop a command *between two of its own statements*, it uses a 
 
 - **Code:** one line in `_content.py` (the lock mode), the helper's docstring and lock-order comment updated to name `KEY SHARE` and why, and the test changes in §6.4.
 - **Docs:**
-  - [SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md): line 315 ("campaign `FOR SHARE` (required `active`)"), and line 321 (the "takes `FOR SHARE` on the parent" rule, noting the campaign exception and its reason);
+  - [SYSTEM_ARCHITECTURE.md](../architecture/SYSTEM_ARCHITECTURE.md): line 315 ("campaign `FOR SHARE` (required `active`)"), and line 321 (the "takes `FOR SHARE` on the parent" rule, noting the campaign exception and its reason);
   - a DEF-014 entry in the defect register (reproduction, fix, regressions).
 - **Checks:**
   - the new and modified tests;
@@ -856,7 +861,7 @@ Recovery (S3, S4) works, because both commands take the campaign row first.
 
 ### 7.2 Both lock sequences, traced at `4dd56fd`
 
-**Adding members** (`POST …/access-groups/{group}/members`, [api/access_groups.py:528](../src/dnd_ai/api/access_groups.py#L528) → [access_groups.py:597](../src/dnd_ai/commands/access_groups.py#L597)):
+**Adding members** (`POST …/access-groups/{group}/members`, [api/access_groups.py:528](../../src/dnd_ai/api/access_groups.py#L528) → [access_groups.py:597](../../src/dnd_ai/commands/access_groups.py#L597)):
 
 1. With an `Idempotency-Key`, `begin_idempotent_request` inserts first. Its foreign keys take `KEY SHARE` on the actor's account and on the campaign row. Without a key, it takes nothing.
 2. The group: `FOR UPDATE OF ag` (`:634`).
@@ -903,7 +908,7 @@ Recovery (S3, S4) works, because both commands take the campaign row first.
    FOR NO KEY UPDATE
    ```
 
-3. **The actor's membership** (`added_by_membership_id`): `FOR KEY SHARE`, the mode its foreign key takes anyway. This mirrors `_lock_foreign_key_targets` in [character_reveal.py](../src/dnd_ai/commands/character_reveal.py). It is harmless when the actor is also a member being added.
+3. **The actor's membership** (`added_by_membership_id`): `FOR KEY SHARE`, the mode its foreign key takes anyway. This mirrors `_lock_foreign_key_targets` in [character_reveal.py](../../src/dnd_ai/commands/character_reveal.py). It is harmless when the actor is also a member being added.
 4. **The campaign:** `FOR KEY SHARE OF c`, with the `active` check and `CampaignNotActiveError` unchanged.
 5. **Validation, per member, in UUID order, from the locked rows:**
    1. a row that is missing or belongs to another campaign → `MembershipNotInCampaignError`;
@@ -965,7 +970,7 @@ Recovery (S3, S4) works, because both commands take the campaign row first.
 ### 7.5 Callers and neighbours checked
 
 - **Callers of the changed function.**
-  - `add_access_group_members` has one production caller: the add endpoint ([api/access_groups.py:572](../src/dnd_ai/api/access_groups.py#L572)).
+  - `add_access_group_members` has one production caller: the add endpoint ([api/access_groups.py:572](../../src/dnd_ai/api/access_groups.py#L572)).
   - `add_access_group_member` is a thin wrapper used only by tests.
   - The endpoint's idempotency insert, audit inserts and receipt keep their positions (§7.2).
   - `queries/access_overview.py` and `queries/audit_history.py` only name the command.
@@ -976,9 +981,9 @@ Recovery (S3, S4) works, because both commands take the campaign row first.
 - **`create_resource_grant` with a group grantee** takes the group and then the campaign `FOR UPDATE`. That serializes with an add to the same group at the group row. With an add to another group, it serializes at the campaign (`FOR UPDATE` against `KEY SHARE`), and neither waits for anything else the other holds.
 - **`end_campaign_membership`** closes the member's `access_group_memberships` rows. Covered by S5/S6, and by S9/S10 for the actor.
 - **Documentation and comments that name the add's campaign `FOR UPDATE`** become inaccurate and change in P1 (§7.8):
-  - P0's comment in [_content.py](../src/dnd_ai/commands/_content.py) ("the resource-grant, relationship and access-group writes");
-  - [SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md) line 315;
-  - [PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) line 554;
+  - P0's comment in [_content.py](../../src/dnd_ai/commands/_content.py) ("the resource-grant, relationship and access-group writes");
+  - [SYSTEM_ARCHITECTURE.md](../architecture/SYSTEM_ARCHITECTURE.md) line 315;
+  - [PHASE13E_ACCESS_CONTRACT.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE13E_ACCESS_CONTRACT.md) line 554;
   - the `access_groups.py` module docstring ("Lock ordering");
   - item 2 of `test_access_group_concurrency.py`'s docstring.
 - **Existing tests that must pass unchanged:**
@@ -1072,8 +1077,8 @@ with LockRace(engine) as race:
 
 - the `access_groups.py` module and function docstrings;
 - the `_content.py` comment;
-- [SYSTEM_ARCHITECTURE.md](architecture/SYSTEM_ARCHITECTURE.md) line 315, saying that access-group member additions serialize with an author at the member's membership row, not the campaign row;
-- [PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) line 554 (the order and modes);
+- [SYSTEM_ARCHITECTURE.md](../architecture/SYSTEM_ARCHITECTURE.md) line 315, saying that access-group member additions serialize with an author at the member's membership row, not the campaign row;
+- [PHASE13E_ACCESS_CONTRACT.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE13E_ACCESS_CONTRACT.md) line 554 (the order and modes);
 - a **DEF-015** entry in the defect register, with this reproduction, the grade, the fix and the regressions. DEF-016 and DEF-017 stay proposed in this plan until the owner decides whether to register them.
 
 **Checks:**
@@ -1118,17 +1123,17 @@ with LockRace(engine) as race:
 
 **The readers.** D8 and every existing character reader look for both denies under the `("entity_id", character_id)` key:
 
-- [public_profiles.py:88](../src/dnd_ai/domain/public_profiles.py#L88) (`whole_character_denied`) and `:94` (`canon_edit_denied_for_character`, which also counts a stray `character_id` row);
-- character detail, parties, relationships and sheet: [api/characters.py](../src/dnd_ai/api/characters.py) `:498`, `:625`, `:721`, `:875`;
-- inventory: [api/access.py:513](../src/dnd_ai/api/access.py#L513);
-- party rosters: [api/parties.py:167](../src/dnd_ai/api/parties.py#L167);
-- event explanations: [api/event_explanations.py:200](../src/dnd_ai/api/event_explanations.py#L200);
-- World Explorer search and reference mode: `_grant_denied_entity_ids` in [api/world_explorer.py:133](../src/dnd_ai/api/world_explorer.py#L133).
+- [public_profiles.py:88](../../src/dnd_ai/domain/public_profiles.py#L88) (`whole_character_denied`) and `:94` (`canon_edit_denied_for_character`, which also counts a stray `character_id` row);
+- character detail, parties, relationships and sheet: [api/characters.py](../../src/dnd_ai/api/characters.py) `:498`, `:625`, `:721`, `:875`;
+- inventory: [api/access.py:513](../../src/dnd_ai/api/access.py#L513);
+- party rosters: [api/parties.py:167](../../src/dnd_ai/api/parties.py#L167);
+- event explanations: [api/event_explanations.py:200](../../src/dnd_ai/api/event_explanations.py#L200);
+- World Explorer search and reference mode: `_grant_denied_entity_ids` in [api/world_explorer.py:133](../../src/dnd_ai/api/world_explorer.py#L133).
 
 **The writer refuses both keys.**
 
-- **`character_id` target.** The catalog allows only the nine `character.*` codes ([access.py:131](../src/dnd_ai/domain/access.py#L131), `:229`). `campaign.view` and `canon.edit` are refused with `ResourceGrantCapabilityNotGrantableError` (404).
-- **`entity_id` target.** The catalog allows `campaign.view` and `canon.edit`. But the P-8 CTI guard ([access_grants.py:1063](../src/dnd_ai/commands/access_grants.py#L1063), applied at `:1192`–`:1214`) refuses any entity whose type is `character`, `npc` or `player_character`, with `TargetNotInCampaignWorldError` (404).
+- **`character_id` target.** The catalog allows only the nine `character.*` codes ([access.py:131](../../src/dnd_ai/domain/access.py#L131), `:229`). `campaign.view` and `canon.edit` are refused with `ResourceGrantCapabilityNotGrantableError` (404).
+- **`entity_id` target.** The catalog allows `campaign.view` and `canon.edit`. But the P-8 CTI guard ([access_grants.py:1063](../../src/dnd_ai/commands/access_grants.py#L1063), applied at `:1192`–`:1214`) refuses any entity whose type is `character`, `npc` or `player_character`, with `TargetNotInCampaignWorldError` (404).
 
 **The database permits it.** `ck_resource_grants_exactly_one_target`, the `entity_id → core.entities` foreign key and `enforce_resource_grant_scope()`, which checks only the world, all accept such a row. That is how the inventory tests and A2a's tests create these denies: directly, with `make_resource_grant`.
 
@@ -1224,16 +1229,16 @@ So the guard blocks the only representation the readers use. The other own-colum
 
 | Surface | Change |
 |---|---|
-| `POST /campaigns/{id}/resource-grants` ([api/access_grants.py:457](../src/dnd_ai/api/access_grants.py#L457)), membership and group grantees | Accepts the two new combinations. Request, response, fingerprint (`campaign_id` plus body) and audit (`target_kind: "entity_id"`, `effect: "deny"`) are unchanged |
+| `POST /campaigns/{id}/resource-grants` ([api/access_grants.py:457](../../src/dnd_ai/api/access_grants.py#L457)), membership and group grantees | Accepts the two new combinations. Request, response, fingerprint (`campaign_id` plus body) and audit (`target_kind: "entity_id"`, `effect: "deny"`) are unchanged |
 | `POST …/resource-grants/{id}/revoke` | Unchanged |
-| Grant options (`list_grantable_resource_capabilities`, [queries/access_overview.py:553](../src/dnd_ai/queries/access_overview.py#L553)) | Unchanged. `(campaign.view, entity)` and `(canon.edit, entity)` are already listed, and the character-and-deny sub-rule is finer than its `(code, target_type)` grain. Its docstring gains one sentence naming the sub-rule |
+| Grant options (`list_grantable_resource_capabilities`, [queries/access_overview.py:553](../../src/dnd_ai/queries/access_overview.py#L553)) | Unchanged. `(campaign.view, entity)` and `(canon.edit, entity)` are already listed, and the character-and-deny sub-rule is finer than its `(code, target_type)` grain. Its docstring gains one sentence naming the sub-rule |
 | `GET …/access-overview`: member grants (`:404`) and group grants (`:790`) | `target_display_name` is filled in for an `entity_id` target that is a character (`LEFT JOIN character.characters` on `rg.entity_id`), using the same audience-safe `canonical_name` rule as a `character_id` target. `target_type` stays `"entity"`, so the portal's duplicate detection keeps working |
-| `GET …/members/{id}/effective-access`: the direct-grant query (`:230`) and the group-grant query (`:300`) of [queries/effective_access.py](../src/dnd_ai/queries/effective_access.py), each feeding both sources and denials | The same rule. A whole-character deny lists as `campaign.view — <character>`; a `canon.edit` deny as `canon.edit — <character>` |
+| `GET …/members/{id}/effective-access`: the direct-grant query (`:230`) and the group-grant query (`:300`) of [queries/effective_access.py](../../src/dnd_ai/queries/effective_access.py), each feeding both sources and denials | The same rule. A whole-character deny lists as `campaign.view — <character>`; a `canon.edit` deny as `canon.edit — <character>` |
 | Resolvers: `resolve_access_context`, `has_capability`, `resource_grant_targets`, `public_profiles`, and the readers in §8.1 | No change. They already read `entity_id`; the deny becomes reachable for them |
-| DEF-016 sites (`resolve_character_view_tier` at [api/access.py:482](../src/dnd_ai/api/access.py#L482); inventory at `:515`) | No change (Q3). They read `canon.edit` under `character_id`, so a `canon.edit` deny does not lower a GM's view tier or inventory access. This is now reachable, not hypothetical |
+| DEF-016 sites (`resolve_character_view_tier` at [api/access.py:482](../../src/dnd_ai/api/access.py#L482); inventory at `:515`) | No change (Q3). They read `canon.edit` under `character_id`, so a `canon.edit` deny does not lower a GM's view tier or inventory access. This is now reachable, not hypothetical |
 | Audit history | No change; it labels grants by capability, effect and grantee, never by target |
-| Portal | No change in A2a-R (Q2). Its `entity` selector deliberately excludes characters ([ResourceTargetSelector.tsx:38](../portal/src/components/ResourceTargetSelector.tsx#L38)); its `character` type maps to `character_id`, whose catalog refuses these codes. So the portal cannot create these denies until it changes |
-| Docs | `access_grants.py` module docstring and the guard comment; the catalog comment in `domain/access.py` (for characters, `campaign.view` and `canon.edit` are read under `entity_id`); `test_resource_grant_target_column.py`'s docstring; [PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) resource-grant section and §3v ("creatable through `POST …/resource-grants` with `entity_id`, effect `deny`"); this plan's A2a record; a **DEF-018** entry in the defect register |
+| Portal | No change in A2a-R (Q2). Its `entity` selector deliberately excludes characters ([ResourceTargetSelector.tsx:38](../../portal/src/components/ResourceTargetSelector.tsx#L38)); its `character` type maps to `character_id`, whose catalog refuses these codes. So the portal cannot create these denies until it changes |
+| Docs | `access_grants.py` module docstring and the guard comment; the catalog comment in `domain/access.py` (for characters, `campaign.view` and `canon.edit` are read under `entity_id`); `test_resource_grant_target_column.py`'s docstring; [PHASE13E_ACCESS_CONTRACT.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE13E_ACCESS_CONTRACT.md) resource-grant section and §3v ("creatable through `POST …/resource-grants` with `entity_id`, effect `deny`"); this plan's A2a record; a **DEF-018** entry in the defect register |
 
 ### 8.6 Tests
 
@@ -1367,17 +1372,17 @@ The owner's answers to D7-a to D7-f (§9.10) are applied throughout.
 
 | Character kind (`core.entity_types.code`) | Source read requires | Today's authoring read |
 |---|---|---|
-| `player_character` | role `canon.edit` in the route campaign | `GET …/authoring/player-characters/{id}` ([player_character_authoring.py:191](../src/dnd_ai/api/player_character_authoring.py#L191)): `require_campaign_capability("canon.edit")` |
-| `npc` | role `canon.edit` **and** world `world.canon.read_private` on the campaign's world (held by `world_owner`, `world_editor`, `world_reviewer`) | `GET …/authoring/npcs/{id}` ([npc_authoring.py:192](../src/dnd_ai/api/npc_authoring.py#L192)): `_PrivateRead` |
+| `player_character` | role `canon.edit` in the route campaign | `GET …/authoring/player-characters/{id}` ([player_character_authoring.py:191](../../src/dnd_ai/api/player_character_authoring.py#L191)): `require_campaign_capability("canon.edit")` |
+| `npc` | role `canon.edit` **and** world `world.canon.read_private` on the campaign's world (held by `world_owner`, `world_editor`, `world_reviewer`) | `GET …/authoring/npcs/{id}` ([npc_authoring.py:192](../../src/dnd_ai/api/npc_authoring.py#L192)): `_PrivateRead` |
 | `character` or any other | nobody | no authoring read exists, so nothing can be copied. The copy route is 404, as an authoring route of the wrong kind is |
 
-- `has_capability("canon.edit")` with no target is role-only ([access.py:334](../src/dnd_ai/domain/access.py#L334)), so per-character denies do not enter the rule. That matches the authoring reads (D7-e). A whole-character deny still removes the profile entirely (D8).
-- **Only the current authoring text is a source.** Revision history ([review_queue.py:120](../src/dnd_ai/api/review_queue.py#L120)) is never read by the copy, and no profile response links to it.
+- `has_capability("canon.edit")` with no target is role-only ([access.py:334](../../src/dnd_ai/domain/access.py#L334)), so per-character denies do not enter the rule. That matches the authoring reads (D7-e). A whole-character deny still removes the profile entirely (D8).
+- **Only the current authoring text is a source.** Revision history ([review_queue.py:120](../../src/dnd_ai/api/review_queue.py#L120)) is never read by the copy, and no profile response links to it.
 - **Only two fields are sources.** `appearance` → `public_appearance` and `background` → `public_background`. `notes` never is.
 
 **Assumption: a character's kind is stable on every application path.** The rule is evaluated with the character's *current* kind at each check, so a kind change would change who may read existing copies. Checked at `523ae5c`:
 
-- No `src/` code sets `core.entities.entity_type_id` or deletes a `character.npcs` or `character.player_characters` row. The only `UPDATE core.entities` statements set name and summary ([_content.py:325](../src/dnd_ai/commands/_content.py#L325)) or canon and lifecycle status ([entity_lifecycle.py:434](../src/dnd_ai/commands/entity_lifecycle.py#L434), [:683](../src/dnd_ai/commands/entity_lifecycle.py#L683), [:707](../src/dnd_ai/commands/entity_lifecycle.py#L707)).
+- No `src/` code sets `core.entities.entity_type_id` or deletes a `character.npcs` or `character.player_characters` row. The only `UPDATE core.entities` statements set name and summary ([_content.py:325](../../src/dnd_ai/commands/_content.py#L325)) or canon and lifecycle status ([entity_lifecycle.py:434](../../src/dnd_ai/commands/entity_lifecycle.py#L434), [:683](../../src/dnd_ai/commands/entity_lifecycle.py#L683), [:707](../../src/dnd_ai/commands/entity_lifecycle.py#L707)).
 - ADR 0021 §1 item 2: "No code converts one marker into the other."
 - **The database does not guarantee it.** Migration 048's `core.enforce_entity_type_change()` refuses a type change only while a subtype row of the old type exists. Direct SQL that first deletes the `character.npcs` row could still change the type.
 
@@ -1503,9 +1508,9 @@ A violation raises `integrity_constraint_violation`.
 6. Lock the draft `FOR UPDATE` and compare the token, or insert (the unique-index race, as in a save).
 7. Write the text, origin and `origin_entity_row_version`, and set the watermark to `expected_row_version + 1`, or to 1 for an insert.
 
-**Why the text and the version match.** The only writer of `character_descriptions` is `update_character_identity` (and creation). It holds the entity `FOR UPDATE` and bumps `core.entities.row_version` through `touch_entity` in the same transaction ([npcs.py:225](../src/dnd_ai/commands/npcs.py#L225), [:303](../src/dnd_ai/commands/npcs.py#L303)). Under the copy's `FOR SHARE`, no edit can commit between steps 4 and 5. If one was in flight, the copy waited, and it reads that edit's committed text with its new version, never one without the other. No client-side source token is needed: the copier sees the copied text in the draft, and the release is the review step.
+**Why the text and the version match.** The only writer of `character_descriptions` is `update_character_identity` (and creation). It holds the entity `FOR UPDATE` and bumps `core.entities.row_version` through `touch_entity` in the same transaction ([npcs.py:225](../../src/dnd_ai/commands/npcs.py#L225), [:303](../../src/dnd_ai/commands/npcs.py#L303)). Under the copy's `FOR SHARE`, no edit can commit between steps 4 and 5. If one was in flight, the copy waited, and it reads that edit's committed text with its new version, never one without the other. No client-side source token is needed: the copier sees the copied text in the draft, and the release is the review step.
 
-**World capability.** Ending or changing a world role (`world_memberships.py:70`), and world ownership recovery or transfer, take the world row `FOR UPDATE`. The world row is the head of the global lock order ([worlds.py](../src/dnd_ai/commands/worlds.py) module docstring). The copy's world `FOR SHARE` is held before it judges `world.canon.read_private`, so that judgement stands until commit. World roles have no time-based expiry, so no fresh-instant re-check is needed for them.
+**World capability.** Ending or changing a world role (`world_memberships.py:70`), and world ownership recovery or transfer, take the world row `FOR UPDATE`. The world row is the head of the global lock order ([worlds.py](../../src/dnd_ai/commands/worlds.py) module docstring). The copy's world `FOR SHARE` is held before it judges `world.canon.read_private`, so that judgement stands until commit. World roles have no time-based expiry, so no fresh-instant re-check is needed for them.
 
 **Save.**
 
@@ -2138,22 +2143,22 @@ Almost every consumer reads the bundle that `resolve_world_entity_visibility` bu
 
 | Surface | Where it decides | Effect of A3b on a caller whose only path is a revelation | Depends on A4 |
 |---|---|---|---|
-| World search list, category counts, pagination | `_VISIBLE_ENTITIES_SQL` via `search_world_entities` and `count_world_entities` ([queries/world_explorer.py](../src/dnd_ai/queries/world_explorer.py)) | Listed and counted. Name matching, the sort and the cursor are unchanged. The card's summary and the summary match use the released summary (§10.12) | The card link (`can_open`) |
-| Direct character detail | [api/characters.py](../src/dnd_ai/api/characters.py) (`resolve_character_view_tier`) | **Unchanged: 404.** Discover-only callers already list without opening (`can_open_participant`); a revelation does the same until A4 | Yes: A4 adds the `public_profile` tier |
-| World relationships list and detail; the character page's Relationships section | `all_participants_discoverable_sql`, `discoverable_entity_ids` ([queries/world_explorer.py](../src/dnd_ai/queries/world_explorer.py), [queries/relationship.py:159](../src/dnd_ai/queries/relationship.py#L159), [queries/character_relationships.py:156](../src/dnd_ai/queries/character_relationships.py#L156)) | A reader-visible relationship now appears when every participant is discoverable, the revealed character included (D10) | No |
-| Organization members | [api/organization_members.py:68](../src/dnd_ai/api/organization_members.py#L68), [queries/organization_members.py:99](../src/dnd_ai/queries/organization_members.py#L99) | Listed in public memberships (D10) | No |
-| Session roster | [api/sessions.py:184](../src/dnd_ai/api/sessions.py#L184); `_can_open_character` [:169](../src/dnd_ai/api/sessions.py#L169) | Named; `can_open_character` false | Yes: the link |
-| Session travel | [queries/session_travel.py:112](../src/dnd_ai/queries/session_travel.py#L112) | Named | No |
-| Event explanations | [api/event_explanations.py:197-211](../src/dnd_ai/api/event_explanations.py#L197-L211), [queries/event_explanations.py:405](../src/dnd_ai/queries/event_explanations.py#L405), [:710](../src/dnd_ai/queries/event_explanations.py#L710) | Named as a participant (D10) | No |
-| Encounters | [api/encounters.py:431](../src/dnd_ai/api/encounters.py#L431), [queries/encounter.py:285](../src/dnd_ai/queries/encounter.py#L285) | Named in the member projection of a member-readable encounter (D10) | No |
-| `active_encounter_id` on the character page | `_may_reference_active_encounter` ([queries/character.py:113](../src/dnd_ai/queries/character.py#L113)) | Not reached, because the detail route is a 404 | **A4 must keep the public tier free of it** (as the summary tier, A0) |
-| Knowledge subjects | [api/knowledge.py:347](../src/dnd_ai/api/knowledge.py#L347), [:405](../src/dnd_ai/api/knowledge.py#L405) | The subject label of an item the caller may already read (D10). It grants no knowledge visibility | No |
-| Campaign clock | [api/campaign_clock.py:107](../src/dnd_ai/api/campaign_clock.py#L107), [:195](../src/dnd_ai/api/campaign_clock.py#L195) | None: it uses only the event deny set | No |
-| Audience preview | [api/preview.py](../src/dnd_ai/api/preview.py) `resolve_preview_subject` → `resolve_access_context` | Inherits the subject's revelations. The quest and Knowledge adapters show exactly what the subject sees | The character-profile preview (A7) |
-| Party roster | [api/parties.py:134-178](../src/dnd_ai/api/parties.py#L134-L178) | D4-C (§10.13): the party's current controllers see its current members; everyone else gets shared discovery. A revelation reaches the roster only through discovery | No |
+| World search list, category counts, pagination | `_VISIBLE_ENTITIES_SQL` via `search_world_entities` and `count_world_entities` ([queries/world_explorer.py](../../src/dnd_ai/queries/world_explorer.py)) | Listed and counted. Name matching, the sort and the cursor are unchanged. The card's summary and the summary match use the released summary (§10.12) | The card link (`can_open`) |
+| Direct character detail | [api/characters.py](../../src/dnd_ai/api/characters.py) (`resolve_character_view_tier`) | **Unchanged: 404.** Discover-only callers already list without opening (`can_open_participant`); a revelation does the same until A4 | Yes: A4 adds the `public_profile` tier |
+| World relationships list and detail; the character page's Relationships section | `all_participants_discoverable_sql`, `discoverable_entity_ids` ([queries/world_explorer.py](../../src/dnd_ai/queries/world_explorer.py), [queries/relationship.py:159](../../src/dnd_ai/queries/relationship.py#L159), [queries/character_relationships.py:156](../../src/dnd_ai/queries/character_relationships.py#L156)) | A reader-visible relationship now appears when every participant is discoverable, the revealed character included (D10) | No |
+| Organization members | [api/organization_members.py:68](../../src/dnd_ai/api/organization_members.py#L68), [queries/organization_members.py:99](../../src/dnd_ai/queries/organization_members.py#L99) | Listed in public memberships (D10) | No |
+| Session roster | [api/sessions.py:184](../../src/dnd_ai/api/sessions.py#L184); `_can_open_character` [:169](../../src/dnd_ai/api/sessions.py#L169) | Named; `can_open_character` false | Yes: the link |
+| Session travel | [queries/session_travel.py:112](../../src/dnd_ai/queries/session_travel.py#L112) | Named | No |
+| Event explanations | [api/event_explanations.py:197-211](../../src/dnd_ai/api/event_explanations.py#L197-L211), [queries/event_explanations.py:405](../../src/dnd_ai/queries/event_explanations.py#L405), [:710](../../src/dnd_ai/queries/event_explanations.py#L710) | Named as a participant (D10) | No |
+| Encounters | [api/encounters.py:431](../../src/dnd_ai/api/encounters.py#L431), [queries/encounter.py:285](../../src/dnd_ai/queries/encounter.py#L285) | Named in the member projection of a member-readable encounter (D10) | No |
+| `active_encounter_id` on the character page | `_may_reference_active_encounter` ([queries/character.py:113](../../src/dnd_ai/queries/character.py#L113)) | Not reached, because the detail route is a 404 | **A4 must keep the public tier free of it** (as the summary tier, A0) |
+| Knowledge subjects | [api/knowledge.py:347](../../src/dnd_ai/api/knowledge.py#L347), [:405](../../src/dnd_ai/api/knowledge.py#L405) | The subject label of an item the caller may already read (D10). It grants no knowledge visibility | No |
+| Campaign clock | [api/campaign_clock.py:107](../../src/dnd_ai/api/campaign_clock.py#L107), [:195](../../src/dnd_ai/api/campaign_clock.py#L195) | None: it uses only the event deny set | No |
+| Audience preview | [api/preview.py](../../src/dnd_ai/api/preview.py) `resolve_preview_subject` → `resolve_access_context` | Inherits the subject's revelations. The quest and Knowledge adapters show exactly what the subject sees | The character-profile preview (A7) |
+| Party roster | [api/parties.py:134-178](../../src/dnd_ai/api/parties.py#L134-L178) | D4-C (§10.13): the party's current controllers see its current members; everyone else gets shared discovery. A revelation reaches the roster only through discovery | No |
 | Bootstrap perspectives, inventory, sheet, builds, calculations | `view_knowledge`, `resolve_character_inventory_access`, the sheet's tier | **Unchanged.** Regression tests only | No |
-| World-level canon search with no campaign | [api/world_canon.py:86](../src/dnd_ai/api/world_canon.py#L86) (`discover_all=False`, no revelations) | Unchanged: revelations are campaign-scoped | No |
-| AI context assembly | [domain/context_assembly.py](../src/dnd_ai/domain/context_assembly.py) | Unchanged: no revelation input | No |
+| World-level canon search with no campaign | [api/world_canon.py:86](../../src/dnd_ai/api/world_canon.py#L86) (`discover_all=False`, no revelations) | Unchanged: revelations are campaign-scoped | No |
+| AI context assembly | [domain/context_assembly.py](../../src/dnd_ai/domain/context_assembly.py) | Unchanged: no revelation input | No |
 
 **Summary.**
 
@@ -2857,7 +2862,7 @@ A revelation-only reader who later gains a relationship sees the canonical summa
 - **Search.** Such a card matches search on its name only.
 - **GM side.** The GM read flags the latest release with `public_summary` null ("audiences see no summary"). A new release is the only way to give them one.
 
-**Search, counts and sorting use the caller's projection.** The change is in `_VISIBLE_ENTITIES_SQL` and the card select ([queries/world_explorer.py:255-296](../src/dnd_ai/queries/world_explorer.py#L255-L296), [:425-434](../src/dnd_ai/queries/world_explorer.py#L425-L434)), so the list and the counts share one predicate and cannot disagree.
+**Search, counts and sorting use the caller's projection.** The change is in `_VISIBLE_ENTITIES_SQL` and the card select ([queries/world_explorer.py:255-296](../../src/dnd_ai/queries/world_explorer.py#L255-L296), [:425-434](../../src/dnd_ai/queries/world_explorer.py#L425-L434)), so the list and the counts share one predicate and cannot disagree.
 
 - **New bundle fields.** `CharacterVisibility` gains `released_summary_ids` (the caller's revelation-only characters) and the bundle gains `campaign_id`.
 - **The projected summary,** as SQL:
@@ -2908,16 +2913,16 @@ That is the whole grant. It is roster visibility only:
 
 **What everyone else sees.** Current members the caller can discover, through `discoverable_entity_ids` with their bundle, which already applies both denies and the lifecycle filter. A GM is unchanged, because `discover_all` lists every current member as today. In both cases `member_count` counts what is listed.
 
-**Where the exception applies: one place.** `GET /campaigns/{campaign_id}/parties/{party_id}/roster` (`get_party_roster_endpoint`, [api/parties.py:134-178](../src/dnd_ai/api/parties.py#L134-L178)). Every other reader of party membership was checked at `a9ec4c4`:
+**Where the exception applies: one place.** `GET /campaigns/{campaign_id}/parties/{party_id}/roster` (`get_party_roster_endpoint`, [api/parties.py:134-178](../../src/dnd_ai/api/parties.py#L134-L178)). Every other reader of party membership was checked at `a9ec4c4`:
 
 | Reader | Audience today | After A3b |
 |---|---|---|
-| `GET …/parties/{party_id}/members` ([api/parties.py:363](../src/dnd_ai/api/parties.py#L363)) | `canon.edit` | Unchanged; not the exception |
-| `GET …/parties/{party_id}/inventory` ([api/item_authoring.py:540](../src/dnd_ai/api/item_authoring.py#L540)) | `canon.edit` | Unchanged; not the exception |
-| Party list and detail (`_json`, [api/parties.py:93](../src/dnd_ai/api/parties.py#L93)) | `campaign.view`; no members | Unchanged |
-| Bootstrap `authorized_parties` ([queries/bootstrap.py:427](../src/dnd_ai/queries/bootstrap.py#L427)) and the Knowledge perspective ([api/knowledge.py:482](../src/dnd_ai/api/knowledge.py#L482)) | Parties of the caller's own `view_knowledge` characters; no other members | Unchanged |
-| `resolve_party_perspective` ([api/access.py:348](../src/dnd_ai/api/access.py#L348)) | Authorizes a perspective, names no one | Unchanged |
-| Session roster ([api/sessions.py:184](../src/dnd_ai/api/sessions.py#L184)) | Session participants, through the bundle | Shared discovery only; the exception does not apply |
+| `GET …/parties/{party_id}/members` ([api/parties.py:363](../../src/dnd_ai/api/parties.py#L363)) | `canon.edit` | Unchanged; not the exception |
+| `GET …/parties/{party_id}/inventory` ([api/item_authoring.py:540](../../src/dnd_ai/api/item_authoring.py#L540)) | `canon.edit` | Unchanged; not the exception |
+| Party list and detail (`_json`, [api/parties.py:93](../../src/dnd_ai/api/parties.py#L93)) | `campaign.view`; no members | Unchanged |
+| Bootstrap `authorized_parties` ([queries/bootstrap.py:427](../../src/dnd_ai/queries/bootstrap.py#L427)) and the Knowledge perspective ([api/knowledge.py:482](../../src/dnd_ai/api/knowledge.py#L482)) | Parties of the caller's own `view_knowledge` characters; no other members | Unchanged |
+| `resolve_party_perspective` ([api/access.py:348](../../src/dnd_ai/api/access.py#L348)) | Authorizes a perspective, names no one | Unchanged |
+| Session roster ([api/sessions.py:184](../../src/dnd_ai/api/sessions.py#L184)) | Session participants, through the bundle | Shared discovery only; the exception does not apply |
 
 **Keeping it from becoming general discovery.**
 
@@ -3882,13 +3887,13 @@ Each is one commit on `phase15/completion`, green on its own. One independent re
   - Copying legacy text requires existing permission to read that text.
 
   Applied in §5.1, §5.7 and §5.10. D7 asks a follow-on question that D2 does not answer.
-- **D3: `access.manage` can create a campaign owner.** **Resolved 2026-11-06 (owner-approved; ownership gate implemented as the first A1 change, see [the A1 design](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md) §5).** Original question: Assigning a role, adding a member and transferring ownership are all gated only on `access.manage` ([api/memberships.py:260](../src/dnd_ai/api/memberships.py#L260), [:629](../src/dnd_ai/api/memberships.py#L629)). So a custom `access.manage` holder could give themselves `campaign_owner` and with it direct reveal authority. That contradicts "custom `access.manage` alone confers no release authority."
+- **D3: `access.manage` can create a campaign owner.** **Resolved 2026-11-06 (owner-approved; ownership gate implemented as the first A1 change, see [the A1 design](ownership-design.md) §5).** Original question: Assigning a role, adding a member and transferring ownership are all gated only on `access.manage` ([api/memberships.py:260](../../src/dnd_ai/api/memberships.py#L260), [:629](../../src/dnd_ai/api/memberships.py#L629)). So a custom `access.manage` holder could give themselves `campaign_owner` and with it direct reveal authority. That contradicts "custom `access.manage` alone confers no release authority."
   - Today this can't happen in practice: only `campaign_owner` holds `access.manage`, and no app path creates custom role capabilities.
   - Closing it means restricting `campaign_owner` assignment to current owners, which changes ADR 0020 transfer behavior.
-  - Path trace, recommended gate, exact owner decision and regressions: [PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md).
+  - Path trace, recommended gate, exact owner decision and regressions: [ownership design](ownership-design.md).
 - **D4: Party roster exception. Approved by the owner (recorded 2026-11-07): D4-C.** Current-campaign party controllers see their party's roster, subject to explicit character denies. This grants roster visibility only, without profile, inventory or wider discovery access. Applied in §10.13. The question as put, for the record:
 
-  **Today.** `GET …/parties/{party_id}/roster` ([api/parties.py:134-178](../src/dnd_ai/api/parties.py#L134-L178)) gives **every** `campaign.view` member every current member's canonical name, for every party in the campaign, not only their own. It leaves out only unpublished definitions and whole-character denies.
+  **Today.** `GET …/parties/{party_id}/roster` ([api/parties.py:134-178](../../src/dnd_ai/api/parties.py#L134-L178)) gives **every** `campaign.view` member every current member's canonical name, for every party in the campaign, not only their own. It leaves out only unpublished definitions and whole-character denies.
 
   The built-in `player` and `observer` roles hold `campaign.view` alone (migration 086). A player therefore discovers no other character unless a relationship or grant says so. The roster is the only place they see party-mates' names. It also names any NPC the GM puts into a party to the whole campaign, which contradicts "linking into a party is not a revelation".
 
@@ -3913,7 +3918,7 @@ Each is one commit on `phase15/completion`, green on its own. One independent re
 
 - **D5: Names and summaries in discovery cards. Approved by the owner (recorded 2026-11-07): D5-c.** The canonical name remains the live identity label. Revelation-only readers receive a deliberately released summary, and search does not match their unreleased canonical summary. Applied in §10.12. The question as put, for the record:
 
-  **Today.** Every discovery consumer renders `core.entities.canonical_name`. World search cards and the summary tier also render `core.entities.summary`. Both are classified `PUBLIC_WORLD` ([data_classification.py](../src/dnd_ai/domain/data_classification.py)). OD-17 says audiences receive only deliberately released versions.
+  **Today.** Every discovery consumer renders `core.entities.canonical_name`. World search cards and the summary tier also render `core.entities.summary`. Both are classified `PUBLIC_WORLD` ([data_classification.py](../../src/dnd_ai/domain/data_classification.py)). OD-17 says audiences receive only deliberately released versions.
 
   The A3 trace (§10.7) shows where each is used:
   - the **name** appears in every surface, and in the search sort key and cursor;
@@ -4019,7 +4024,7 @@ Each is one commit on `phase15/completion`, green on its own. One independent re
   - **D12-b:** add both as deny-only codes in A3a.
 
   The whole-character `campaign.view` deny is creatable (A2a-R), and it covers the cases the denies must cover.
-- **D13–D18: A5 player-profile decisions. Approved by the owner (recorded 2026-11-11).** Full rules: [the A5 design](PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md) §4.1–§4.6. The options as first proposed (design at `d04ca57`) are kept in that design's §4.8.
+- **D13–D18: A5 player-profile decisions. Approved by the owner (recorded 2026-11-11).** Full rules: [the A5 design](player-profile-design.md) §4.1–§4.6. The options as first proposed (design at `d04ca57`) are kept in that design's §4.8.
   - **D13, fields.** The eleven Phase 16A fields: `portrayal_guidance`, `personality`, `ideals`, `bonds`, `flaws`, `goals`, `fears`, `loyalties`, `boundaries`, `speech_patterns`, `profile_notes`.
     - `boundaries` and `profile_notes` are excluded from every structured publication or copy operation. Manual transcription by an authorized reader is not claimed to be prevented.
     - `profile_notes` is shared with the campaign's authorized GMs and the character's eligible controllers. Its future UI label is "Notes for the GM and controllers". It is not a personal notebook. Phase 16B/16C private notes need separate storage and authorization, with no automatic GM access.
@@ -4572,7 +4577,7 @@ Both verdicts and run counts below were relayed by the owner in conversation. Th
    - when B's active encounter has the later world time, A's reader still gets A's (the filter runs before `LIMIT`);
    - a pending same-campaign encounter is ignored;
    - the AI context returns only the same-campaign encounter.
-5. The existing test [test_full_tier_returns_the_active_encounter_id](../tests/database/test_api_characters.py#L651) builds a campaign-less encounter ([factories.py:3119](../tests/factories.py#L3119), `campaign_id=None`). Under the approved policy it becomes null, so update it to pass `campaign_id` and record this as the intended behavior change, not a weakened assertion.
+5. The existing test [test_full_tier_returns_the_active_encounter_id](../../tests/database/test_api_characters.py#L651) builds a campaign-less encounter ([factories.py:3119](../../tests/factories.py#L3119), `campaign_id=None`). Under the approved policy it becomes null, so update it to pass `campaign_id` and record this as the intended behavior change, not a weakened assertion.
 6. No schema, API-shape or portal type change. `tests/database/test_api_encounters_query.py` passes unchanged.
 7. Update the docstring in `queries/character.py` and record that the `active_encounter_id` part of DEF-009 is now implemented.
 8. The standard checks plus CI pass, then stop for independent review.

@@ -76,7 +76,7 @@ Phase 13D added a third sub-resource:
 `GET /campaigns/{campaign_id}/characters/{character_id}/sheet`
 (`dnd_ai.queries.character_sheet.get_character_sheet_view`). This closes the
 documented backend gap (docs/api/READ_API.md) blocking the
-portal's Character workspace Sheet panel (docs/UI_DESIGN.md §5.5): the
+portal's Character workspace Sheet panel (docs/reference/portal-behavior.md §5.5): the
 existing `GET .../characters/{character_id}` response deliberately stays
 Overview/Current-State-shaped (unchanged by this addition, for backward
 compatibility, and because it is also part of the bounded Foundry-facing

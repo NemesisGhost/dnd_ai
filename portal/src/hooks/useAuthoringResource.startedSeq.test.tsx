@@ -24,7 +24,7 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
-// `startedSeq` orders reads by when they STARTED (docs/UI_DESIGN.md §4.8.12), so a later answer from an
+// `startedSeq` orders reads by when they STARTED (docs/reference/portal-behavior.md §4.8.12), so a later answer from an
 // earlier read can never outrank a read that began after it.
 describe("useAuthoringResource startedSeq", () => {
     it("is null while loading and set once the read settles, including a refusal", async () => {

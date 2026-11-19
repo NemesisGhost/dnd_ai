@@ -11,7 +11,7 @@ tabs on both routes). Read-only — no new command, no new mutation, no new
 capability. This document records
 the discovered `audit.change_log` contract and the exact endpoint this
 workstream adds. It does not change, and is not a substitute for,
-[docs/PHASE13E_ACCESS_CONTRACT.md](api/ACCESS_CONTROL.md) (which
+[docs/api/ACCESS_CONTROL.md](../api/ACCESS_CONTROL.md) (which
 remains the authoritative record of the Access-page mutation/read contract
 this endpoint sits alongside).
 
@@ -223,7 +223,7 @@ Regression coverage: `tests/database/test_api_audit_history_role_lookup.py`.
 
 **Capability:** `access.manage`, via the identical `dnd_ai.api.access.
 require_campaign_capability` dependency every other campaign-access-
-management route already uses (docs/PHASE13E_ACCESS_CONTRACT.md §2/§3). No
+management route already uses (docs/api/ACCESS_CONTROL.md §2/§3). No
 dedicated audit-viewing capability exists in this codebase yet, and none is
 invented here.
 
@@ -351,7 +351,7 @@ Phase 13D precedent) — a page reports only whether a `next_cursor` exists.
   point-in-time snapshot for any of them. A renamed account, character,
   role, or capability shows its current name against a historical event,
   not the name it had at the time. This matches the existing precedent
-  `docs/PHASE13E_ACCESS_CONTRACT.md` §3 already sets for the access
+  `docs/api/ACCESS_CONTROL.md` §3 already sets for the access
   overview's own role/relationship-type/character labels.
 - **Deleted/disabled actors and targets.** No application command in this
   codebase physically deletes a `security.users`, `core.entities`

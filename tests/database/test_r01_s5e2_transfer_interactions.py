@@ -1,7 +1,7 @@
 # ruff: noqa: F811 - the imported fixtures are used by parameter name
 """R01 S5-E2 E10 correction (plan 6.29): the ownership transfer's weaker lock modes against its neighbours.
 
-Design: docs/R01_S5E2_E10_CORRECTION_DESIGN_2026-11-15.md sections 3.4, 4.4 and 7.3. M1 (campaign `FOR KEY SHARE`
+Historical local design: docs/R01_S5E2_E10_CORRECTION_DESIGN_2026-11-15.md sections 3.4, 4.4 and 7.3. M1 (campaign `FOR KEY SHARE`
 when no role UPDATE is owed) and M2 (the actor's role rows `FOR KEY SHARE` when not relinquishing) must neither
 introduce a cycle nor let a request that owes a role UPDATE reach COMMIT holding only a campaign KEY SHARE: the deferred
 retention trigger (`tr_membership_roles_retain_access_manager`) takes the campaign `FOR UPDATE` at COMMIT, and a

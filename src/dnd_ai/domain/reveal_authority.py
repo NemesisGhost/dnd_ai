@@ -10,7 +10,7 @@ type, a resource grant, `access.manage`, `canon.edit` or assistant-GM status:
   only while that exact row is live, so losing GM status and regaining it later never revives it.
 
 Commands re-read authority under lock at their protected write and never trust a cached
-`AccessContext` (docs/PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md section 1).
+`AccessContext` (docs/delivery/shared-characters.md section 1).
 """
 
 import uuid

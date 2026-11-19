@@ -1,7 +1,7 @@
 """`GET /campaigns/{campaign_id}/audit-history` — the campaign-scoped,
 access-controlled, read-only audit-history endpoint backing a future
 Access-page "Audit history" panel (Phase 13E-B audit-history workstream;
-see `docs/AUDIT_HISTORY_API.md` for the full contract and
+see `docs/reference/audit-history.md` for the full contract and
 `dnd_ai.queries.audit_history` for the query itself, including why this is
 scoped to a curated `command_name` allowlist rather than every
 `audit.change_log` row touching the campaign's world).
@@ -9,7 +9,7 @@ scoped to a curated `command_name` allowlist rather than every
 Authorization: `access.manage` — the identical capability every other
 campaign-access-management route in `dnd_ai.api.access_overview`/
 `.memberships`/`.access_grants` already requires
-(`docs/PHASE13E_ACCESS_CONTRACT.md` confirms no dedicated audit-viewing
+(`docs/api/ACCESS_CONTROL.md` confirms no dedicated audit-viewing
 capability exists yet, and that this endpoint itself did not exist before
 this workstream — §5, "Any audit-history read endpoint ... no route reads
 them back"). A non-member, or a member who does not hold `access.manage`,

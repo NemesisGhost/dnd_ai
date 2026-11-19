@@ -50,7 +50,7 @@ export interface WorldEntitySearchParameters {
 export type CharacterType = "npc" | "player_character"
 
 // World categories with an independently loadable, audience-safe detail
-// contract (UI_STYLE_GUIDE.md §10.2). "organization" joined in Phase 15.1 with
+// contract (docs/reference/portal-style.md §10.2). "organization" joined in Phase 15.1 with
 // the audience-safe World Explorer organization detail; "relationship" is still
 // excluded (no authored relationships until Phase 15.2).
 export type WorldDetailCategory =

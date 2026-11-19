@@ -7,22 +7,19 @@ ADR 0020, and [access control](ACCESS_CONTROL.md) qualify access; `canon.edit` a
 does not authorize private shared-world definitions. Known limitations below describe
 this read surface, not a claim that later phases remain unimplemented.
 
-## 1. Screen-to-endpoint mapping and sufficiency
+## Choosing a read
 
-| Screen | Backing route(s) | Query/service | Sufficient for MVP? |
-|---|---|---|---|
-| Home | `GET /auth/session` (bootstrap), `GET /campaigns/{id}/summary`, `GET /campaigns/{id}/quests` (new), `GET /campaigns/{id}/knowledge/{id}` | `dnd_ai.queries.bootstrap.get_session_bootstrap`, `.summary.get_campaign_summary_view`, `.quest.list_campaign_quests` | Yes, for the recap/current-session/quest sections. "Recent discoveries" (knowledge) has no list endpoint yet — see §3. |
-| World | `GET /campaigns/{id}/dungeon-areas/{id}`, `/characters/{id}`, `/organizations/{id}`, `/relationships/{id}` (all detail-by-id) | `dnd_ai.queries.dungeon`, `.character`, `.organization`, `.relationship` | No. Every one of these is a detail-by-id read; nothing lists or searches locations, NPCs, organizations, or items. See §3 (primary blocker). |
-| Characters | `GET /auth/session` (character_perspectives), `GET /campaigns/{id}/characters/{id}`, `.../inventory` | `dnd_ai.queries.bootstrap`, `.character`, `.inventory` | Yes. The character selector is the bootstrap response's own `character_perspectives`; detail/inventory already exist and are already audience-filtered. |
-| Quests | `GET /campaigns/{id}/quests` (new), `GET /campaigns/{id}/quests/{id}` | `dnd_ai.queries.quest.list_campaign_quests` (new), `.get_quest_view` | Yes, after this workstream. The list was the missing piece; the detail route's cross-campaign scoping was corrected during Phase 13D live verification — see §4.2. |
-| Sessions | `GET /campaigns/{id}/sessions` (new), `GET /campaigns/{id}/sessions/{id}` (new) | `dnd_ai.queries.session` (new module) | Yes, for recap/status/timing/linked-events. Participants, locations visited, and per-session character/relationship/inventory changes are deferred — see §4. |
-| Knowledge | `GET /campaigns/{id}/knowledge/{id}` (detail-by-id only) | `dnd_ai.queries.knowledge.get_knowledge_view` | No. The six portal views (known/rumors/recent/private/party-shared/public/sources) have no list endpoint. See §3. |
+| User goal | Read boundary |
+|---|---|
+| Open the portal or switch campaign | Session bootstrap provides available contexts. Campaign Home requests a summary and audience-filtered session and quest lists. |
+| Review a session | The session list and detail include campaign-scoped records. Available actions and private detail depend on the principal. |
+| Find a quest or knowledge claim | Browse in the active campaign. The list and detail apply tracking, knowledge and perspective restrictions. A hidden search result must not contribute a label or count. |
+| Explore a world | World Reader browsing and campaign browsing have distinct authority and projections. See the visibility rules below. |
+| Inspect a character | Use the authorized detail tier. The sheet and inventory projections have separate contracts. |
 
-## 2. Contracts that were already sufficient
+The [operation catalog](operations.md) gives current method/path pairs. The historical Phase 13D audit, including its original list gaps and correction records, is preserved in [the reviewed source](https://github.com/NemesisGhost/dnd_ai/blob/881786c/docs/api/READ_API.md).
 
-These held for every screen's existing routes, verified by reading
-`dnd_ai.api.access`, `dnd_ai.domain.access`, and each route module, and were
-not modified:
+## Session and perspective checks
 
 1. **Cookie-session auth through the unified boundary.** `dnd_ai.api.auth.
    get_authenticated_user_id` already resolves the `__Host-dnd_ai_session`
@@ -67,7 +64,7 @@ not modified:
    to `dnd_ai.domain.access`/`dnd_ai.api.access` and its own query module.
 
 
-### 4.1 Sessions had zero read capability
+### 4.1 Session reads
 
 `dnd_ai.api.sessions` previously exposed only `POST .../sessions/{id}/end`
 (a GM write). There was no way for the portal's Session detail screen to
@@ -100,7 +97,7 @@ Added:
   content, of a hidden-traveler travel event stays visible as a bare entry, like any
   other session event.
 
-### 4.2 Quests had no way to enumerate a campaign's tracked quests
+### 4.2 Tracked quest list and detail
 
 `GET /campaigns/{id}/quests/{quest_id}` (detail) already existed and was
 audience-filtered at the objective level, but nothing could produce the
@@ -604,7 +601,7 @@ to the same audience (no per-quest deny, lifecycle-visible, tracked on the
 timeline for the caller's authorized party or campaign-wide; any party for
 a GM). The list's `subject_entity_id` now equals `subject.entity_id`, so it
 too names an authorized quest. Anything else is `null`, indistinguishable
-from no subject. See docs/UI_DESIGN.md §5.6.
+from no subject. See docs/reference/portal-behavior.md §5.6.
 
 ### 11.2 Bootstrap advertised unusable party perspectives
 
@@ -678,6 +675,6 @@ detail route and `AccessContext.has_capability`'s own precedence:
 ## Source and deferred work
 
 The original audit, implementation file list, fixture creation, and execution evidence are
-available in [delivery history](../DELIVERY_HISTORY.md). Remaining read-surface limitations
-must be checked against the current route/query and tracked in [BACKLOG](../BACKLOG.md),
+available in [delivery history](../delivery/history.md). Remaining read-surface limitations
+must be checked against the current route/query and tracked in [BACKLOG](../delivery/work-register.md),
 not inferred from the earlier audit's unresolved-gaps section.

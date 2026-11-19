@@ -1,7 +1,7 @@
 """Read-only GM campaign access overview (Phase 13E-A).
 
 `GET /campaigns/{campaign_id}/access-overview` is the discovery/read half
-of GM access management (docs/UI_DESIGN.md §6.4 "Access management"),
+of GM access management (docs/reference/portal-behavior.md §6.4 "Access management"),
 scoped to one campaign and gated on the same `access.manage` capability
 `dnd_ai.api.memberships`/`dnd_ai.api.access_grants` require for every
 mutation there — reviewing who currently has access is the same category
@@ -512,7 +512,7 @@ def get_member_effective_access_endpoint(
     connection: Annotated[Connection, Depends(get_connection)],
 ) -> MemberEffectiveAccessResponse:
     """The GM-facing "why can this person see this?" explanation (docs/
-    UI_DESIGN.md §6.4 "Effective-access explanation" / §8.3, Phase 13E-B
+    docs/reference/portal-behavior.md §6.4 "Effective-access explanation" / §8.3, Phase 13E-B
     checkpoint 13) — every capability `campaign_membership_id` currently
     holds, each with the role assignments, character relationships, direct
     resource grants, and access-group resource grants that contribute to it,

@@ -4168,7 +4168,7 @@ a.app-header__title:focus-visible {
   color: var(--color-text-muted);
 }
 
-/* Containers own the space between sibling panels (docs/UI_STYLE_GUIDE.md section 6.7). */
+/* Containers own the space between sibling panels (docs/reference/portal-style.md section 6.7). */
 .section-stack {
   display: flex;
   flex-direction: column;

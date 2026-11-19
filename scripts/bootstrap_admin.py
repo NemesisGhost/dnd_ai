@@ -1,4 +1,4 @@
-"""One-time initial-administrator bootstrap CLI (docs/PLAN.md §23.1, Phase
+"""One-time initial-administrator bootstrap CLI (docs/api/ACCESS_CONTROL.md §23.1, Phase
 11R workstream A).
 
 Unlike `scripts/foundry_provision.py`, this is deliberately a **database**

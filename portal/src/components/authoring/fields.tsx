@@ -2,7 +2,7 @@ import { useId } from "react"
 import type { ChangeEvent, ReactNode } from "react"
 import "./authoring.css"
 
-// Accessible labeled controls for the authoring forms (docs/UI_DESIGN.md
+// Accessible labeled controls for the authoring forms (docs/reference/portal-behavior.md
 // §5.11). Every control has a visible <label>, an optional hint, and an error;
 // a control with an error carries aria-invalid and aria-describedby pointing at
 // its hint and error, and the error text is plain text (never color alone).

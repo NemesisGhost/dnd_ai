@@ -1,26 +1,26 @@
 # Infrastructure Guide (optional AWS path)
 
-**This document describes the optional, no-longer-required AWS RDS path.** Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) is the officially supported deployment topology, and CI verifies against containerized PostgreSQL rather than AWS — see [ADR 0012](adr/0012-self-hosted-docker-deployment-and-ci-verification.md) and [DEVELOPMENT.md §3.6](DEVELOPMENT.md#36-self-hosted-docker-compose). Nothing here is needed for development, CI, or ordinary contribution; it remains accurate reference material for anyone who chooses to host on AWS RDS instead.
+**This document describes the optional, no-longer-required AWS RDS path.** Self-hosted Docker Compose (`compose.yaml`, `Dockerfile`) is the officially supported deployment topology, and CI verifies against containerized PostgreSQL rather than AWS — see [ADR 0012](../adr/0012-self-hosted-docker-deployment-and-ci-verification.md) and [DEVELOPMENT.md §3.6](../DEVELOPMENT.md#36-self-hosted-docker-compose). Nothing here is needed for development, CI, or ordinary contribution; it remains accurate reference material for anyone who chooses to host on AWS RDS instead.
 
-> **Planned production target:** the existing Ubuntu mini-PC, per the (not yet implemented) [ADR 0013](adr/0013-locally-host-production-on-existing-mini-pc.md) and [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md). The AWS material below is optional reference material, not a resource slated for teardown — see line 3 above.
+> **Planned production target:** the existing Ubuntu mini-PC, per the (not yet implemented) [ADR 0013](../adr/0013-locally-host-production-on-existing-mini-pc.md) and [deployment](deployment.md). The AWS material below is optional reference material, not a resource slated for teardown — see line 3 above.
 
 Reference for the AWS infrastructure that hosts the platform — what exists, how it is configured, and how to operate it.
 
-Today that is only the PostgreSQL database and its supporting resources, which is what this document describes. Compute for the application services on AWS is planned but unbuilt and optional: [PLAN.md §31](README.md) sketches ECS Fargate/Lambda paths, and this document gains those sections when and if the modules exist.
+Today that is only the PostgreSQL database and its supporting resources, which is what this document describes. Compute for the application services on AWS is planned but unbuilt and optional: [PLAN.md §31 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#31-aws-deployment-plan-for-application-services) sketches ECS Fargate/Lambda paths, and this document gains those sections when and if the modules exist.
 
 **Which document do you want?**
 
 | You want to… | Read |
 |---|---|
-| Set up your environment for the first time | [Development setup](DEVELOPMENT.md) |
+| Set up your environment for the first time | [Development setup](../DEVELOPMENT.md) |
 | Deploy quickly, having done it before | [Deploying](#3-deploying) |
 | Confirm you're ready to apply | [AWS preflight](#12-optional-aws-preflight) |
 | Look up a variable, output, or error | **This document** |
-| Set up your everyday dev/test database (local, not AWS) | [DEVELOPMENT.md §3](DEVELOPMENT.md#3-local-setup) |
-| Reach the `dev` database directly | [DEVELOPMENT.md §3.5](DEVELOPMENT.md#35-connecting-to-aws-dev-optional-no-longer-required) |
-| Know what the infrastructure *should* become | [PLAN.md §29](README.md) |
+| Set up your everyday dev/test database (local, not AWS) | [DEVELOPMENT.md §3](../DEVELOPMENT.md#3-local-setup) |
+| Reach the `dev` database directly | [DEVELOPMENT.md §3.5](../DEVELOPMENT.md#35-connecting-to-aws-dev-optional-no-longer-required) |
+| Understand optional AWS versus supported self-hosting | [Deployment decision](../adr/0012-self-hosted-docker-deployment-and-ci-verification.md) |
 
-[PLAN.md §29](README.md) is the authoritative **plan**; this document describes **what exists today**. Where the two disagree about intent, §29 wins.
+The Terraform modules and environment in this checkout define the runnable AWS scope. For supported self-hosting, use the [deployment guide](deployment.md).
 
 ---
 
@@ -66,7 +66,7 @@ A `terraform apply` in `terraform/environments/dev/` provisions, in dependency o
 
 ### What does not exist yet
 
-Per [PLAN.md §29.1](README.md), still to be built:
+Per [PLAN.md §29.1 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#291-scope-and-current-state), still to be built:
 
 - Remote Terraform state (currently **local state only** — see §29.2 of the plan).
 - `staging/` and `prod/` environment directories.
@@ -74,11 +74,11 @@ Per [PLAN.md §29.1](README.md), still to be built:
 - A migration runner (`terraform/modules/db_migration_runner/`) able to reach a private RDS instance to run `alembic upgrade head` — used for `staging`/`prod`, which stay non-public.
 - A `multi_az` variable on the `database` module.
 - CloudWatch alarms.
-- **All application compute.** Per [PLAN.md §30](README.md), the API, background worker, and Discord adapter run on ECS Fargate from a shared image in ECR, behind an ALB. None of `ecr`, `ecs_cluster`, `ecs_service`, or `alb` modules exist. Note that pulling images into the private subnets requires either ECR/S3 VPC endpoints or a NAT Gateway — the current design has neither ([PLAN.md §30.9](README.md)).
+- **All application compute.** Per [PLAN.md §30 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#30-aws-terraform-deployment-plan-for-postgresql), the API, background worker, and Discord adapter run on ECS Fargate from a shared image in ECR, behind an ALB. None of `ecr`, `ecs_cluster`, `ecs_service`, or `alb` modules exist. Note that pulling images into the private subnets requires either ECR/S3 VPC endpoints or a NAT Gateway — the current design has neither ([PLAN.md §30.9 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#309-shared-dev-verification-mechanism-historical-superseded-as-cis-mechanism-by-adr-0012)).
 
 ### What was removed
 
-The pre-restart deployment tooling — the `db_runner`, `lambda-api`, and `lambda-with-build` modules, the `db-schema-introspect`/`query-runner` environments, and the Lambda that applied a directory of raw SQL files — has been **deleted**. Do not rebuild it from git history. Schema changes go through Alembic per [DATABASE_CONVENTIONS.md §25](DATABASE_CONVENTIONS.md#25-migration-conventions), executed by the migration runner described in [PLAN.md §29.6](README.md).
+The pre-restart deployment tooling — the `db_runner`, `lambda-api`, and `lambda-with-build` modules, the `db-schema-introspect`/`query-runner` environments, and the Lambda that applied a directory of raw SQL files — has been **deleted**. Do not rebuild it from git history. Schema changes go through Alembic per [DATABASE_CONVENTIONS.md §25](../DATABASE_CONVENTIONS.md#25-migration-conventions), executed by the migration runner described in [PLAN.md §29.6 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#296-migration-execution-mechanism).
 
 ---
 
@@ -92,7 +92,7 @@ The pre-restart deployment tooling — the `db_runner`, `lambda-api`, and `lambd
 | Terraform | >= 1.5 | [developer.hashicorp.com/terraform/install](https://developer.hashicorp.com/terraform/install) — or `winget install HashiCorp.Terraform` | `terraform version` |
 | PowerShell | 5.1+ | Preinstalled on Windows | `$PSVersionTable.PSVersion` |
 | `jq` | any | `winget install jqlang.jq` | `jq --version` |
-| `psql` | 18.x | Already installed if you followed [DEVELOPMENT.md §3.1](DEVELOPMENT.md#31-postgresql); otherwise `winget install PostgreSQL.PostgreSQL.18` | `psql --version` |
+| `psql` | 18.x | Already installed if you followed [DEVELOPMENT.md §3.1](../DEVELOPMENT.md#31-postgresql); otherwise `winget install PostgreSQL.PostgreSQL.18` | `psql --version` |
 
 `jq` and `psql` are only needed for the credential-retrieval and manual connection steps in [§5](#5-outputs-and-connecting). `build.ps1` and `upsert-secrets.ps1` need PowerShell; plain `terraform` commands work from any shell.
 
@@ -129,7 +129,7 @@ Copy-Item terraform/environments/dev/terraform.tfvars.example terraform/environm
 ./build.ps1 -Environment dev -Action apply -AutoApprove
 ```
 
-> **Set `my_ip_cidr` explicitly, and set it narrow.** Its declared default is `0.0.0.0/0` — never leave that in place. Per [PLAN.md §29.9](README.md), `dev` needs `enable_public_access = true` so contributors and CI can reach it day to day, but the actual per-caller allowlisting happens out-of-band via short-lived security-group rules added and removed with the AWS CLI (`scripts/aws-db-allow-my-ip.sh`, the CI workflow), not through this variable. Treat `my_ip_cidr` as a narrow, static baseline (e.g. your own IP, for the initial verification in [§7](#7-verification)) — it is not the mechanism day-to-day access relies on, and a `terraform apply` will not affect rules added out-of-band by that mechanism (see the note on drift in §29.9).
+> **Set `my_ip_cidr` explicitly, and set it narrow.** Its declared default is `0.0.0.0/0` — never leave that in place. Per [PLAN.md §29.9 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#299-shared-dev-verification-mechanism-ci), `dev` needs `enable_public_access = true` so contributors and CI can reach it day to day, but the actual per-caller allowlisting happens out-of-band via short-lived security-group rules added and removed with the AWS CLI (`scripts/aws-db-allow-my-ip.sh`, the CI workflow), not through this variable. Treat `my_ip_cidr` as a narrow, static baseline (e.g. your own IP, for the initial verification in [§7](#7-verification)) — it is not the mechanism day-to-day access relies on, and a `terraform apply` will not affect rules added out-of-band by that mechanism (see the note on drift in §29.9).
 
 Terraform directly, if you prefer:
 
@@ -141,7 +141,7 @@ terraform -chdir=terraform/environments/dev apply tfplan
 
 Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation. `build.ps1` also runs the secrets upsert afterward if `terraform/environments/dev/secrets.local.json` exists (see [§6](#6-secrets)); pass `-SkipSecrets` to suppress it.
 
-**The result is an empty database.** No schemas, roles, or extensions — that bootstrap is the first Alembic revision, run by the migration runner, and neither exists yet ([PLAN.md §29.5–§29.6](README.md)).
+**The result is an empty database.** No schemas, roles, or extensions — that bootstrap is the first Alembic revision, run by the migration runner, and neither exists yet ([PLAN.md §29.5–§29.6 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#295-database-role-schema-and-extension-bootstrap)).
 
 ---
 
@@ -153,7 +153,7 @@ Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation.
 |---|---|---|
 | `aws_region` | `us-east-1` | Deployment region |
 | `owner_name` | `developer` | Applied as an `Owner` tag to all resources |
-| `my_ip_cidr` | `0.0.0.0/0` | Static baseline ingress CIDR; **always override, narrowly**. Per-session access is layered on top out-of-band ([§3](#3-deploying), [PLAN.md §29.9](README.md)), not driven through this variable |
+| `my_ip_cidr` | `0.0.0.0/0` | Static baseline ingress CIDR; **always override, narrowly**. Per-session access is layered on top out-of-band ([§3](#3-deploying), [PLAN.md §29.9 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#299-shared-dev-verification-mechanism-ci)), not driven through this variable |
 | `enable_public_access` | `false` | Makes the RDS instance publicly accessible; dev only. Set `true` — required for the day-to-day AWS-verification workflow, not just occasional manual access |
 | `vpc_id` | `""` | Override to deploy into a specific VPC instead of the default one |
 | `private_subnet_ids` | `[]` | Override subnet selection |
@@ -165,13 +165,13 @@ Initial apply takes roughly 10–15 minutes, dominated by RDS instance creation.
 |---|---|---|
 | `database_name` | `dnd_ai` | Not `dnd_ai_dev` |
 | `master_username` | `dnd_admin` | Not `postgres` |
-| `postgres_version` | `18.4` | Matches [DATABASE_CONVENTIONS.md §2.1](DATABASE_CONVENTIONS.md#21-supported-postgresql-version)'s pin and the local development server. `dev` was replaced onto this version 2026-08-08 — see [POSTGRES18_UPGRADE_PLAN.md](DELIVERY_HISTORY.md). The RDS parameter group family (e.g. `postgres18`) is derived from this automatically (`local.parameter_group_family` in `rds.tf`) — there is no separate variable for it, so the two can't be set inconsistently |
+| `postgres_version` | `18.4` | Matches [DATABASE_CONVENTIONS.md §2.1](../DATABASE_CONVENTIONS.md#21-supported-postgresql-version)'s pin and the local development server. `dev` was replaced onto this version 2026-08-08 — see [POSTGRES18_UPGRADE_PLAN.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/POSTGRES18_UPGRADE_PLAN.md). The RDS parameter group family (e.g. `postgres18`) is derived from this automatically (`local.parameter_group_family` in `rds.tf`) — there is no separate variable for it, so the two can't be set inconsistently |
 | `instance_class` | `db.t3.micro` | |
 | `allocated_storage` / `max_allocated_storage` | `20` / `100` | GB, gp3, autoscaling |
 | `backup_retention_period` | `7` | Days |
-| `deletion_protection` | `true` | Module default — meant for `staging`/`prod`. **`dev` overrides this to `false`** in `terraform/environments/dev/main.tf`, per [PLAN.md §29.3](README.md) |
+| `deletion_protection` | `true` | Module default — meant for `staging`/`prod`. **`dev` overrides this to `false`** in `terraform/environments/dev/main.tf`, per [PLAN.md §29.3 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#293-environments-dev-staging-prod) |
 | `skip_final_snapshot` | `false` | Module default. **`dev` overrides this to `true`** — no final snapshot on delete, matching its disposable-by-design status |
-| `iam_database_authentication_enabled` | `true` | Ready for the IAM-auth roles in [PLAN.md §29.5](README.md) |
+| `iam_database_authentication_enabled` | `true` | Ready for the IAM-auth roles in [PLAN.md §29.5 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#295-database-role-schema-and-extension-bootstrap) |
 | `enhanced_monitoring` / `performance_insights_enabled` | `true` | |
 | `create_vpc_endpoints` | `true` | Secrets Manager + KMS interface endpoints |
 | `use_nat_gateway` | `false` | Endpoints are used instead |
@@ -180,7 +180,7 @@ The `dev` environment overrides only networking, `publicly_accessible`, `create_
 
 ### Per-environment targets
 
-When `staging/` and `prod/` are created, follow the table in [PLAN.md §29.3](README.md). Copy `environments/dev/` rather than adding conditionals to a single environment — per-environment tfvars keep blast radius explicit.
+When `staging/` and `prod/` are created, follow the table in [PLAN.md §29.3 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#293-environments-dev-staging-prod). Copy `environments/dev/` rather than adding conditionals to a single environment — per-environment tfvars keep blast radius explicit.
 
 ### Making infrastructure changes
 
@@ -234,13 +234,13 @@ psql -h (terraform -chdir=terraform/environments/dev output -raw database_endpoi
 $env:PGPASSWORD = $null
 ```
 
-This only works from a network that can reach the instance — `enable_public_access = true` plus a current, open ingress rule for your IP (`scripts/aws-db-allow-my-ip.sh open`, per [PLAN.md §29.9](README.md)), or from inside the VPC.
+This only works from a network that can reach the instance — `enable_public_access = true` plus a current, open ingress rule for your IP (`scripts/aws-db-allow-my-ip.sh open`, per [PLAN.md §29.9 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#299-shared-dev-verification-mechanism-ci)), or from inside the VPC.
 
 ---
 
 ## 6. Secrets
 
-Per [rule 10 in CLAUDE.md](../CLAUDE.md#5-non-negotiable-architectural-rules) and [DATABASE_CONVENTIONS.md §27.3](DATABASE_CONVENTIONS.md#273-secrets), no credential may live in source control or Terraform state.
+Per [rule 10 in CLAUDE.md](../../CLAUDE.md#5-non-negotiable-architectural-rules) and [DATABASE_CONVENTIONS.md §27.3](../DATABASE_CONVENTIONS.md#273-secrets), no credential may live in source control or Terraform state.
 
 Two mechanisms are in play:
 
@@ -253,7 +253,7 @@ Copy-Item terraform/environments/dev/secrets.local.json.example terraform/enviro
 ./terraform/scripts/upsert-secrets.ps1 -Environment dev -Region us-east-1 -File terraform/environments/dev/secrets.local.json
 ```
 
-`secrets.local.json`, `terraform.tfvars`, `*.tfstate`, and `.env` are all gitignored. Application roles should prefer IAM database authentication over stored passwords once the roles in [PLAN.md §29.5](README.md) exist.
+`secrets.local.json`, `terraform.tfvars`, `*.tfstate`, and `.env` are all gitignored. Application roles should prefer IAM database authentication over stored passwords once the roles in [PLAN.md §29.5 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#295-database-role-schema-and-extension-bootstrap) exist.
 
 ### IAM policy snippets
 
@@ -277,7 +277,7 @@ For a compute role that needs to read project secrets:
 }
 ```
 
-For a role connecting with IAM database authentication, scope `rds-db:connect` to the specific entry it needs from the `rds_iam_connect_arns` output — the migration task to `migration_runner`, the API and worker to `app_read_write`, and so on ([PLAN.md §30.5](README.md)). `migration_owner` deliberately has no entry: it is `NOLOGIN` and cannot authenticate ([ADR 0009](adr/0009-separate-owning-role-from-login-roles.md)).
+For a role connecting with IAM database authentication, scope `rds-db:connect` to the specific entry it needs from the `rds_iam_connect_arns` output — the migration task to `migration_runner`, the API and worker to `app_read_write`, and so on ([PLAN.md §30.5 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#305-database-role-schema-and-extension-bootstrap)). `migration_owner` deliberately has no entry: it is `NOLOGIN` and cannot authenticate ([ADR 0009](../adr/0009-separate-owning-role-from-login-roles.md)).
 
 ---
 
@@ -303,7 +303,7 @@ Expected after a successful apply:
 - Secrets Manager entries for the RDS master user plus the named OpenAI/Discord entries
 - VPC interface endpoints for Secrets Manager and KMS
 
-Once the bootstrap revision from [PLAN.md §29.5](README.md) exists, verification also includes connecting as `app_read_only` via an IAM token and confirming all thirteen schemas plus the expected Alembic head revision — see [PLAN.md §29.7](README.md) step 5.
+Once the bootstrap revision from [PLAN.md §29.5 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#295-database-role-schema-and-extension-bootstrap) exists, verification also includes connecting as `app_read_only` via an IAM token and confirming all thirteen schemas plus the expected Alembic head revision — see [PLAN.md §29.7 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#297-deployment-runbook) step 5.
 
 ---
 
@@ -313,7 +313,7 @@ Once the bootstrap revision from [PLAN.md §29.5](README.md) exists, verificatio
 ./build.ps1 -Environment dev -Action destroy -AutoApprove
 ```
 
-This now works without extra steps: `dev` overrides `deletion_protection = false` and `skip_final_snapshot = true` explicitly in `terraform/environments/dev/main.tf`, resolved 2026-08-08 as part of [POSTGRES18_UPGRADE_PLAN.md](DELIVERY_HISTORY.md) (that plan needed exactly this to replace the RDS instance). If you ever hit `deletion_protection` blocking a destroy anyway — for example against an instance created before this override existed — disable it directly first:
+This now works without extra steps: `dev` overrides `deletion_protection = false` and `skip_final_snapshot = true` explicitly in `terraform/environments/dev/main.tf`, resolved 2026-08-08 as part of [POSTGRES18_UPGRADE_PLAN.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/POSTGRES18_UPGRADE_PLAN.md) (that plan needed exactly this to replace the RDS instance). If you ever hit `deletion_protection` blocking a destroy anyway — for example against an instance created before this override existed — disable it directly first:
 
 ```powershell
 aws rds modify-db-instance --db-instance-identifier dnd-ai-dev-db `
@@ -339,7 +339,7 @@ Approximate monthly `dev` cost with current defaults:
 
 VPC endpoints are the largest variable. They exist to avoid a NAT Gateway, which would cost more. Setting `create_vpc_endpoints = false` only makes sense if the instance sits in a subnet with another route to AWS APIs.
 
-`staging`/`prod` costs are not estimated here — measure once those environments exist rather than guessing, per [PLAN.md §29.8](README.md). Run `terraform destroy` on `dev` when not actively developing.
+`staging`/`prod` costs are not estimated here — measure once those environments exist rather than guessing, per [PLAN.md §29.8 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#298-open-items). Run `terraform destroy` on `dev` when not actively developing.
 
 ---
 
@@ -362,7 +362,7 @@ Verbose Terraform logging: `$env:TF_LOG = "DEBUG"` before the command; unset aft
 ## 11. Known gaps and historical configuration
 
 The 2026-08-08 replacement onto PostgreSQL 18.4 and the dev deletion-protection/final-snapshot
-overrides are completed historical changes; details are indexed in [delivery history](DELIVERY_HISTORY.md).
+overrides are completed historical changes; details are indexed in [delivery history](../delivery/history.md).
 The current Terraform configuration is the configuration reference, not a live AWS inventory.
 
 Remote Terraform state and staging/prod environments are not supplied by this repository.
@@ -398,7 +398,7 @@ changed. No AWS operation is part of this documentation consolidation.
 The `github_actions_ci` module (the OIDC role CI used to assume) was removed
 from configuration — its only consumer was the AWS `aws-verification` CI
 job, which no longer exists. See
-[docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md](adr/0012-self-hosted-docker-deployment-and-ci-verification.md)
+[docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md](../adr/0012-self-hosted-docker-deployment-and-ci-verification.md)
 for the reasoning. **This was a configuration-only change; no live AWS
 resource was created, modified, or destroyed by that commit** — nothing in
 this repository ran `terraform apply`, `terraform destroy`, or any command

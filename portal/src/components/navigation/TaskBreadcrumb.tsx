@@ -8,7 +8,7 @@ const withQuery = (to: string, query: string): string => (to.includes("?") ? to 
 const sectionQuery = (section: string | undefined): string =>
     section === undefined ? "" : `?section=${encodeURIComponent(section)}`
 
-// The one breadcrumb for a page (docs/UI_DESIGN.md §4.8, UI_STYLE_GUIDE §8 and §10a.1).
+// The one breadcrumb for a page (docs/reference/portal-behavior.md §4.8, UI_STYLE_GUIDE §8 and §10a.1).
 //
 // The trail follows the history entry's validated task origin: the task the person started from the
 // Navbar (or an adapted legacy return key, or the route's defaults after a direct entry), never a guess

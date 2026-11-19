@@ -16,7 +16,7 @@ The core presentation model is:
 4. **Related facts stay together.** Each list, table, or fact family has its own bounded panel with a visible heading.
 5. **The server remains authoritative.** Visual organization never infers capabilities, hidden records, relationships, truth, or access from client-side labels.
 
-This document supplements `docs/UI_DESIGN.md`. It defines presentation and interaction conventions; `UI_DESIGN.md` remains authoritative for product scope, information architecture, authorization boundaries, and feature behavior.
+This document supplements `docs/reference/portal-behavior.md`. It defines presentation and interaction conventions; `UI_DESIGN.md` remains authoritative for product scope, information architecture, authorization boundaries, and feature behavior.
 
 ## 2. Design principles
 

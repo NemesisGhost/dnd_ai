@@ -1,5 +1,5 @@
 """Deliberate, opt-in live-provider smoke test for Phase 12's AI stack
-(docs/PLAN.md Phase 12, §24.0 "real-provider testing is limited to
+(docs/delivery/roadmap.md §20.1, historical verification policy "real-provider testing is limited to
 deliberate smoke verification").
 
 Every other automated test in this repository (`tests/unit`, `tests/database`,

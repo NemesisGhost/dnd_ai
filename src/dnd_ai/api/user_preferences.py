@@ -1,4 +1,4 @@
-"""Self-service portal preference endpoints (docs/UI_DESIGN.md §4.7).
+"""Self-service portal preference endpoints (docs/reference/portal-behavior.md §4.7).
 
 Both are `PUT` set operations on the caller's own `security.
 user_portal_preferences` row, reachable by any human auth method

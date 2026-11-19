@@ -539,7 +539,7 @@ class CampaignBootstrapResponse(BaseModel):
     campaign_name: str
     # The world this campaign's timeline belongs to — additive Phase 13D
     # fields so the portal can render the World -> Timeline -> Campaign
-    # hierarchy (docs/UI_DESIGN.md §4.1/§5.2) without a second request.
+    # hierarchy (docs/reference/portal-behavior.md §4.1/§5.2) without a second request.
     # Resolved from the campaign's own authorized timeline; `null` only in
     # the defensive "membership resolved but the timeline row vanished"
     # case `get_session_bootstrap` already handles for `timeline_name`.
@@ -581,7 +581,7 @@ _PHASE_12_FEATURES_ALL_DISABLED = SessionFeaturesResponse(
 
 class CampaignPreferencesResponse(BaseModel):
     """The caller's stored campaign-startup values, already filtered to the
-    campaigns currently listed in `campaigns` (docs/UI_DESIGN.md §4.7): a
+    campaigns currently listed in `campaigns` (docs/reference/portal-behavior.md §4.7): a
     stored ID that is no longer authorized is never returned."""
 
     startup_mode: Literal["resume_last_visited", "preferred_campaign"]
@@ -626,7 +626,7 @@ def session_bootstrap_endpoint(
     with its roles, selectable character perspectives, and effective
     capabilities, the caller's authorization-filtered campaign-startup
     preferences and server-computed `startup_campaign_id`
-    (docs/UI_DESIGN.md §4.2, §4.7), plus the (currently all-disabled) Phase
+    (docs/reference/portal-behavior.md §4.2, §4.7), plus the (currently all-disabled) Phase
     12 feature manifest. Never a password hash, reset/activation token, or durable API
     credential.
 

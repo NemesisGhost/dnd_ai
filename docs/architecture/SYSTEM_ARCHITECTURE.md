@@ -6,6 +6,8 @@ This document defines the application, service, data, AI, integration and operat
 
 The platform is a persistent-world system in which PostgreSQL is the source of truth, integrations communicate through application services, and AI produces controlled proposals rather than directly owning canonical state.
 
+The runnable system consists of PostgreSQL, the migration job and API, a separately served portal and an optional Foundry client. Diagrams include target components. The outbox worker, general rules engine, campaign import pipeline, Discord adapter and MCP server are planned. [Deployment](../operations/deployment.md) · [Runtime configuration](../reference/runtime.md)
+
 ## 2. Architectural goals
 
 The architecture must support:
@@ -161,6 +163,8 @@ flowchart TB
 
 ## 5. Layering
 
+HTTP handlers delegate domain changes to commands. The API also writes infrastructure rows for reservations and responses in `api/idempotency.py` and audit events in `api/audit.py`. These use the owning transaction. They confer no general authority to edit domain tables from a router.
+
 ### 5.1 Client and integration layer
 
 Responsibilities:
@@ -226,6 +230,8 @@ Every authoring command (world, timeline, campaign settings, entity lifecycle) f
 
 ### 5.4 Domain layer
 
+Domain logic can require persisted facts. In `src/dnd_ai/domain/`, `access.py`, `context_assembly.py`, `foundry_pairing.py` and `reveal_authority.py` read SQL. The current `authorization.py` also executes decision and locking statements on the caller’s connection. Keep HTTP transport outside these decisions.
+
 Responsibilities:
 
 - enforce invariants
@@ -287,7 +293,7 @@ sequenceDiagram
     Service->>DB: Close old state
     Service->>DB: Insert new state
     Service->>DB: Update quest/knowledge reactions
-    Service->>DB: Insert audit/outbox record
+    Service->>DB: Insert audit record
     Service->>DB: Commit
     Service-->>API: Domain result
     API-->>Client: Response
@@ -330,7 +336,7 @@ ADR 0020 adds one step to that sequence without changing its order: `lock_author
 
 **Campaign operations (Phase 15 completion).** Operation commands (world time, the clock, and later sessions, parties, events, and state) start with `dnd_ai.commands._operations.lock_operation_scope`, which delegates to the 15.1 sequence above (world, the actor's membership/role/account rows, campaign) and adds the campaign's own timeline (no timeline row lock: archiving a timeline already refuses while a campaign is active). After the campaign, operations lock in this order: sessions (by id) → parties (by id) → `core.entities` (by id) → `world.relationships` (by id) → typed state rows in table order — `timeline_clocks`, `party_memberships`, `session_participants`, `character_state`, `character_conditions`, `character_resources`, `character_location_history`, `quest_state`, `objective_state`, `party_knowledge`, `entity_knowledge`, `item_state`, `item_ownership`, `inventory_entries`, `item_attunements`, `organization_state`, `relationship_state`, then the five dungeon-state tables — each by key → `narrative.event_corrections` (insert) → per-world advisory locks (for example `core.world_times.sort:<world>`). A command that locks several rows of one table takes them in key order.
 
-Writers of a row take `FOR UPDATE`. A command that only needs a parent to *stay active* for its duration (create timeline, branch, create campaign, reactivate, entity transitions) takes `FOR SHARE` on the parent, which conflicts with the parent's `FOR UPDATE` archive. The campaign row is the exception for `lock_authoring_scope` and `lock_operation_scope`: they take it `FOR KEY SHARE`, which conflicts with the same `FOR UPDATE` archive but not with administrative recovery's `FOR NO KEY UPDATE` (DEF-014). `add_access_group_members` follows the same rule (DEF-015): the group, then the added members' memberships `FOR NO KEY UPDATE`, then the acting membership and the campaign `FOR KEY SHARE`, so access-group member additions serialize with an author at the member's membership row, not at the campaign row. Idempotency reservation INSERTs happen first and touch only their own unique index, so they introduce no cycle. Deferred constraint triggers (world-owner and campaign access-manager retention) take their own `FOR UPDATE` at commit on the world/campaign row respectively; commands pre-check these invariants so callers get a classified 409 instead of a raw integrity failure.
+Writers of a row take `FOR UPDATE`. A command that only needs a parent to *stay active* for its duration (create timeline, branch, create campaign, reactivate, entity transitions) takes `FOR SHARE` on the parent, which conflicts with the parent's `FOR UPDATE` archive. The campaign row is the exception for `lock_authoring_scope` and `lock_operation_scope`: they take it `FOR KEY SHARE`, which conflicts with the same `FOR UPDATE` archive but not with administrative recovery's `FOR NO KEY UPDATE` (DEF-014). `add_access_group_members` follows the same rule (DEF-015): the group, then the added members' memberships `FOR NO KEY UPDATE`, then the acting membership and the campaign `FOR KEY SHARE`, so access-group member additions serialize with an author at the member's membership row, not at the campaign row. Reservation inserts also participate in foreign-key locking. The scoped deferral, late reservations and remaining immediate-key routes are described in [the locking contract](../api/ACCESS_CONTROL.md#locking-of-keyed-authoring-operation-and-reveal-routes-r01-o-2). Deferred constraint triggers (world-owner and campaign access-manager retention) take their own `FOR UPDATE` at commit on the world/campaign row respectively; commands pre-check these invariants so callers get a classified 409 instead of a raw integrity failure.
 
 ## 8. Event-assisted state architecture
 
@@ -354,6 +360,8 @@ Events answer why and when. Typed state answers what is true now.
 
 ## 9. Effective timeline state
 
+The composition below is the accepted model. [Branching timelines](../ENTITY_LIFECYCLE.md#9-branching-timelines) specifies the current dungeon and quest exceptions.
+
 An effective read combines:
 
 ```text
@@ -367,6 +375,8 @@ world definition
 The Timeline and State Service owns this resolution logic. Individual clients and domain services should not independently reinvent it.
 
 ## 10. Internal event dispatcher and outbox
+
+Planned. There is no general outbox table or deployed consumer.
 
 The platform should use a transactional outbox for post-commit work.
 
@@ -419,6 +429,8 @@ AI context must be constrained by:
 AI outputs are derived content unless promoted through the proposal workflow.
 
 ## 12. Rules engine
+
+Accepted future design. Current rules tables and bounded checks support specific commands. The general calculation engine has separate delivery gates.
 
 The rules engine should be ruleset-aware and deterministic where possible.
 
@@ -485,9 +497,11 @@ Integration responsibilities:
 - synchronize selected character and scene fields
 - tolerate offline or delayed synchronization
 
-Delivered (Phase 11 workstream 7, revised by Phase 11R workstream 11R): `foundry-module/` — a real, installable FoundryVTT module (dnd5e-only; FoundryVTT minimum `13`, verified `13.351`) implementing the client half of this section, over the adapter-facing API contract [§19.1](../architecture/DATABASE_MODEL.md#191-identity-and-login) and [DATABASE_MODEL.md §19](../architecture/DATABASE_MODEL.md) already establish. Combat-turn/condition/resource submission is always an explicit GM/player action (its own "D&D AI Sync" panel), never inferred from FoundryVTT's dnd5e-system-specific chat-card/damage-application internals; HP synchronization alone is automatic, wired to Foundry's `updateActor` hook with a self-updating guard so the module's own confirmed write-back never re-triggers a second submission. Each browser/device pairs itself individually against the hybrid Foundry pairing model ([DATABASE_MODEL.md](../architecture/DATABASE_MODEL.md)'s Foundry hybrid pairing section) — replacing the single shared `FoundrySystem` credential the original workstream delivered, now retired and rejected unconditionally at the authentication boundary (a High-severity correction closing a gap where the legacy scheme remained permanently acceptable alongside the new one) — so any campaign member, not only the GM, can pair their own client. Every paired-device route additionally enforces the closed `FOUNDRY_SCOPES` a connection was actually granted at pairing time (a second High-severity correction; scope was persisted but not enforced in the original pairing delivery). See `foundry-module/README.md` for the pairing flow (`scripts/foundry_provision.py`'s `register`/`pairing-code` subcommands, a diagnostic CLI over the same public pairing API standing in for the portal UI Phase 13 will eventually provide) and `tests/scenario/test_foundry_adapter_e2e.py` for the reproducible harness proving the exit criterion this integration exists to satisfy.
+Delivered (Phase 11 workstream 7, revised by Phase 11R workstream 11R): `foundry-module/` — a real, installable FoundryVTT module (dnd5e-only; FoundryVTT minimum `13`, verified `13.351`) implementing the client half of this section, over the adapter-facing API contract [§19.1](DATABASE_MODEL.md#191-identity-and-login) and [DATABASE_MODEL.md §19](DATABASE_MODEL.md) already establish. Combat-turn/condition/resource submission is always an explicit GM/player action (its own "D&D AI Sync" panel), never inferred from FoundryVTT's dnd5e-system-specific chat-card/damage-application internals; HP synchronization alone is automatic, wired to Foundry's `updateActor` hook with a self-updating guard so the module's own confirmed write-back never re-triggers a second submission. Each browser/device pairs itself individually against the hybrid Foundry pairing model ([DATABASE_MODEL.md](DATABASE_MODEL.md)'s Foundry hybrid pairing section) — replacing the single shared `FoundrySystem` credential the original workstream delivered, now retired and rejected unconditionally at the authentication boundary (a High-severity correction closing a gap where the legacy scheme remained permanently acceptable alongside the new one) — so any campaign member, not only the GM, can pair their own client. Every paired-device route additionally enforces the closed `FOUNDRY_SCOPES` a connection was actually granted at pairing time (a second High-severity correction; scope was persisted but not enforced in the original pairing delivery). See `foundry-module/README.md` for the pairing flow (`scripts/foundry_provision.py`'s `register`/`pairing-code` subcommands, a diagnostic CLI over the same public pairing API standing in for the portal UI Phase 13 will eventually provide) and `tests/scenario/test_foundry_adapter_e2e.py` for the reproducible harness proving the exit criterion this integration exists to satisfy.
 
 ### 15.2 Discord
+
+Planned adapter. The Discord setting has no runtime consumer.
 
 Discord integration may support:
 
@@ -501,9 +515,13 @@ Discord messages should be stored with provenance when they create interactions 
 
 ### 15.3 MCP
 
+Planned interface.
+
 MCP exposes controlled development and GM tooling. It must follow the same authorization and domain-command pathways as other clients.
 
 ## 16. Import architecture
+
+Planned campaign import pipeline. The implemented reference corpus serves authorized retrieval.
 
 ```mermaid
 flowchart LR
@@ -536,7 +554,7 @@ The import subsystem is intentionally isolated from canonical tables until promo
 
 The API, worker, and adapter will share a single container image; the entrypoint selects the role, so there is one artifact to build and promote — see [DEVELOPMENT.md §2](../DEVELOPMENT.md#2-repository-layout) and [§3.6](../DEVELOPMENT.md#36-self-hosted-docker-compose).
 
-**AWS remains an optional, no-longer-continuously-verified deployment path.** `terraform/modules/database`/`secrets` and `terraform/environments/dev` are retained for anyone who chooses to host PostgreSQL on AWS RDS instead; an ECS Fargate/Lambda compute path for the application services remains documented, unbuilt planning material in [PLAN.md §30](../README.md)–[§31](../README.md), not something any phase currently deploys to. Nothing in this project's supported, CI-verified path requires AWS.
+**AWS remains an optional, no-longer-continuously-verified deployment path.** `terraform/modules/database`/`secrets` and `terraform/environments/dev` are retained for anyone who chooses to host PostgreSQL on AWS RDS instead; an ECS Fargate/Lambda compute path for the application services remains documented, unbuilt planning material in [PLAN.md §30 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#30-aws-terraform-deployment-plan-for-postgresql)–[§31 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#31-aws-deployment-plan-for-application-services), not something any phase currently deploys to. Nothing in this project's supported, CI-verified path requires AWS.
 
 ## 18. Security model
 
@@ -622,7 +640,7 @@ Do not prematurely split domains into distributed microservices while core invar
 
 ### Integration tests
 
-Run against a local/self-hosted PostgreSQL 18 server during development and against a disposable containerized PostgreSQL 18 instance in CI — never against SQLite or a mock ([PLAN.md §24.0](../README.md)):
+Run against a local/self-hosted PostgreSQL 18 server during development and against a disposable containerized PostgreSQL 18 instance in CI — never against SQLite or a mock ([PLAN.md §24.0 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#240-verification-policy)):
 
 - PostgreSQL constraints and functions
 - transactional state/event updates

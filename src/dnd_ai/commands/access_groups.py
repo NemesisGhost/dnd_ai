@@ -7,7 +7,7 @@ resource-grant grantee (`dnd_ai.commands.access_grants.
 create_resource_grant`/`revoke_resource_grant`, both already accept
 `grantee_access_group_id`) — but no command anywhere could create, list,
 deactivate, reactivate, or manage the membership of a group itself
-(`docs/PHASE13E_ACCESS_CONTRACT.md` §5). This module adds exactly that: the
+(`docs/api/ACCESS_CONTROL.md` §5). This module adds exactly that: the
 complete safe lifecycle the existing model supports, never a parallel
 authorization/grant system of its own. Group-owned resource grants continue
 to go through `dnd_ai.commands.access_grants.create_resource_grant`/
@@ -41,7 +41,7 @@ access by itself.
 **Membership.** `add_access_group_member()`/`remove_access_group_member()`
 manage `security.access_group_memberships` rows for an existing, active
 campaign membership — never a bare `user_id`
-(`docs/PHASE13E_ACCESS_CONTRACT.md`'s own "never accept a user id as a
+(`docs/api/ACCESS_CONTROL.md`'s own "never accept a user id as a
 substitute for the authoritative campaign-membership id" instruction).
 Removal closes the row (`removed_at = now()`), never deletes it, matching
 every other temporal table in this schema. A departed member's group

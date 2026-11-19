@@ -4,7 +4,7 @@ Current reference for the implemented sheet endpoint and active-build resolver, 
 from the Phase 13D delivery record. ADRs 0021–0023 define accepted future changes; they
 do not silently change this implementation. Reconcile a limitation against the current
 command/query before treating it as outstanding work. Historical verification and fixture
-details remain in [delivery history](../DELIVERY_HISTORY.md).
+details remain in [delivery history](../delivery/history.md).
 
 ## 1. Endpoint and response contract
 

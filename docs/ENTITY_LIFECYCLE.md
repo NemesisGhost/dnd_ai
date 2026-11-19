@@ -304,7 +304,9 @@ Audit records must preserve both the erroneous and corrected records.
 
 ## 9. Branching timelines
 
-When a timeline branches:
+**Implemented.** Branch creation records lineage and a branch point. Events, clocks and active character builds have ancestry-aware reads. Dungeon and quest readers join typed state on the requested timeline. Creating a child after a change on its parent can therefore yield a default dungeon state or missing quest progress. Branch creation does not copy those rows. Membership has its own non-inheritance rule. [Dungeon reader](../src/dnd_ai/queries/dungeon.py) · [Quest reader](../src/dnd_ai/queries/quest.py)
+
+**Accepted branching contract.** The following includes the unresolved typed-state requirement (Fable C1).
 
 1. The new timeline records its parent.
 2. The branch point records an event or world time.
@@ -608,9 +610,11 @@ Phase 15.1 typed content commands ([ADR 0015](adr/0015-typed-world-content-autho
 | `start_prepared_encounter` (pending to active; needs a participant and published participants; one event), `abort_encounter` (pending or active to aborted; an event only when it had started), and the turn and end commands the portal and the Foundry sync share (`resolve_combat_turn` with an optional round, order and time, `end_encounter` with outcomes; both now on the campaign idempotency store with an audit row) | Built (Phase 15.3B-2b) |
 | `create_source` (a world-owned source of an authorable type), `attach_source` and `detach_source` (the link state is the guard: attaching what is attached or detaching what is not is a conflict; history is kept) | Built (Phase 15.3C-1) |
 | `create_knowledge_item`, `update_knowledge_item` (the claim only: statement, type, truth status, sensitivity, optional subject; statement, type, and subject freeze once any knower, party, discovery, public-knowledge, version, or event-effect row refers to the claim, with `knowledge_already_known`; truth status and sensitivity stay editable and audited) | Built |
-| Campaign operations: sessions, events, timeline state, progress, reveal, relationships | Scheduled in the Phase 15 completion checkpoints (see [PLAN.md Phase 15](README.md)); not built |
+| Sessions and events | Built. Schedule, start and end sessions, record events and correct eligible effects. |
+| Dungeon state and quest progress | Built on the selected timeline. See [branching limitations](#9-branching-timelines). |
+| Revelation and relationships | Built for the scoped audience and operation. See [revelation](api/ACCESS_CONTROL.md#3w-character-revelations-p03-a-a3a) and the [operation catalog](api/operations.md). |
 
-Subtype-specific create/revise commands (`CreateLocation`, `CreateNpc`, …) are Phase 15 and are deliberately **not** shared: subtype invariants (containment, organization kind, religion fields) make a generic writer unsafe, and nothing in the database checks that a subtype row exists. **Contract every subtype create command must satisfy:** authority `canon.edit`; insert the `core.entities` root at `draft` with `row_version`, `created_by_user_id`, and a `gm_entry` `core.sources` row; insert the complete subtype chain in the same transaction; write an audit `created` row; support idempotency; and register the type in the eligibility registry only together with its read-side gating. Source attachment beyond that (imported or homebrew sources) is Phase 15/18. There are no bulk lifecycle commands.
+Subtype-specific create/revise commands (`CreateLocation`, `CreateNpc`, …) are implemented by subtype and deliberately **not** shared: subtype invariants (containment, organization kind, religion fields) make a generic writer unsafe, and nothing in the database checks that a subtype row exists. **Contract every subtype create command must satisfy:** authority `canon.edit`; insert the `core.entities` root at `draft` with `row_version`, `created_by_user_id`, and a `gm_entry` `core.sources` row; insert the complete subtype chain in the same transaction; write an audit `created` row; support idempotency; and register the type in the eligibility registry only together with its read-side gating. Source attachment beyond that (imported or homebrew sources) is Phase 15/18. There are no bulk lifecycle commands.
 
 ### 21.2 Recommended lifecycle commands (design catalog)
 

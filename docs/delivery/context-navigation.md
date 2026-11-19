@@ -1,21 +1,23 @@
 # Context-navigation correction plan (Infobox, timelines, World options) — 2026-11-11
 
+Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
+
 **Status (reconciled 2026-11-11 at `d51e38a`):** implemented through `6cdc68b`;
 independent review recorded as PASS WITH NONBLOCKING VERIFICATION LIMITATION in
 [the closeout](#107-review-outcome-and-closeout-2026-11-11) (§10.7). Browser checks and
 retained follow-ups remain. Sections 1-9 are the
 plan as approved and are kept unchanged below. The normative contract is
-[UI_DESIGN.md §4.8.12](UI_DESIGN.md#4812-context-navigation-correction-read-gates-destinations-and-meaningful-choice-approved-2026-11-11-implemented).
+[portal behavior §4.8.12](../reference/portal-navigation.md#4812-context-navigation-correction-read-gates-destinations-and-meaningful-choice-approved-2026-11-11-implemented).
 This plan adds the findings, implementation boundaries, tests, and handoff prompts; it
 does not restate that contract.
 
 - **Baseline:** `phase15/completion` at `00c463f284f725b74d696452c59b0862fae7b679`. PR #68
-  stays draft and unmerged. A4 is accepted and CI-green, and this correction does not
+  was draft at that baseline and later merged as `b0910c4`. A4 is accepted and CI-green, and this correction does not
   reopen it. A5–A7 are not started by this work.
 - **Workflow:** planning by Claude Code Opus 5.5; implementation by Claude Code Sonnet 5.5
   Medium (§8); independent review by Codex Luna Medium (§9).
 - **Inputs:** Astra's investigation (summarised in §1), ADR 0019/0020, UI_DESIGN §4,
-  §4.1, §4.8.2–§4.8.4, the [issue rubric](ISSUE_GRADING_RUBRIC.md), and the code traced at
+  §4.1, §4.8.2–§4.8.4, the [issue rubric](grading.md), and the code traced at
   the baseline (file references below).
 
 ## 1. Scope and decisions
@@ -57,11 +59,11 @@ World-level pagination/search. Tracing found no case that needs these. CN-1's
 destinations are all existing routes the caller is already authorized for.
 
 **Deferred:** World-level pagination beyond the first 100 explicit worlds (finding F5;
-[backlog](BACKLOG.md#8-other-explicit-follow-ups)).
+[backlog](work-register.md#other-explicit-follow-ups)).
 
 ## 2. Findings and grading
 
-Each finding is scored with the [rubric](ISSUE_GRADING_RUBRIC.md). Environment: local
+Each finding is scored with the [rubric](grading.md). Environment: local
 development portal and API. The caller is an authenticated user on a normal portal path.
 No data is at risk: these are presentation and navigation defects, and the server refuses
 every unauthorized read.
@@ -239,7 +241,7 @@ If one of these appears necessary, stop and report the specific gap.
   implemented contract with its manual-check pointer.
 - Update the ADR 0019 amendment and the style-guide bullet from "implementation
   pending" to the implementing SHA.
-- Add one dated row to the [acceptance ledger](PHASE14_15_ACCEPTANCE_LEDGER.md):
+- Add one dated row to the [acceptance ledger](acceptance-ledger.md):
   implemented and awaiting independent review, not owner-accepted, and with the real
   browser checks of §6 pending.
 
@@ -403,7 +405,7 @@ exists, cite it instead of adding one.
 ## 6. Real-browser acceptance checks
 
 These checks are pending and must not be claimed from jsdom. Run them on the
-[manual-validation stack](PHASE14_15_ACCEPTANCE_ENVIRONMENT.md) with throwaway
+[manual-validation stack](acceptance-environment.md) with throwaway
 accounts, never on the owner's own campaign.
 
 1. **Keyboard:**
@@ -521,7 +523,7 @@ accounts, never on the owner's own campaign.
 ## 9. Review guidance (Codex Luna, Medium)
 
 Review the three CNC commits against this plan and UI_DESIGN §4.8.12, and grade every
-finding with the [rubric](ISSUE_GRADING_RUBRIC.md). Use **CHANGES REQUIRED** only for a
+finding with the [rubric](grading.md). Use **CHANGES REQUIRED** only for a
 demonstrated defect or design gap against the scoped acceptance.
 
 **Check, in priority order:**
@@ -635,7 +637,7 @@ keeps world-route precedence. Pagination stays deferred. No backend authorizatio
    World select to be enabled before choosing (the contract makes campaign-derived entries wait for the list).
    No assertion was weakened; the changed ones assert the new rule.
 
-### 10.2 Findings and grading ([rubric](ISSUE_GRADING_RUBRIC.md))
+### 10.2 Findings and grading ([rubric](grading.md))
 
 | ID | Finding | Exp | Imp | Trig | Det | Blast | Score | Disposition |
 |---|---|---:|---:|---:|---:|---:|---|---|
@@ -796,6 +798,6 @@ Attribution is kept separate.
 **Documentation cleanup (2026-11-11, after `d51e38a`):** N4's ignored
 `portal/.tmp/infobox-review.test.tsx` was inspected and removed as an obsolete diagnostic
 probe asserting pre-correction behavior. Its original bytes and hash are preserved in
-[DELIVERY_HISTORY](DELIVERY_HISTORY.md#2026-11-11-remaining-work-consolidation).
+[DELIVERY_HISTORY](history.md#2026-11-11-remaining-work-consolidation).
 The production regression suites remain; this retires N4 only, not the other follow-ups
-or browser limitations above. Current obligations are consolidated in [BACKLOG](BACKLOG.md).
+or browser limitations above. Current obligations are consolidated in [BACKLOG](work-register.md).

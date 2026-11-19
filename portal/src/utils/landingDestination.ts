@@ -1,7 +1,7 @@
 import type { SessionBootstrap } from "../types/bootstrap"
 
 // Where the authenticated landing resolver (/home) sends the user
-// (docs/UI_DESIGN.md §4.2, steps 2-6). The precedence itself — no
+// (docs/reference/portal-behavior.md §4.2, steps 2-6). The precedence itself — no
 // campaigns, exactly one, a valid fixed preference, a valid last-visited
 // campaign — is computed server-side into `startup_campaign_id`; this only
 // turns it into a path, and re-checks it against the bootstrap's own

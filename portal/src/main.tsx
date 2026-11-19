@@ -10,7 +10,7 @@ import "./index.css"
 // A data router (rather than <BrowserRouter>) so authoring forms can use
 // useBlocker to protect unsaved changes. A single splat route renders the whole
 // application, so App's declarative <Routes> and every existing route are
-// unchanged (docs/UI_DESIGN.md §5.11).
+// unchanged (docs/reference/portal-behavior.md §5.11).
 const router = createBrowserRouter([
   {
     path: "*",

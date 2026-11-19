@@ -2,7 +2,7 @@
 
 `GET /campaigns/{campaign_id}/knowledge` (Phase 13D — new) is the
 audience-filtered discovery/list side of the Knowledge screen
-(docs/UI_DESIGN.md §5.6): given a `view` and an authorized perspective, it
+(docs/reference/portal-behavior.md §5.6): given a `view` and an authorized perspective, it
 returns the knowledge records the caller may see, cursor-paginated, with
 enough per-record data to render a compact item and navigate to detail.
 Visibility, the `view` vocabulary, ordering, and the GM-vs-perspective

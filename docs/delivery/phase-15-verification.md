@@ -1,6 +1,8 @@
 # Phase 15.1 Verification
 
-Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md) and [ADR 0015](adr/0015-typed-world-content-authoring.md). **Status: implementation complete and merged (PR #65, `60d5bc9`); automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.1 is a **subset** of Phase 15: **Phase 15 as a whole is incomplete**, and the remaining campaign-operations and world-structure work is the checkpoint sequence in [PLAN.md Phase 15](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md). Phase 16 is blocked by the Phase 15 completion gate.
+Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
+
+Evidence for Phase 15.1 (GM world-content definitions) on branch `phase15/gm-authoring`, recorded against [PLAN.md Phase 15](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md) and [ADR 0015](../adr/0015-typed-world-content-authoring.md). **Status: implementation complete and merged (PR #65, `60d5bc9`); automated gates green; manual browser and accessibility verification NOT performed** (see below). Phase 15.1 is a **subset** of Phase 15: **Phase 15 as a whole is incomplete**, and the remaining campaign-operations and world-structure work is the checkpoint sequence in [PLAN.md Phase 15](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md). Phase 16 is blocked by the Phase 15 completion gate.
 
 **Disclosed limitations (2026-10-05):** audit rows written by the 15.1 commands *before checkpoint 15.2A-3* copy up to 1,000 characters of narrative per field into `audit.change_log.changed_fields`, and the 15.1 authoring routes stored the full authoring view, including GM-only notes and background, in idempotency replay rows. **New writes no longer do either (15.2A-3, resolved).** Existing rows were scrubbed by checkpoint 15.2A-4 (migration 135, owner decision recorded in the working session); only backups taken before it still hold the old content. Audience-preview reads are audited as of 15.2A-3.
 
@@ -180,7 +182,7 @@ Not verified: CI; manual browser/accessibility (keyboard operation of the picker
 
 ### Calendar creation: guided month roster
 
-Portal-only change on `phase15/completion`; no API, schema or migration change (the one `POST /worlds/{id}/calendars` request and its body are unchanged). Described in [UI_DESIGN.md](UI_DESIGN.md) (the `/worlds/:worldId/calendars/new` row and §5.11) and [UI_STYLE_GUIDE.md §10a.1 and §6.8](UI_STYLE_GUIDE.md#10a1-guided-workspace-pages) (local creation steps, draft roster).
+Portal-only change on `phase15/completion`; no API, schema or migration change (the one `POST /worlds/{id}/calendars` request and its body are unchanged). Described in [portal behavior](../reference/portal-behavior.md) (the `/worlds/:worldId/calendars/new` row and §5.11) and [portal style §10a.1 and §6.8](../reference/portal-style.md#10a1-guided-workspace-pages) (local creation steps, draft roster).
 
 | Item | Evidence |
 |---|---|
@@ -677,7 +679,7 @@ Corrections after an independent acceptance review of `cabe08b`. **Phase 15 is s
 
 ## Knowledge claim page: Guided workspace
 
-The unified Knowledge claim page was reorganised into the header and three presentation stages (Prepare, Review & publish, Use in play) described in [UI_DESIGN.md](UI_DESIGN.md). No business rule, API contract or migration changed.
+The unified Knowledge claim page was reorganised into the header and three presentation stages (Prepare, Review & publish, Use in play) described in [portal behavior](../reference/portal-behavior.md). No business rule, API contract or migration changed.
 
 | Area | Result |
 |---|---|
@@ -689,7 +691,7 @@ The unified Knowledge claim page was reorganised into the header and three prese
 
 ## Knowledge Member preview workspace
 
-Knowledge is an expandable sidebar item (Claims, Member preview) for callers with `access.manage`, and a read-only Member preview workspace replaces the per-page "Preview as member" controls on the Knowledge collection and claim pages. Documented in [UI_DESIGN.md](UI_DESIGN.md) §5.6 and [PHASE13E_ACCESS_CONTRACT.md](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE13E_ACCESS_CONTRACT.md) §3r.
+Knowledge is an expandable sidebar item (Claims, Member preview) for callers with `access.manage`, and a read-only Member preview workspace replaces the per-page "Preview as member" controls on the Knowledge collection and claim pages. Documented in [portal behavior](../reference/portal-behavior.md) §5.6 and [PHASE13E_ACCESS_CONTRACT.md](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE13E_ACCESS_CONTRACT.md) §3r.
 
 | Area | Result |
 |---|---|
@@ -700,7 +702,7 @@ Knowledge is an expandable sidebar item (Claims, Member preview) for callers wit
 
 ## UI panel and section consistency
 
-Presentation-only cleanup of panels, sections, lists, tables and the lifecycle explanation, described in [UI_STYLE_GUIDE.md §6.7–6.8 and §10a](UI_STYLE_GUIDE.md#67-section-containment). No API, schema, permission, lifecycle-rule or request-gating change.
+Presentation-only cleanup of panels, sections, lists, tables and the lifecycle explanation, described in [portal style §6.7–6.8 and §10a](../reference/portal-style.md#67-section-containment). No API, schema, permission, lifecycle-rule or request-gating change.
 
 | Area | Result |
 |---|---|
@@ -711,7 +713,7 @@ Presentation-only cleanup of panels, sections, lists, tables and the lifecycle e
 
 ## Items workflow and item workspace
 
-Portal-only redesign described in [UI_DESIGN.md](UI_DESIGN.md) (the items row and the sidebar rules) and [UI_STYLE_GUIDE.md §8.1, §10a.1 and §15](UI_STYLE_GUIDE.md). No API, schema, lifecycle-rule or permission change.
+Portal-only redesign described in [portal behavior](../reference/portal-behavior.md) (the items row and the sidebar rules) and [portal style §8.1, §10a.1 and §15](../reference/portal-style.md). No API, schema, lifecycle-rule or permission change.
 
 | Area | Result |
 |---|---|
@@ -739,7 +741,7 @@ Four review findings (the range `d8b1f28..46e7ad4`) corrected in the portal; no 
 
 ## World guided workflows and Review queue
 
-Portal-only change described in [UI_DESIGN.md](UI_DESIGN.md) (the World record workspace row, the Review queue row, the sidebar rules, §5.4 and §5.11) and [UI_STYLE_GUIDE.md §10a.1](UI_STYLE_GUIDE.md). No API, schema, lifecycle-rule or permission change: every field used was already returned (queue rows, revisions, comparison, lifecycle read model, authoring views, the World details).
+Portal-only change described in [portal behavior](../reference/portal-behavior.md) (the World record workspace row, the Review queue row, the sidebar rules, §5.4 and §5.11) and [portal style §10a.1](../reference/portal-style.md). No API, schema, lifecycle-rule or permission change: every field used was already returned (queue rows, revisions, comparison, lifecycle read model, authoring views, the World details).
 
 | Area | Result |
 |---|---|
@@ -780,7 +782,7 @@ A further Medium finding from review of `1124e95..09a8248`, corrected in the por
 
 ## Quest guided workspace
 
-Portal-only change described in [UI_DESIGN.md](UI_DESIGN.md) (the Quest workspace row, the Review queue row, §5.7 and §5.11) and [UI_STYLE_GUIDE.md §10a.1 and §12.4](UI_STYLE_GUIDE.md). No API, schema, lifecycle or status change.
+Portal-only change described in [portal behavior](../reference/portal-behavior.md) (the Quest workspace row, the Review queue row, §5.7 and §5.11) and [portal style §10a.1 and §12.4](../reference/portal-style.md). No API, schema, lifecycle or status change.
 
 | Item | Evidence |
 |---|---|
@@ -812,7 +814,7 @@ Three issues the review did not catch: the header Next link read "Run it" while 
 
 ## Characters, NPCs and relationships
 
-Described in [UI_DESIGN.md](UI_DESIGN.md) (§5.5, §5.5a and the Characters, creation, Members and offices and Relationships rows) and [UI_STYLE_GUIDE.md §9.1](UI_STYLE_GUIDE.md). Two small additive API changes, both read-only and with no permission, schema or data change: `character_type` (`npc` or `player_character`) on `GET /campaigns/{c}/world/search`, accepted only when `character` is the only category (otherwise 422), and `character_kind` on `GET .../characters/{id}` and `.../sheet`.
+Described in [portal behavior](../reference/portal-behavior.md) (§5.5, §5.5a and the Characters, creation, Members and offices and Relationships rows) and [portal style §9.1](../reference/portal-style.md). Two small additive API changes, both read-only and with no permission, schema or data change: `character_type` (`npc` or `player_character`) on `GET /campaigns/{c}/world/search`, accepted only when `character` is the only category (otherwise 422), and `character_kind` on `GET .../characters/{id}` and `.../sheet`.
 
 | Area | Result |
 |---|---|
@@ -828,11 +830,11 @@ Portal-only. The Add form's separate **Kind** selector was removed: each relatio
 
 ### People on either side of ownership, control and worship
 
-Policy clarification, recorded as the type compatibility and direction matrix in [DOMAIN_MODEL.md §11.5](DOMAIN_MODEL.md). Characters (NPCs and player characters) may be owner or property, controller or controlled, worshipper or worshipped, in every pairing; a worshipped character need not be a deity. The server already accepted all of these (no side restriction outside route and membership), so there is no server change; the new tests pin it. These relationships stay fictional: they create no character access, capability, perspective, event or timeline-state change. Portal: the Add form's role choice carries a direction hint for these three types. Automated: two database tests (every pairing and direction; a player who owns a PC's access gains no perspective, sheet or access over an NPC the PC owns, controls or is worshipped by, and the character-access, event and timeline-state tables are unchanged) and 15 `RelationshipsPanel.test.tsx` cases. No browser pass for this change.
+Policy clarification, recorded as the type compatibility and direction matrix in [DOMAIN_MODEL.md §11.5](../DOMAIN_MODEL.md). Characters (NPCs and player characters) may be owner or property, controller or controlled, worshipper or worshipped, in every pairing; a worshipped character need not be a deity. The server already accepted all of these (no side restriction outside route and membership), so there is no server change; the new tests pin it. These relationships stay fictional: they create no character access, capability, perspective, event or timeline-state change. Portal: the Add form's role choice carries a direction hint for these three types. Automated: two database tests (every pairing and direction; a player who owns a PC's access gains no perspective, sheet or access over an NPC the PC owns, controls or is worshipped by, and the character-access, event and timeline-state tables are unchanged) and 15 `RelationshipsPanel.test.tsx` cases. No browser pass for this change.
 
 ### Relationship participant compatibility
 
-One policy (`RELATIONSHIP_TYPE_POLICIES`, [DOMAIN_MODEL.md §11.5](DOMAIN_MODEL.md)) decides which entities may take which role in which relationship type. It is applied by `create_relationship`, served to the Add form by `GET …/authoring/relationships/options?entity_id=`, and used to narrow the counterpart search (`entity_type` on `GET …/world/search`, which generalizes `character_type`). No schema change, no migration, no data rewrite. Policy decision D1 (`parent_of`) took the plan's default: parent to child over religion, organization or place with both sides the same kind of record, never a person.
+One policy (`RELATIONSHIP_TYPE_POLICIES`, [DOMAIN_MODEL.md §11.5](../DOMAIN_MODEL.md)) decides which entities may take which role in which relationship type. It is applied by `create_relationship`, served to the Add form by `GET …/authoring/relationships/options?entity_id=`, and used to narrow the counterpart search (`entity_type` on `GET …/world/search`, which generalizes `character_type`). No schema change, no migration, no data rewrite. Policy decision D1 (`parent_of`) took the plan's default: parent to child over religion, organization or place with both sides the same kind of record, never a person.
 
 | Area | Result |
 |---|---|

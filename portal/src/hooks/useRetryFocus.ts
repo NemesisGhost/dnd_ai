@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useRef } from "react"
 import type { RefObject } from "react"
 
-// Bounded focus recovery for a retry button (docs/UI_DESIGN.md §5.11). A read that failed offers
+// Bounded focus recovery for a retry button (docs/reference/portal-behavior.md §5.11). A read that failed offers
 // "Try again"; when the person activated it and the read then succeeds, the button is replaced by
 // the content it was guarding, which would drop focus to the page. The button hands focus to the
 // heading of the page it was in, but only when all of these still hold: the person used the retry

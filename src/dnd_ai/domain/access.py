@@ -130,7 +130,7 @@ _TARGET_COLUMNS = (
 # `character.view_summary`/`.view_full`/etc. do for their own gated actions.
 # Advertising it as grantable therefore promises a capability this codebase
 # has no real, standalone target-aware consumer for. Re-add it if and when
-# such a consumer exists (see `docs/PHASE13E_ACCESS_CONTRACT.md` §3k).
+# such a consumer exists (see `docs/api/ACCESS_CONTROL.md` §3k).
 CHARACTER_TARGET_CAPABILITY_CODES = frozenset(
     {
         "character.view_summary",
@@ -983,7 +983,7 @@ BUILTIN_CAMPAIGN_GM_ROLE_CODE = "gm"
 class IsolationLevelError(RuntimeError):
     """The decision statement ran in a transaction that is not `read committed`.
 
-    The R01 argument (docs/R01_FRESH_AUTHORIZATION_PLAN_2026-11-12.md section 3.1) needs one fresh
+    The R01 argument (docs/api/ACCESS_CONTROL.md, Authorization timing and the final check) needs one fresh
     snapshot per decision statement, which only READ COMMITTED gives. Under REPEATABLE READ the
     statement would reuse the transaction's first snapshot, taken before the request's lock waits;
     under SERIALIZABLE conflicts surface as serialization failures. A direct `RuntimeError`

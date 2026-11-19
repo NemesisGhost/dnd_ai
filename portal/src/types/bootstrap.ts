@@ -45,7 +45,7 @@ export interface FeatureManifest {
 export type CampaignStartupMode = "resume_last_visited" | "preferred_campaign"
 
 // Stored startup values, already filtered by the server to campaigns the
-// caller can currently access (docs/UI_DESIGN.md §4.7). An ID here never
+// caller can currently access (docs/reference/portal-behavior.md §4.7). An ID here never
 // grants access.
 export interface CampaignPreferences {
   startup_mode: CampaignStartupMode
@@ -72,7 +72,7 @@ export interface SessionBootstrap {
   // so older fixtures keep compiling; the server always sends it. Never inferred
   // client-side (see utils/systemAccess.ts and utils/worldAccess.ts).
   global_capabilities?: readonly string[]
-  // Server-computed landing campaign (docs/UI_DESIGN.md §4.2): null means
+  // Server-computed landing campaign (docs/reference/portal-behavior.md §4.2): null means
   // "no campaign to resume" and the portal lands on /campaigns. Always null or
   // one of `campaigns`.
   startup_campaign_id: string | null

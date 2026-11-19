@@ -11,7 +11,7 @@ interface WorldItemDetailPageProps {
 }
 
 // Item detail. item_definition_id is never rendered — the response has no
-// authorized display label for it (UI_STYLE_GUIDE.md §10.2).
+// authorized display label for it (docs/reference/portal-style.md §10.2).
 export function WorldItemDetailPage({
     campaignId,
     item,

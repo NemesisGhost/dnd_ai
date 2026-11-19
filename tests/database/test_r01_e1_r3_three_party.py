@@ -2,7 +2,7 @@
 """R01 E1, residual R-3: three-party queueing on the knowledge item between the human reveal, the proposal review and a
 definition edit, over the real routes.
 
-The question (design `docs/R01_E1_REVIEW_ROUTE_DESIGN_2026-11-17.md`, 4.2, residual R-3). Human reveal takes the claim's
+The question (historical local design `docs/R01_E1_REVIEW_ROUTE_DESIGN_2026-11-17.md`, 4.2, residual R-3). Human reveal takes the claim's
 `core.entities` row `FOR SHARE` (`_lock_claim`) and *then* the `knowledge.knowledge_items` row `FOR UPDATE OF ki`
 (`_lock_knowledge_item`). The review's reveal branch takes them the other way round (`ki FOR UPDATE`, then the entity
 `FOR SHARE` in `require_state_targetable`). Two requests alone cannot deadlock on that (`SHARE`/`SHARE` is compatible). A

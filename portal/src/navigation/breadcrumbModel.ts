@@ -7,7 +7,7 @@ import { hasTaskEvidence, resolveTask } from "./resolveTask"
 import { continueTask, isSafeSearch, validateTask } from "./taskOrigin"
 import type { TaskOriginV1, TrailEntry } from "./taskOrigin"
 
-// The breadcrumb for a page, as data (docs/UI_DESIGN.md §4.8). It follows the VALIDATED task origin of
+// The breadcrumb for a page, as data (docs/reference/portal-behavior.md §4.8). It follows the VALIDATED task origin of
 // the history entry (`resolveTask`: the entry's own task, else an adapted legacy key, else the route's
 // defaults), never a guess from containment. It holds route references and generic nouns only: names
 // come from the label registry at render time and never enter a link's state.

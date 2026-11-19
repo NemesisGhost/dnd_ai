@@ -22,7 +22,7 @@ every active character relationship, direct resource grant, and access-group
 membership too, so a later reopened membership never silently regains any of
 them) — never account creation, invitations, or reactivating a previously-
 departed membership. `POST .../memberships`
-(previously reserved/unused, docs/PHASE13E_ACCESS_CONTRACT.md §2) is
+(previously reserved/unused, docs/api/ACCESS_CONTROL.md §2) is
 hardened this checkpoint to require an initial `role_id` and return both
 the new membership and role ids atomically. See `dnd_ai.commands.
 memberships.add_campaign_member`/`.end_campaign_membership`'s own

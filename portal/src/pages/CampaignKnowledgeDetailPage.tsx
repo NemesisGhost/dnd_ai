@@ -7,12 +7,12 @@ import { runPermissionLossCleanup } from "../hooks/navigationHolds"
 import { KnowledgeClaimPage } from "./KnowledgeClaimPage"
 import PlaceholderPage from "./PlaceholderPage"
 
-// Route-based Knowledge claim page (UI_STYLE_GUIDE.md §11.2), now also where a claim is
+// Route-based Knowledge claim page (docs/reference/portal-style.md §11.2), now also where a claim is
 // edited and where who knows it is managed:
 // /app/:campaignId/knowledge/:knowledgeItemId. The character perspective
 // is carried in the URL's own `character_id` query parameter when present
 // — the only addressable place that survives a direct refresh or bookmark
-// (UI_DESIGN.md §5.6, §9) — and falls back to the globally selected
+// (docs/reference/portal-behavior.md §5.6, §9) — and falls back to the globally selected
 // character otherwise, for backward compatibility with links that predate
 // this parameter. The party filter works the same way via `party_id`. The
 // server remains authoritative for both: neither parameter is treated as a

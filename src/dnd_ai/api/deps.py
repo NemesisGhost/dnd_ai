@@ -84,7 +84,7 @@ def get_engine() -> Engine:
         # explicit value or the local-dev default) — never None here at runtime.
         assert settings.database_url is not None
         # READ COMMITTED is enforced here, not inherited from the database or role default: the R01
-        # decision (docs/R01_FRESH_AUTHORIZATION_PLAN_2026-11-12.md section 3.1) needs one fresh
+        # decision (docs/api/ACCESS_CONTROL.md, Authorization timing and the final check) needs one fresh
         # snapshot per statement. psycopg then begins every transaction with
         # `BEGIN ISOLATION LEVEL READ COMMITTED`, so the setting travels with the transaction. The
         # authorization guard (plan section 6.5) is installed on the engine at the same time.

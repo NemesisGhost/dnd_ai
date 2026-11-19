@@ -1599,7 +1599,7 @@ def _read_role_password(args: argparse.Namespace) -> str:
     """Resolve the password to set from exactly one of `--password-env-var`/
     `--password-file` — mirroring `dnd_ai.config.Settings`' own established
     "environment variable or host-mounted secret file" duality
-    (docs/LOCAL_DEPLOYMENT.md), rather than inventing a third convention
+    (docs/operations/deployment.md), rather than inventing a third convention
     for this one script. Never accepted as a bare `--password` flag: a
     CLI-argument value is visible in `ps`/`docker top`/shell history for as
     long as this process runs, which is exactly the exposure this function

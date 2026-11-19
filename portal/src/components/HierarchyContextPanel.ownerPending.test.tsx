@@ -15,7 +15,7 @@ import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
 
 // While a NEW owner's reads are pending, nothing the previous owner's reads said may supply displayed
 // world or timeline details, permission decisions, selector options or actionable destinations
-// (docs/UI_DESIGN.md §4.8.12). The panel is observed in the pending interval itself, with deferred
+// (docs/reference/portal-behavior.md §4.8.12). The panel is observed in the pending interval itself, with deferred
 // responses, then as the new reads settle in either order.
 
 const { useCharacterMock } = vi.hoisted(() => ({ useCharacterMock: vi.fn() }))

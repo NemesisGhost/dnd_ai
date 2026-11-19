@@ -2,7 +2,7 @@ import type { CampaignContext } from "../types/bootstrap"
 import type { WorldSummary } from "../types/worldAuthoring"
 import { buildWorldChoices, canReadWorld } from "../utils/worldAccess"
 
-// The Infobox's option model (docs/UI_DESIGN.md §4.8.12). One pure function per level turns authoritative
+// The Infobox's option model (docs/reference/portal-behavior.md §4.8.12). One pure function per level turns authoritative
 // inputs into what the level may offer: real destinations, an optional display-only current value, whether
 // the level is enabled (CN-2, meaningful choice), and the reason to show when it is not. No React, router,
 // network or store is read here, so the rules are testable without a render and the panel only draws them.

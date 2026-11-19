@@ -5,7 +5,7 @@ import type { NavRoot } from "./routeMeta"
 import type { SelectionChange } from "./selectionChange"
 import type { TaskOriginV1 } from "./taskOrigin"
 
-// What a deliberate Infobox selection asks the router for (docs/UI_DESIGN.md §4.8.4, plan §4.2, PD-6).
+// What a deliberate Infobox selection asks the router for (docs/reference/portal-behavior.md §4.8.4, plan §4.2, PD-6).
 // A selection is a departure like any other link: it hands the router one destination with the task and
 // context it would start, and writes nothing else. The existing departure blocker decides first; the
 // selection, the task and the entry are committed from the accepted location, never ahead of it. Pure:

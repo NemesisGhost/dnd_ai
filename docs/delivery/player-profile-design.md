@@ -1,5 +1,7 @@
 # P03-A slice A5: campaign-scoped player profile, GM reads and field publication
 
+Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
+
 **Status (updated 2026-11-12):** **A5a (storage and GM reads) is implemented and passed independent re-review (current-head CI pending); A5b (provenance and restriction) passed independent review with nonblocking findings (current-head CI pending); A5c (the copy) is implemented and awaiting independent review.** The design below was finalized on 2026-11-11 and is otherwise unchanged; see §17 for the records. The owner approved D13–D18 on 2026-11-11 (§4). The approvals are recorded here and in the P03-A plan's "Decisions still needed" section. No owner decision is open for A5. Slices A5a, A5b and A5c (§13) may start in order, each after the previous slice's independent review.
 
 **What A5 delivers.** A5 is **infrastructure**, not delivered profile-authoring functionality. It provides storage, GM reads and a GM-side publication path. There is **no production profile writer**: until P03-B delivers controller editing, every production profile read returns no profile. P03-B must deliver the write privileges, the edit command, attribution, versioning writes and controller authorization (§6.2, §12).
@@ -17,7 +19,7 @@
 
 **Governing documents** (read the named sections; this design does not restate them in full):
 
-- [ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) (accepted):
+- [ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) (accepted):
   - OD-18 and its 2026-11-04 clarification (status block);
   - §2.5 capability routing and the narrative/profile capability table;
   - §2.8, the player-profile edit lock row;
@@ -26,19 +28,19 @@
   - §4.8 campaign storage;
   - §7 "Player-authored portrayal and profile";
   - the acceptance list (OD-18 clarification, T85).
-- [ADR 0016](adr/0016-data-classification-and-private-data-handling.md): data classes and handling.
-- [R19 foundation plan](R19_FOUNDATION_IMPLEMENTATION_PLAN.md): the OD-18 decision row; T82 and T85; §5.1 obligations (P03-A owns "the campaign-scoped player-profile storage and read").
-- [P03-A plan](PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md):
+- [ADR 0016](../adr/0016-data-classification-and-private-data-handling.md): data classes and handling.
+- [R19 foundation plan](rules-foundations.md): the OD-18 decision row; T82 and T85; §5.1 obligations (P03-A owns "the campaign-scoped player-profile storage and read").
+- [P03-A plan](shared-characters.md):
   - §4 (the A5 row);
   - §5 (A2 draft and release, D8);
   - §9 (A2b restriction and copy, D7 and D7-a–f);
   - §10.8.6 and §10.11 (keyed-request cycles, DEF-019–021);
   - §11 (P3, commit before response);
   - §12 (the A4 audience tier).
-- [PLANv2](PLANv2.md): 16A (the portrayal-guidance list) and 16B/16C (private notes and collaboration, separate scope); 15H.
-- [BACKLOG](BACKLOG.md): R01 (runtime authorization and transaction defects) and R02 (character-specific deny consistency).
-- [DATABASE_CONVENTIONS](DATABASE_CONVENTIONS.md): §10.2/§10.3 (mutable and append-only records), §11 (lookups, not ENUM), §20.4 (local integrity triggers), §24 (classification), §26.3/§26.4 (row versions; authorization before idempotency), §31 (comments), §34 (anti-patterns).
-- [DEVELOPMENT](DEVELOPMENT.md): §6.2, §6.3, §10, §11.
+- [PLANv2](roadmap.md): 16A (the portrayal-guidance list) and 16B/16C (private notes and collaboration, separate scope); 15H.
+- [BACKLOG](work-register.md): R01 (runtime authorization and transaction defects) and R02 (character-specific deny consistency).
+- [DATABASE_CONVENTIONS](../DATABASE_CONVENTIONS.md): §10.2/§10.3 (mutable and append-only records), §11 (lookups, not ENUM), §20.4 (local integrity triggers), §24 (classification), §26.3/§26.4 (row versions; authorization before idempotency), §31 (comments), §34 (anti-patterns).
+- [DEVELOPMENT](../DEVELOPMENT.md): §6.2, §6.3, §10, §11.
 
 ---
 
@@ -325,7 +327,7 @@ This is the revision after `146_public_profile_identity` (the current head). The
 
 **Indexes.** The unique constraints cover the lookups and the head FK. Add an FK index on `versions (edited_by_campaign_membership_id)`.
 
-**Entity references.** Register both `character_id` FKs as `BLOCKING` in `ENTITY_REFERENCE_CLASSIFICATION` ([entity_lifecycle.py](../src/dnd_ai/commands/entity_lifecycle.py)). A character with a profile is never physically deleted (ENTITY_LIFECYCLE §14).
+**Entity references.** Register both `character_id` FKs as `BLOCKING` in `ENTITY_REFERENCE_CLASSIFICATION` ([entity_lifecycle.py](../../src/dnd_ai/commands/entity_lifecycle.py)). A character with a profile is never physically deleted (ENTITY_LIFECYCLE §14).
 
 **Classification.** Every profile text column is `CHARACTER_VISIBLE` in `COLUMN_CLASSES` (D17). The live-schema classification test covers them.
 
@@ -556,7 +558,7 @@ When a profile exists, `profile` is:
   - `player_profile` uses `may_read_player_profile` (D15; in A5 its only branch is the GM branch).
 - **Restricted** is unchanged: the field has text, a restricted origin, and no covering release.
 - **Withheld is now per field.** A restricted field is withheld from a caller who fails that field's origin's source rule.
-  - Today `withheld_fields` applies one kind-based rule to all restricted fields ([public_profile_restrictions.py](../src/dnd_ai/queries/public_profile_restrictions.py)).
+  - Today `withheld_fields` applies one kind-based rule to all restricted fields ([public_profile_restrictions.py](../../src/dnd_ai/queries/public_profile_restrictions.py)).
   - A5b groups restricted fields by origin, and resolves world authority only when a legacy NPC field needs it.
 - **D7's invariants I1–I7 hold for `player_profile`** (P03-A plan §9.2), with "legacy origin" read as "restricted origin" and the provenance pair as in §6.3:
   - I2: every content change advances the watermark;
@@ -648,7 +650,7 @@ In A5, (2) is implied by (1); a unit test pins the implication. A caller who has
   - It is `null` unless the character is active, the caller passes the edit and GM read rules, and a profile exists.
   - Otherwise it is `{"player_profile_row_version": n, "fields": {"<eligible code>": <has text>}}`: the source token and booleans only, for the nine eligible fields.
 - **The audience tier is unchanged.**
-  - `read_released_profile` and `_RELEASED_PROFILE_SQL` select only released text, species and size ([character_public_profile.py](../src/dnd_ai/queries/character_public_profile.py)).
+  - `read_released_profile` and `_RELEASED_PROFILE_SQL` select only released text, species and size ([character_public_profile.py](../../src/dnd_ai/queries/character_public_profile.py)).
   - No origin, provenance, version or profile id reaches an audience response.
   - The existing unit test that pins the audience SQL stays unchanged.
 
@@ -1114,7 +1116,7 @@ changed, test evidence, deviations, and anything you could not verify.
 
 ## 16. Independent review guidance (Codex Luna, Medium)
 
-Review one slice per pass, naming the parent and target SHAs. Run the new tests at the parent, where they must fail, and at the target. Grade findings with [ISSUE_GRADING_RUBRIC](ISSUE_GRADING_RUBRIC.md). Verdict: PASS, PASS WITH NONBLOCKING FINDINGS, or CHANGES REQUIRED.
+Review one slice per pass, naming the parent and target SHAs. Run the new tests at the parent, where they must fail, and at the target. Grade findings with [ISSUE_GRADING_RUBRIC](grading.md). Verdict: PASS, PASS WITH NONBLOCKING FINDINGS, or CHANGES REQUIRED.
 
 **Every slice:**
 

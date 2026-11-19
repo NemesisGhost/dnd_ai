@@ -8,7 +8,7 @@ vi.mock("./api/userPreferences", () => ({
   recordLastVisitedCampaign: vi.fn(() => Promise.resolve()),
 }))
 
-// The unavailable/unauthorized presentation policy on the campaign pages (docs/UI_DESIGN.md,
+// The unavailable/unauthorized presentation policy on the campaign pages (docs/reference/portal-behavior.md,
 // "Unavailable and unauthorized destinations"): a first read that fails is a failure the person can
 // retry (reading only); a 403 and a 404 are closed, and a missing and a hidden record read alike.
 

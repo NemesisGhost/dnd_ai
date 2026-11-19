@@ -1,5 +1,5 @@
 """HTTP-layer coverage for `dnd_ai.api.user_preferences` and the preference
-fields of `GET /auth/session` (docs/UI_DESIGN.md §4.7).
+fields of `GET /auth/session` (docs/reference/portal-behavior.md §4.7).
 
 Uses a *real* `/auth/login` cookie session (CSRF and Origin only apply to a
 local-session principal), plus a Foundry-principal override to prove the

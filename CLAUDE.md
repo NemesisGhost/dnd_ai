@@ -2,49 +2,11 @@
 
 This file is operating guidance for Claude Code (and other AI coding assistants) working in this repository. It summarizes and links to the authoritative documents rather than restating them — when this file and a linked document disagree, the linked document wins and this file should be corrected.
 
-## 1. What this project is
+## Product and documentation
 
-A persistent-world simulation platform for tabletop RPGs (initially D&D 5e 2024). A world with branching timelines hosts multiple campaigns; PostgreSQL is the single source of truth; AI agents portray NPCs and propose world changes but never own canon. Full vision: [README.md](README.md).
+Start at the [documentation hub](docs/README.md). Load the affected topic, then its governing decisions. The [documentation standard](docs/standard.md) defines where tutorials, operations, references, explanations and evidence belong. The [roadmap](docs/delivery/roadmap.md) owns implementation order. The [work register](docs/delivery/work-register.md) owns current obligations.
 
-## 2. Operating posture
-
-This repository is a restart of the platform architecture around a single supported implementation model. Legacy material from the previous iteration has been removed rather than revived, and new work is expected to follow the current design under `docs/` and the self-hosted Docker deployment path.
-
-The rules in this file are intentionally product-focused: use current architecture and schema documentation for implementation behavior, and consult the plan only for delivery status or future scope. The authoritative roadmap is [docs/PLANv2.md](docs/PLANv2.md); the [documentation index](docs/README.md) routes current contracts and active plans; the original Phase 15 checkpoint list is retained in [docs/PHASE15_VERIFICATION.md](docs/PHASE15_VERIFICATION.md).
-
-## 3. Technology stack
-
-- **Deployment / IaC:** **Self-hosted Docker Compose** (`compose.yaml` at the repository root) is the supported deployment topology — see [ADR 0012](docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md). Infrastructure choices remain optional and should not leak into the product design unless a specific deployment target is being built.
-- **Database:** PostgreSQL 18.x — a local or self-hosted (Docker Compose) server for development and CI. The major version must match everywhere it's run ([docs/DATABASE_CONVENTIONS.md §2.1](docs/DATABASE_CONVENTIONS.md#21-supported-postgresql-version)). Schema, conventions, and migration approach are defined in [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) (migrations via **Alembic**, per §25.1).
-- **API / backend services:** **Python 3.12+** with **SQLAlchemy 2.x Core** (not the ORM), **psycopg 3**, **Pydantic v2**, and **FastAPI** at the API layer. Dependencies use **uv**; **ruff** and **mypy** enforce quality. Tests use **pytest** against PostgreSQL 18 locally and in CI.
-- **Compute:** one shared container image (`Dockerfile`) is built for the API, background worker, Discord adapter, and one-off jobs including migrations, with different entrypoints selecting the role — see [docs/DEVELOPMENT.md §2](docs/DEVELOPMENT.md#2-repository-layout). Migrations (`compose.yaml`'s `migrate` job) and the FastAPI application under Uvicorn (`compose.yaml`'s `api` service) both run today; the background worker and Discord adapter roles are added when those modules exist.
-- **UI:** **React**. Any web/admin client is a React application talking to the REST/application API — never directly to PostgreSQL.
-- **Other integrations:** FoundryVTT module, Discord bot, MCP interface — all clients, all going through the application API (§5).
-
-The full toolchain, with rationale and the process for changing any of it, is in [docs/DEVELOPMENT.md §1](docs/DEVELOPMENT.md#1-toolchain). When a doc doesn't specify a technology choice, default to this stack rather than introducing a new one.
-
-## 4. Documentation map and context-loading policy
-
-All project documentation lives under `docs/` (never the repo root, except `README.md` and this file). The linked documents are authoritative, but **authoritative does not mean load every document in full for every task**. Use progressive, task-scoped retrieval:
-
-1. Read this file, then identify the task's domain, affected layer, and change type.
-2. Use a heading or keyword search (`rg -n '^#{1,4} |<term>' <candidate-docs>`) to locate the relevant sections before opening them.
-3. Read the affected domain/schema sections and the convention sections governing the mechanism being changed. Open the relevant plan entry only when the task concerns delivery scope. Expand to adjacent sections only when a dependency or conflict requires it.
-4. Do not preload verification history, unrelated domains, or every architecture document together.
-5. Read a whole authoritative document only for a cross-cutting design/reconciliation review, or when targeted sections do not resolve an ambiguity. State that reason in the work summary.
-
-Worked examples belong beside their governing topic rule; there is no separate assistant example catalog.
-
-| Document | Use it for |
-|---|---|
-| [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) | Conceptual vocabulary and boundaries. Search for and read the affected concepts before naming or changing them; do not load unrelated domains. |
-| [docs/architecture/DATABASE_MODEL.md](docs/architecture/DATABASE_MODEL.md) | **Source of truth** for database schema and table scope. Read the affected schema/domain section and its implementation notes. |
-| [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) | Hard database rules. Read the sections governing the mechanisms being changed plus §34's relevant anti-patterns; follow them exactly. A full-document read is reserved for convention-wide reviews. |
-| [docs/ENTITY_LIFECYCLE.md](docs/ENTITY_LIFECYCLE.md) | How entities are created, approved, mutated, branched, archived, deleted — including the exact command list and required transaction steps. |
-| [docs/architecture/SYSTEM_ARCHITECTURE.md](docs/architecture/SYSTEM_ARCHITECTURE.md) | Service layering, command/query separation, transaction boundaries, and AI orchestration flow. |
-| [docs/architecture/DUNGEON_FLOW.md](docs/architecture/DUNGEON_FLOW.md) | The reference end-to-end vertical slice (dungeon/quest scenario) — the acceptance test any cross-domain design should be checked against. |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Toolchain, repository layout, local setup, Alembic workflow, testing layers, CI requirements, and definition of done. Read the section matching the task plus §10. |
-| [docs/adr/](docs/adr/) | One record per architectural decision. Read the ADRs governing the current design and only the historical ones needed for a specific decision or migration. |
+Use SQLAlchemy Core, FastAPI, React and PostgreSQL 18 as described in [Development](docs/DEVELOPMENT.md). Use the [database model](docs/architecture/DATABASE_MODEL.md) and [table inventory](docs/reference/tables.md) together for schema work. For user-facing API behavior start with [access control](docs/api/ACCESS_CONTROL.md) and the [operation catalog](docs/api/operations.md).
 
 ## 5. Non-negotiable architectural rules
 
@@ -58,7 +20,7 @@ These hold regardless of which feature is being implemented. Full rationale is i
 6. **State changes need a causal event; events and their typed-state updates commit atomically** in one transaction. Don't update `campaign.*_state` tables without a corresponding event (or explicit administrative source).
 7. **Timelines only inherit parent history up to their branch point.** Effective-state queries must never leak post-branch parent events into a branch.
 8. **Knowledge is per-knower, never a global boolean.** No `is_player_known` / `is_discovered` flags on the object itself — discovery and belief live in the knowledge domain, scoped to who knows it.
-9. **Persistent world entities are archived, not physically deleted.** Physical deletion is reserved for unreferenced drafts/test fixtures/legal removal, per [docs/ENTITY_LIFECYCLE.md §14](docs/ENTITY_LIFECYCLE.md).
+9. **Persistent world entities are archived, not physically deleted.** Physical deletion is reserved for unreferenced drafts/test fixtures/legal removal, per [docs/ENTITY_LIFECYCLE.md §14](docs/ENTITY_LIFECYCLE.md#14-physical-deletion).
 10. **No secrets in code or seed files.** Keep credentials in environment variables or host-mounted secrets, never in repository files.
 11. **Develop and verify against PostgreSQL 18, self-hosted.** Migrations, `tests/database`, and `tests/scenario` run against a local or Compose PostgreSQL 18 server. CI repeats the suites against a disposable PostgreSQL 18 container and is the merge gate.
 
@@ -69,11 +31,11 @@ When any task seems to require breaking one of these, stop and flag it rather th
 Full rules are in the linked docs — don't treat this as complete.
 
 - **Database:** `snake_case`, plural table names, `<entity>_id` primary keys (never a bare `id`), always schema-qualified references, `TEXT` over `VARCHAR(n)`, `TIMESTAMPTZ` for real-world time vs. `core.world_times` for fictional time, lookup tables over `ENUM`, no tables in `public`. Search [docs/DATABASE_CONVENTIONS.md](docs/DATABASE_CONVENTIONS.md) and read the sections governing the affected tables, constraints, migrations, grants, and tests before writing schema.
-- **Python services:** organize around the command/query and domain-service layering in [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md); commands are the only way to mutate state and must be transactional per §6–7 of that doc.
+- **Python services:** organize around the command/query and domain-service layering in [docs/architecture/SYSTEM_ARCHITECTURE.md §5](docs/architecture/SYSTEM_ARCHITECTURE.md#5-layering); business mutations use commands. The API owns bounded audit and reservation writes inside the request transaction (§6–7).
 - **Terraform:** one module per bounded infrastructure concern (mirroring the existing `database` / `secrets` split), one directory per environment under `terraform/environments/`, no hardcoded credentials, state and variable naming should mirror what's already in `terraform/modules/`.
 - **React:** standard component-based structure; the UI is a client like any other — it talks to the application API, not the database.
-- **New documentation** always goes under `docs/` — the only markdown files at the repository root are `README.md` and this file, and the only one under `terraform/` is a short pointer to `docs/INFRASTRUCTURE.md`.
-- **Tests and tooling:** `pytest` layers (`tests/unit` with no database; `tests/database` and `tests/scenario` against an ephemeral database — on your local PostgreSQL 18 server during development, in disposable containerized PostgreSQL 18 in CI, per rule 11), `ruff format`/`ruff check`/`mypy src` before committing. Test production behavior and credible failure modes. Do not recursively fault-inject failures of test-only cleanup machinery without a concrete false-pass, persistent-leak, or CI-instability risk. **Full-suite runs use the shard runner**, `uv run python scripts/run_sharded_tests.py` (four shards at once by default, each on its own throwaway PostgreSQL 18 cluster, about 17 minutes; CI groups the same suite eight ways), not one serial `pytest` process (about 47 minutes); it covers all of `tests/`, so the non-pytest checks (`ruff format --check`, `ruff check`, `mypy src`, `uv lock --check`, `alembic check`, `git diff --check`) complete full backend verification. Keep using plain `uv run pytest <path>` for focused runs. Report a runner failure and its rerun separately. See [docs/DEVELOPMENT.md §6](docs/DEVELOPMENT.md#6-testing) and [§6.3](docs/DEVELOPMENT.md#63-running-all-four-ci-shards-locally).
+- **New documentation** always goes under `docs/` — component READMEs own component-specific entry points. The only Markdown files at the repository root are `README.md` and this file, and the only one under `terraform/` is a short pointer to `docs/operations/optional-aws.md`.
+- **Tests and tooling:** `pytest` layers (`tests/unit` with no database; `tests/database` and `tests/scenario` against an ephemeral database — on your local PostgreSQL 18 server during development, in disposable containerized PostgreSQL 18 in CI, per rule 11), `ruff format`/`ruff check`/`mypy src` before committing. Test production behavior and credible failure modes. Do not recursively fault-inject failures of test-only cleanup machinery without a concrete false-pass, persistent-leak, or CI-instability risk. **Full-suite runs use the shard runner**, `uv run python scripts/run_sharded_tests.py` (four shards at once by default, each on its own throwaway PostgreSQL 18 cluster, about 17 minutes; CI groups the same suite eight ways), not one serial `pytest` process (about 47 minutes); it covers all of `tests/`, so the non-pytest checks (`ruff format --check`, `ruff check`, `mypy src`, `uv lock --check`, `alembic check`, `git diff --check`) complete full backend verification. Keep using plain `uv run pytest <path>` for focused runs. Report a runner failure and its rerun separately. See [docs/DEVELOPMENT.md §6](docs/DEVELOPMENT.md#6-testing) and [§6.3](docs/DEVELOPMENT.md#63-running-the-ci-shards-locally-four-by-default-ci-uses-eight).
 
 ## 7. Before implementing a feature
 

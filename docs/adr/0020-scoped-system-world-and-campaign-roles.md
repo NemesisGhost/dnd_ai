@@ -4,7 +4,7 @@
 - **Date**: 2026-10-06
 - **Supersedes**: [ADR 0018](0018-world-creation-eligibility.md) entirely.
 - **Amends**: [ADR 0014](0014-world-authoring-authority.md) decisions 2, 4 and 5 (world roles, the closed capability mapping, owner-only authority); [ADR 0015](0015-typed-world-content-authoring.md) decision 3 (world-definition writes were authorized by campaign `canon.edit`).
-- **Plan**: [SCOPED_ROLE_IMPLEMENTATION_PLAN.md](../api/ACCESS_CONTROL.md) holds the verified findings (§2), the schema (§6), the API (§7), and the delivery checkpoints (§11).
+- **Plan**: [SCOPED_ROLE_IMPLEMENTATION_PLAN.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/SCOPED_ROLE_IMPLEMENTATION_PLAN.md) holds the verified findings (§2), the schema (§6), the API (§7), and the delivery checkpoints (§11).
 - **Accepted successor design:** [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md) was accepted on 2026-11-06. Its player-character identity/control amendments remain subject to its explicit implementation gates; acceptance alone does not claim migration or feature completion.
 
 ## Context
@@ -47,7 +47,7 @@ Two further gaps follow: a campaign `canon.edit` holder can write the shared can
 ## Consequences
 
 - Platform authority is no longer minted by campaign configuration (finding F4), and a campaign GM can no longer rewrite shared canon or read another campaign's world prep (F1, F2).
-- Users who relied on a campaign `gm` assignment to create worlds lose that until an Admin assigns system GM; the upgrade note in [LOCAL_DEPLOYMENT.md](../LOCAL_DEPLOYMENT.md) says how to find them.
+- Users who relied on a campaign `gm` assignment to create worlds lose that until an Admin assigns system GM; the upgrade note in [deployment](../operations/deployment.md) says how to find them.
 - Campaign GMs without a world role cannot edit definitions on a world they do not own; the owner grants Editor explicitly.
 - Revoking system GM stops world management on the next request without deleting any world-role row; restoring GM restores it.
 - Shared canon secrets (an NPC's secret name, a quest's `gm_notes`) are known to everyone who writes or reviews the world and to every campaign GM running on it. This is inherent to a shared world and is documented rather than engineered around.
@@ -75,10 +75,10 @@ Two further gaps follow: a campaign `canon.edit` holder can write the shared can
 
 ## Amendment: granting the campaign owner role (2026-11-06)
 
-Owner decision D3 (P03-A). Four commands hand out the built-in `campaign_owner` role: assigning it, changing a member to it, adding a member with it and transferring ownership. Each now requires a live built-in owner assignment in the same campaign **in addition to** `access.manage`. "Live" is the single definition `find_live_builtin_owner_assignment` (the built-in template matched by identity, assignment unrevoked and unexpired, membership open and active, account active). Every other role stays assignable with `access.manage` alone, and campaign creation and administrative recovery are unchanged. The built-in owner role is also left out of the assignable-role list for a caller who is not a live owner. Decisions 7 and 9 are unchanged; this narrows only who may confer owner-derived authority, so a custom `access.manage` holder cannot make themselves an owner. See [PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md](../PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md).
+Owner decision D3 (P03-A). Four commands hand out the built-in `campaign_owner` role: assigning it, changing a member to it, adding a member with it and transferring ownership. Each now requires a live built-in owner assignment in the same campaign **in addition to** `access.manage`. "Live" is the single definition `find_live_builtin_owner_assignment` (the built-in template matched by identity, assignment unrevoked and unexpired, membership open and active, account active). Every other role stays assignable with `access.manage` alone, and campaign creation and administrative recovery are unchanged. The built-in owner role is also left out of the assignable-role list for a caller who is not a live owner. Decisions 7 and 9 are unchanged; this narrows only who may confer owner-derived authority, so a custom `access.manage` holder cannot make themselves an owner. See [ownership design](../delivery/ownership-design.md).
 
 ## References
 
-- [SCOPED_ROLE_IMPLEMENTATION_PLAN.md](../api/ACCESS_CONTROL.md)
+- [SCOPED_ROLE_IMPLEMENTATION_PLAN.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/SCOPED_ROLE_IMPLEMENTATION_PLAN.md)
 - [ADR 0003](0003-separate-world-timeline-and-campaign.md), [ADR 0014](0014-world-authoring-authority.md), [ADR 0015](0015-typed-world-content-authoring.md), [ADR 0018](0018-world-creation-eligibility.md)
 - [DATABASE_MODEL.md](../architecture/DATABASE_MODEL.md) §19, [ENTITY_LIFECYCLE.md](../ENTITY_LIFECYCLE.md) §3

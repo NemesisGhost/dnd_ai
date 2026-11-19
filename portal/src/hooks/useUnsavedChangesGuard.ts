@@ -22,7 +22,7 @@ export interface UnsavedChangesGuard {
     release: () => void
 }
 
-// Protects entered-but-unsaved form input (docs/UI_DESIGN.md §5.11).
+// Protects entered-but-unsaved form input (docs/reference/portal-behavior.md §5.11).
 //
 // - In-app navigation that changes the path is held by react-router's blocker
 //   (this needs a data router, which main.tsx provides); the page renders a
@@ -36,7 +36,7 @@ export interface UnsavedChangesGuard {
 //   would dispose its editor, change the data scope or perspective, or strand an unresolved
 //   operation declares it with `disposingQuery`, and that change is held like any departure.
 //   No option means none, so a caller that passes nothing behaves as before. Each caller's
-//   classification: docs/UI_DESIGN.md.
+//   classification: docs/reference/portal-behavior.md.
 //
 // Entered values are deliberately never written to browser storage, so an
 // expired session loses them; that is an accepted limitation, not an oversight.

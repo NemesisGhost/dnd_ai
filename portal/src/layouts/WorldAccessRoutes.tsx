@@ -17,7 +17,7 @@ import "../components/authoring/authoring.css"
 // Route-level guards for the world creation and editing pages, comparable to
 // App.tsx's PlatformAccountsRoute. Without the server-computed authorization the
 // page — its requests and form state — never mounts, and the person is told why
-// (docs/UI_DESIGN.md, "Unavailable and unauthorized destinations"). They decide
+// (docs/reference/portal-behavior.md, "Unavailable and unauthorized destinations"). They decide
 // presentation only: POST /worlds and POST /worlds/{id}/update authorize
 // independently on the server, which remains the enforcement boundary.
 

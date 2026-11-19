@@ -1,6 +1,6 @@
 import { isIdShaped } from "./contexts"
 
-// The note a deliberate Infobox selection puts on the navigation it asks for (docs/UI_DESIGN.md §4.8.4).
+// The note a deliberate Infobox selection puts on the navigation it asks for (docs/reference/portal-behavior.md §4.8.4).
 // It says which level the person chose and which id; nothing else. It is ids only (no labels, no names),
 // it is not authority, and nothing consults it to decide what is allowed: the departure blocker, the
 // task and the context stamp decide that. It only lets the one owner of selection arrivals

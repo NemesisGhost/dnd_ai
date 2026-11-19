@@ -1,25 +1,27 @@
 # How to set up your instance and run your first campaign
 
+Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
+
 **Restarted Phase 14/15 acceptance guide (CP-11).** Written 2026-10-26 for code `9ab549ddbc78cb9b5c1aac9c99f3a967112edc62` (`phase15/completion`, CP-10 approved head), schema `140_clock_advance_details`.
 
-> **Status: every task and variant below starts UNEXECUTED.** This guide is a test specification, not evidence. Nothing here has been passed by a human. Automated and scripted results are recorded separately in the [results ledger](PHASE14_15_ACCEPTANCE_LEDGER.md) and never change a human result. Historical markings in [PHASE14_15_MANUAL_TESTING.md](PHASE14_15_HOWTO_FIRST_CAMPAIGN.md) are preserved and are **not** fresh passes.
+> **Status: every task and variant below starts UNEXECUTED.** This guide is a test specification, not evidence. Nothing here has been passed by a human. Automated and scripted results are recorded separately in the [results ledger](acceptance-ledger.md) and never change a human result. Historical markings in [PHASE14_15_MANUAL_TESTING.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE14_15_MANUAL_TESTING.md) are preserved and are **not** fresh passes.
 
 Companion documents (all under `docs/`):
 
 | Document | Use |
 |---|---|
-| [PHASE14_15_ACCEPTANCE_ENVIRONMENT.md](PHASE14_15_ACCEPTANCE_ENVIRONMENT.md) | Environment identity, start/stop, exact first manual steps, evidence handoff |
-| [PHASE14_15_ACCEPTANCE_LEDGER.md](PHASE14_15_ACCEPTANCE_LEDGER.md) | One row per case/variant: result states, evidence fields, defects |
-| [PHASE14_15_COVERAGE_MATRIX.md](PHASE14_15_COVERAGE_MATRIX.md) | Every original case/variant → task, evidence method, ledger row; gaps |
-| [PHASE14_15_COMPANION_SCENARIOS.md](PHASE14_15_COMPANION_SCENARIOS.md) | Negative, recovery, scoped-role (SR), clean-install (TC-56) and accessibility (TC-55) scenarios |
-| [PHASE14_15_DEFECT_REGISTER.md](PHASE14_15_DEFECT_REGISTER.md) | Known and deferred defects with rubric scores; where to record new ones |
-| [PHASE14_15_ACCOUNT_MANIFEST.md](PHASE14_15_ACCEPTANCE_ENVIRONMENT.md) | What was copied from the dev database, the rename map, verification |
+| [acceptance environment](acceptance-environment.md) | Environment identity, start/stop, exact first manual steps, evidence handoff |
+| [acceptance ledger](acceptance-ledger.md) | One row per case/variant: result states, evidence fields, defects |
+| [coverage](coverage.md) | Every original case/variant → task, evidence method, ledger row; gaps |
+| [companion scenarios](companion-scenarios.md) | Negative, recovery, scoped-role (SR), clean-install (TC-56) and accessibility (TC-55) scenarios |
+| [defects](defects.md) | Known and deferred defects with rubric scores; where to record new ones |
+| [PHASE14_15_ACCOUNT_MANIFEST.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE14_15_ACCOUNT_MANIFEST.md) | What was copied from the dev database, the rename map, verification |
 
 ## 1. What you are doing
 
 You start with an instance that has **accounts and nothing else**: no worlds, timelines, campaigns, characters, sessions or knowledge. You will sign in, inspect who may do what, then build one coherent setting — **The Saltmarch**, a drowned coastal region — and run its first campaign, **The Drowned Archive**, through to the end of its first session and the preparation of the second. Every record you create is reused later (the NPC Archivist Sella is a quest target, a party-knowledge source, an encounter opponent and a portrayal subject). By the end you will have exercised creation, editing, runtime use, correction, archive and restore for every Phase 14/15 domain, under every relevant permission boundary, from the browser.
 
-The journey is chronological, not TC-numbered. Original identifiers (TC-01–58, SR-M1–16) are kept as **Refs** on each task so the [coverage matrix](PHASE14_15_COVERAGE_MATRIX.md) can trace every case.
+The journey is chronological, not TC-numbered. Original identifiers (TC-01–58, SR-M1–16) are kept as **Refs** on each task so the [coverage matrix](coverage.md) can trace every case.
 
 ## 2. Ground rules
 
@@ -60,7 +62,7 @@ Open **five separate browser profiles** (use `stack\open_personas.ps1`, which cr
 | **PLAYER-B** | `player_b` | Player B | Player | Plays Tobin Reed |
 | **OBSERVER** | `observer` | Observer | Player | Campaign Observer; world Viewer in companion TC-53 |
 
-Also present and **never signed into** in the main journey: `disabled` (Disabled User, inactive — used only to confirm login refusal) and six other inactive accounts preserved from the old data (see the [account manifest](PHASE14_15_ACCEPTANCE_ENVIRONMENT.md)).
+Also present and **never signed into** in the main journey: `disabled` (Disabled User, inactive — used only to confirm login refusal) and six other inactive accounts preserved from the old data (see the [account manifest](acceptance-environment.md)).
 
 **The login name does not grant authority.** `admin` and `gm` are only names. Authority comes from four independent layers, and each task states which one it is testing:
 
@@ -287,7 +289,7 @@ Each task lists: **Goal**; **Account** (window and the layer of authority being 
 - **Start:** `/campaigns/new`.
 - **Steps:** World The Saltmarch → timeline Main Timeline → name `The Drowned Archive`, description `First campaign of The Saltmarch`, offered D&D 5e ruleset version. Submit **once**. Record campaign id **C**. Reload.
 - **Expect:** The campaign appears in Campaigns; Home opens. You (admin) are campaign owner. Opening Setup/Home never created a second campaign.
-- **Compare:** Open `/campaigns/new` again and step through to the timeline choice **without submitting**. Record whether Main Timeline is still offered and, if it is not, the stated reason (a used timeline cannot host a second campaign). Cancel.
+- **Compare:** Open `/campaigns/new` again and step through to the timeline choice **without submitting**. Record whether Main Timeline is still offered and, if it is not, the stated reason (an already-used timeline also requires `timeline.manage` under ADR 0020; the Owner may still be eligible). Cancel.
 - **Creates → later:** C. Every `/app/<C>/…` route.
 - **Refs:** TC-11.3 · TC-04 · SR-M6 (read side). **Ledger:** L-E2.
 
@@ -932,4 +934,4 @@ Session 1 is complete. Everything below reads what the run produced. Each task s
 
 ## End of main journey
 
-At this point the instance holds: one world with two timelines and a branch, two campaigns, a six-person cast, a completed first session and a prepared second. Continue with the [companion scenarios](PHASE14_15_COMPANION_SCENARIOS.md) (scoped-role matrix SR-M1–M16, recovery RC-01–10, navigation NV, privacy PV, TC-53, TC-55 accessibility pass, and **TC-56 on the separate clean installation**). Record the final owner decision only in the ledger header.
+At this point the instance holds: one world with two timelines and a branch, two campaigns, a six-person cast, a completed first session and a prepared second. Continue with the [companion scenarios](companion-scenarios.md) (scoped-role matrix SR-M1–M16, recovery RC-01–10, navigation NV, privacy PV, TC-53, TC-55 accessibility pass, and **TC-56 on the separate clean installation**). Record the final owner decision only in the ledger header.

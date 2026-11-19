@@ -1,6 +1,6 @@
 """The portable FastAPI application entry point.
 
-Portable by design (ADR 0012, docs/LOCAL_DEPLOYMENT.md): FastAPI runs under
+Portable by design (ADR 0012, docs/operations/deployment.md): FastAPI runs under
 Uvicorn, in a container or otherwise, and talks to PostgreSQL over the
 network. This module is intentionally deployment-neutral and does not couple
 application behavior to any specific hosting platform.
@@ -25,7 +25,7 @@ this module only mounts them.
 CORS (`CORSMiddleware` below, `dnd_ai.config.Settings.foundry_allowed_
 origins`) exists specifically for the FoundryVTT module: it runs as
 browser JavaScript on its own origin, separate from this API's origin in
-the documented deployment topology (`docs/LOCAL_DEPLOYMENT.md`), so a real
+the documented deployment topology (`docs/operations/deployment.md`), so a real
 browser sends an `OPTIONS` preflight before every authenticated request.
 No other client of this API is a browser page reading another origin's
 response — the React UI is expected to share this API's origin, and the
@@ -259,7 +259,7 @@ def create_app() -> FastAPI:
         a container orchestrator restarts the process over if it stops
         answering; it must never itself depend on PostgreSQL being up, or a
         database outage would also make the process look dead rather than
-        just not-yet-ready (docs/LOCAL_DEPLOYMENT.md "Operations")."""
+        just not-yet-ready (docs/operations/deployment.md "Operations")."""
         return {"status": "ok"}
 
     @app.get("/readyz")
@@ -271,7 +271,7 @@ def create_app() -> FastAPI:
         same engine/connection wiring every other endpoint uses — not a
         parallel, unrepresentative connection. Suitable for a Docker Compose
         `healthcheck:` hitting this over the private network
-        (docs/LOCAL_DEPLOYMENT.md "Compose responsibilities and network
+        (docs/operations/deployment.md "Compose responsibilities and network
         policy") — never needs its own PostgreSQL or Uvicorn port exposed.
         Failure returns 503 and a fixed, non-secret body. The underlying
         exception is never logged as `str(exc)` or with its traceback

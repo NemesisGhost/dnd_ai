@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Opens or closes a short-lived security-group ingress rule on the dev database
-# for the caller's current public IP, per docs/PLAN.md §30.9. AWS dev RDS is
+# for the caller's current public IP, per docs/DEVELOPMENT.md §3.5. AWS dev RDS is
 # now an optional, no-longer-CI-verified path — self-hosted Docker Compose
 # (compose.yaml) is the officially supported target
 # (docs/adr/0012-self-hosted-docker-deployment-and-ci-verification.md). This

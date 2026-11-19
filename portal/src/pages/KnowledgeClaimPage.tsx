@@ -487,7 +487,7 @@ export function KnowledgeClaimPage({
 
 // One guard for everything an editor has typed on the page and not yet saved (the claim, a source,
 // a knowledge entry): leaving the page asks first, and so does closing the tab
-// (docs/UI_DESIGN.md §5.11). Only mounted for editors; a reader has nothing to lose.
+// (docs/reference/portal-behavior.md §5.11). Only mounted for editors; a reader has nothing to lose.
 function UnsavedInputGuard({ unsaved }: { unsaved: string[] }) {
     // A deliberate change of character or party in the address would re-read the claim under another
     // perspective with the editor mounted: it asks like a departure. The page's own cleanup of a party

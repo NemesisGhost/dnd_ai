@@ -228,7 +228,7 @@ plain HTTP, which is why this check exists independently of both.
 **CORS: the server only accepts browser requests from an explicitly
 configured origin.** FoundryVTT and this platform's API are genuinely
 separate browser origins in the documented deployment topology
-(`docs/LOCAL_DEPLOYMENT.md` — e.g. `https://foundry.example.com` calling
+(`docs/operations/deployment.md` — e.g. `https://foundry.example.com` calling
 `https://world.example.com/api`), so this module's `fetch()` calls trigger
 a real CORS preflight (`OPTIONS`) before every authenticated request.
 `src/dnd_ai/api/app.py` installs `CORSMiddleware` against the exact
@@ -246,11 +246,10 @@ the credential itself is wrong).
 
 This module's request-construction, pairing, identifier-binding, retry,
 reconnect, and loop-suppression logic is covered by `test/` (`node --test`),
-run against the real backend contract via `tests/scenario/test_foundry_
-adapter_e2e.py` — but neither substitutes for actually installing this
+run against the real backend contract via [the backend scenario](../tests/scenario/test_foundry_adapter_e2e.py) — but neither substitutes for actually installing this
 module in a real FoundryVTT client. Whoever has a licensed FoundryVTT
-instance available should run this procedure once and record the result in
-`docs/PHASE11_VERIFICATION.md`:
+instance available should run this procedure once and record the run head, Foundry/system versions and observed outcomes in
+[the delivery evidence](../docs/delivery/history.md), then update the live Foundry obligation in the [work register](../docs/delivery/work-register.md#current-package-disposition):
 
 1. Package and install the module (see "Install" above) in a fresh
    FoundryVTT v13 world running the dnd5e system.

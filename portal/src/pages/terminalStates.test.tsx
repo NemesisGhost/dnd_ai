@@ -8,7 +8,7 @@ import { CreateTimelineBranchPage } from "./CreateTimelineBranchPage"
 import { CreateTimelinePage } from "./CreateTimelinePage"
 import { WorldSharingPage } from "./WorldSharingPage"
 
-// The presentation policy for unavailable and unauthorized destinations (docs/UI_DESIGN.md,
+// The presentation policy for unavailable and unauthorized destinations (docs/reference/portal-behavior.md,
 // "Unavailable and unauthorized destinations"), checked on the world-level pages. The campaign
 // pages are in App.unavailableStates.test.tsx.
 

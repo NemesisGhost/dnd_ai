@@ -1,6 +1,6 @@
 import type { SessionBootstrap } from "../types/bootstrap"
 
-// The authority a breadcrumb label was read under (docs/UI_DESIGN.md §4.8, plan §5.3).
+// The authority a breadcrumb label was read under (docs/reference/portal-behavior.md §4.8, plan §5.3).
 //
 // A label is a cached result of an authorized read, so it is only worth showing while the client still
 // believes the same things about who the person is and what they may see. The fingerprint is a string

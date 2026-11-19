@@ -1,5 +1,5 @@
 // The control a navigation was requested with, handed from the request that was accepted to the arrival
-// it produced (docs/UI_DESIGN.md §4.8.4). The sidebar menu's request is a `NavigationAttempt` (P02-4:
+// it produced (docs/reference/portal-behavior.md §4.8.4). The sidebar menu's request is a `NavigationAttempt` (P02-4:
 // navigation/navigationAttempt.ts) that already decides, from the router's own notifications, which
 // committed location is *its* arrival: the full destination, through Stay, supersession, redirects and
 // failures. When it accepts, it binds its activated control to that location's key. An arrival reads the

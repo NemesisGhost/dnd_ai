@@ -1,4 +1,4 @@
-"""User portal preference commands (docs/UI_DESIGN.md §4.7; table
+"""User portal preference commands (docs/reference/portal-behavior.md §4.7; table
 `security.user_portal_preferences`, revision 109).
 
 Two narrowly scoped, idempotent set operations on the caller's own row:

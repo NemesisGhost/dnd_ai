@@ -1,5 +1,7 @@
 # Phase 19 foundation implementation plan (R19-P0 to R19-P4)
 
+Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
+
 **Status:** Proposed. This is the R19-P0 planning deliverable, first drafted at `10a1a4e`. Independent reviews covered findings R19-01 through R19-16 (see §13). This revision records owner-decision reconciliations through 2026-11-04. The plan remains Proposed and unimplemented; ADR acceptance is recorded separately below. **Owner decisions recorded (all 2026-11-02, all Owner-approved):**
 
 - **OD-1:** campaigns sharing a world or timeline maintain independent mechanical character state (ADR 0021 §3).
@@ -16,11 +18,11 @@ As instructed, OD-6 is reconciled to permit campaign-scoped builds. **No owner q
 
 **Branch:** `planning/r19-p0-architecture`, from `main` at `defe3f7`.
 
-**Governing documents:** [PLANv2.md](PLANv2.md) §6.1, §8 (15H), §12 (19.0–19.8) and three Accepted ADRs:
+**Governing documents:** [roadmap](roadmap.md) §6.1, §8 (15H), §12 (19.0–19.8) and three Accepted ADRs:
 
-- [ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md): actor identity, control, authoring responsibility. Phase 15 owns it.
-- [ADR 0022](adr/0022-creature-templates-combatants-and-promotion.md): creature templates, combatants, promotion.
-- [ADR 0023](adr/0023-rules-engine-calculation-validation-and-source-authorization.md): rules engine, validation, sources.
+- [ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md): actor identity, control, authoring responsibility. Phase 15 owns it.
+- [ADR 0022](../adr/0022-creature-templates-combatants-and-promotion.md): creature templates, combatants, promotion.
+- [ADR 0023](../adr/0023-rules-engine-calculation-validation-and-source-authorization.md): rules engine, validation, sources.
 
 **Evidence.** Claims about the repository were verified in code at `10a1a4e`; application code is unchanged since `defe3f7`. Several Phase 14/15 documents served as **supplementary evidence only**: the app-interaction investigation (§D6, P03-A/B/C), the DEF-007 effective-time plan, the P02 navigation plan and audit, the Batch 1 repair plan, and the 2026-11-02 handoff. They are **untracked on this branch and not committed**. Where this plan relies on one of them, the claim was checked against source. For example, B1-1 `67f80de` and DEF7 `bcc0e16`/`cb26462`/`4ce9187` are ancestors of this branch, and `queries/party_membership_period.py` implements DEF-007's no-clock rule.
 
@@ -1063,7 +1065,7 @@ P2a and P3a keep their independent begin and merge eligibility (§3). Their late
 | OD-12 | Players register entitled sources; contributor-private; explicit GM grant; citations and retrieval enforce permissions | ADR 0023 §9; T17 | Phase 18 intake design (policy) | OD-12a (the grantor); ED-8 citation link |
 | OD-14 | Explicit ongoing and dated kinds; ongoing works without a clock; dated undetermined without a clock; no inference | ADR 0021 §2.4; §11 | P03-B contract freeze (OD-14 part) | P03-B tests |
 | OD-17 | Member, group and campaign-wide audiences; current versus future members; only deliberately published versions | ADR 0021 §6; T82 | P03-A schema | P03-A tests |
-| OD-18 | Campaign-scoped player profile, distinct from canon and GM portrayal; GMs and controllers read; selected fields published through workflows | ADR 0021 §2.5, §4.7, §7; T82 | P03-A field list; Phase 16 16A scope | P03-A and Phase 16 tests. The P03-A field list and A5 policy were decided by owner-approved D13–D18 on 2026-11-11 ([A5 design](PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md) §4): the eleven 16A fields, with `profile_notes` and `boundaries` excluded from structured publication; the GM read on effective `canon.edit`; an independent controller path reserved for P03-B |
+| OD-18 | Campaign-scoped player profile, distinct from canon and GM portrayal; GMs and controllers read; selected fields published through workflows | ADR 0021 §2.5, §4.7, §7; T82 | P03-A field list; Phase 16 16A scope | P03-A and Phase 16 tests. The P03-A field list and A5 policy were decided by owner-approved D13–D18 on 2026-11-11 ([A5 design](player-profile-design.md) §4): the eleven 16A fields, with `profile_notes` and `boundaries` excluded from structured publication; the GM read on effective `canon.edit`; an independent controller path reserved for P03-B |
 | OD-19 | Existing access preserved until per-character reviewed disposition, with reasons and affected principals | ADR 0021 §4.1, §4.5, §8; T26 | P03-C cutover (OD-19 part) | P03-C manifest review per character |
 | OD-22 | No world-shared whereabouts record now; campaign-specific under OD-20; a future feature needs its own proposal | ADR 0021 §3.1.1 | None (it was non-blocking) | None |
 

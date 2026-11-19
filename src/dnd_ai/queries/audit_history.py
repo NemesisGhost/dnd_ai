@@ -1,6 +1,6 @@
 """Campaign-scoped audit-history read query (Phase 13E-B audit-history
 workstream — the independent foundation for a later Access-page UI; see
-`docs/AUDIT_HISTORY_API.md`).
+`docs/reference/audit-history.md`).
 
 `audit.change_log` (docs/architecture/DATABASE_MODEL.md §19, "Audit";
 `src/dnd_ai/persistence/tables/audit.py`, revision 007) is an append-only,
@@ -21,7 +21,7 @@ table, scoped by world" history. It resolves an **exact** `campaign_id`
 for a curated, explicit allowlist of `command_name` values — every command
 in `dnd_ai.api.memberships`/`.access_grants`/`.campaign_invitations`/
 `.campaigns` that writes an `audit.change_log` row for a campaign-access
-concern (`docs/PHASE13E_ACCESS_CONTRACT.md` §2/§3) — by joining each row's
+concern (`docs/api/ACCESS_CONTROL.md` §2/§3) — by joining each row's
 `record_id` back to the *actual* table it names (`schema_name`/
 `table_name`, also recorded on every row) and reading that table's own
 `campaign_id` (directly, or one hop through `security.campaign_memberships
@@ -41,7 +41,7 @@ relationship, resource grant, invitation, campaign creation, access group,
 and access group membership. A wider "every audited table" history is a
 different, materially harder feature (entity/state/narrative audit trails
 are not campaign-scoped at all in this schema) and is explicitly out of
-scope here; see this module's and `docs/AUDIT_HISTORY_API.md`'s own "Known
+scope here; see this module's and `docs/reference/audit-history.md`'s own "Known
 limitations" sections.
 
 **Checkpoint 14 addition.** `invitation_onboarding.complete` (`dnd_ai.api.

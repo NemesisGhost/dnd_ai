@@ -9,7 +9,7 @@ vi.mock("./api/userPreferences", () => ({
   recordLastVisitedCampaign: vi.fn(() => Promise.resolve()),
 }))
 
-// Recovery of the reads that back one page (docs/UI_DESIGN.md §5.11): every required read that fails
+// Recovery of the reads that back one page (docs/reference/portal-behavior.md §5.11): every required read that fails
 // has a way back, the closed answers keep their order (404, then 403, then failure), a retry only
 // reads, and a retry that replaces the control holding focus hands focus on.
 

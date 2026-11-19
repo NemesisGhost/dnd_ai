@@ -1,7 +1,7 @@
 # ruff: noqa: F811 - the imported fixtures are used by parameter name
 """R01 E1: the proposal-review route in one request transaction, over real HTTP.
 
-Design `docs/R01_E1_REVIEW_ROUTE_DESIGN_2026-11-17.md` sections 3 to 8 (T-2 to T-9). The route is
+Historical local design `docs/R01_E1_REVIEW_ROUTE_DESIGN_2026-11-17.md` sections 3 to 8 (T-2 to T-9). The route is
 `POST /campaigns/{campaign_id}/ai/proposed-changes/{ai_proposed_change_id}/review`: **unkeyed, ordinary post-write**.
 It runs the review and everything it applies in the request-owned transaction, locks the reviewer's operation scope
 (world, role rows, membership, account, campaign `FOR KEY SHARE`) before the proposal row and any downstream lock, and its

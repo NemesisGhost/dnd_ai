@@ -1,10 +1,12 @@
 # P03-A A1 design: campaign-owner authority (D3)
 
+Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
+
 - **Status:** D3 **approved by the owner on 2026-11-06** (policy in §5) and **implemented** as the first A1 change (the ownership gate only; the reveal-delegation migration and API are the next A1 change). A review found two deadlocks in the first implementation's lock order; the corrected order is in §3. The independent re-review of the corrected commit (`fc20e8d`) passed, with 107 focused tests passing (result as reported by the reviewer; the review text is not in the repository). One verification item stays open: an intermittent race-test timeout seen in earlier long runs (request alive, no lock waiter within 15 s) is **unresolved**. Its cause is not proven and the fix does not claim to address it. Full backend suite on the corrected commit's content: 6929 passed, 0 failed, no race-test timeout (one run, 2026-11-06; run with `DND_AI_LOCAL_SESSION_ALLOWED_ORIGINS` pinned to its documented default so the repository `.env` override does not fail the config default test). One clean run does not resolve the flake. CI is pending until push.
 - **Baseline:** `phase15/completion` at `fca3ac7df7e7a88822cc90acbed052ca07a1026c` (A0 committed).
 - **Audience:** the owner deciding D3; the A1 implementer and reviewers.
-- **Parent plan:** [PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md](PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md), decision D3 and slice A1.
-- **Governing documents:** [ADR 0020](adr/0020-scoped-system-world-and-campaign-roles.md) (decisions 7 and 9), [ADR 0021](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §2.7–§2.8 and §6, the owner-approved `character.reveal` policy (2026-11-06, recorded in [PHASE14_15_REMAINING_WORK_AND_HANDOFF_2026-11-02.md](PHASE14_15_REMAINING_WORK_AND_HANDOFF_2026-11-02.md)), [SCOPED_ROLE_IMPLEMENTATION_PLAN.md](SCOPED_ROLE_IMPLEMENTATION_PLAN.md) §4.2, §4.5 and §7, [PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) §3a.
+- **Parent plan:** [shared characters](shared-characters.md), decision D3 and slice A1.
+- **Governing documents:** [ADR 0020](../adr/0020-scoped-system-world-and-campaign-roles.md) (decisions 7 and 9), [ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §2.7–§2.8 and §6, the owner-approved `character.reveal` policy (2026-11-06, recorded in [PHASE14_15_REMAINING_WORK_AND_HANDOFF_2026-11-02.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE14_15_REMAINING_WORK_AND_HANDOFF_2026-11-02.md)), [SCOPED_ROLE_IMPLEMENTATION_PLAN.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/SCOPED_ROLE_IMPLEMENTATION_PLAN.md#42-who-may-change-what) §4.2, §4.5 and §7, [PHASE13E_ACCESS_CONTRACT.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE13E_ACCESS_CONTRACT.md#3-get-campaignscampaign_idaccess-overview-new-13e-a) §3a.
 
 ## Entry verdict
 
@@ -14,7 +16,7 @@ D3 is answered (§5). Nothing else blocks A1. D1, D2 and D5 gate only A2–A3. T
 
 In A1, direct reveal authority comes from holding a live built-in `campaign_owner` assignment. Anyone who can give themselves that role therefore gets reveal.
 
-Almost every route that hands out `campaign_owner` checks only `access.manage`. That check reads role capabilities only ([access.py:1029-1046](../src/dnd_ai/domain/access.py#L1029-L1046)): an untargeted `has_capability` call never consults resource grants. Resource grants and relationships can never supply `access.manage` anyway, because the grant catalog ([access.py:226](../src/dnd_ai/domain/access.py#L226)) and the relationship matrix both leave it out.
+Almost every route that hands out `campaign_owner` checks only `access.manage`. That check reads role capabilities only ([access.py:1029-1046](../../src/dnd_ai/domain/access.py#L1029-L1046)): an untargeted `has_capability` call never consults resource grants. Resource grants and relationships can never supply `access.manage` anyway, because the grant catalog ([access.py:226](../../src/dnd_ai/domain/access.py#L226)) and the relationship matrix both leave it out.
 
 So a non-owner can hold `access.manage` only through a custom role capability: a campaign-scoped role, or an extra `security.role_capabilities` row on a built-in role. No app path writes either today; migration 085's docstring confirms there is no endpoint for creating roles or capabilities. But:
 
@@ -26,13 +28,13 @@ So a non-owner can hold `access.manage` only through a custom role capability: a
 
 | Path | Check that actually applies | Can a custom `access.manage` holder get reveal today? | If custom grants were enabled |
 |---|---|---|---|
-| `create_campaign` ([campaigns.py:613](../src/dnd_ai/commands/campaigns.py#L613)) | System `campaign.host` + world `campaign.create`; the owner is the creator, in a brand-new campaign | No | Safe: ownership of a new campaign gives nothing in any other campaign |
-| `assign_membership_role` ([api :260](../src/dnd_ai/api/memberships.py#L260) → [cmd :337](../src/dnd_ai/commands/memberships.py#L337)) | `access.manage`; the role must be built-in or belong to this campaign; the target must be active. Assigning to yourself is allowed | No | **Bypass:** they can assign `campaign_owner` to themselves |
-| `change_membership_role` ([api :422](../src/dnd_ai/api/memberships.py#L422) → [cmd :591](../src/dnd_ai/commands/memberships.py#L591)) | Same checks | No | **Bypass:** they can change their own custom role row into `campaign_owner` |
-| `add_campaign_member` ([api :155](../src/dnd_ai/api/memberships.py#L155) → [cmd :779](../src/dnd_ai/commands/memberships.py#L779)) | `access.manage`; campaign active; account active with a local login | No | **Bypass by proxy:** they can add a second account they control as owner |
-| `transfer_campaign_ownership` ([api :629](../src/dnd_ai/api/memberships.py#L629) → [cmd :1206](../src/dnd_ai/commands/memberships.py#L1206)) | `access.manage` only. The target can be the caller. "Relinquish" does nothing for a non-owner | No | **Bypass:** they can transfer ownership to themselves |
-| `recover_campaign_access_manager` ([recovery.py:129](../src/dnd_ai/commands/recovery.py#L129)) | Operator script, active admin, a required reason, and no active non-expiring `access.manage` holder in the campaign ([recovery.py:148](../src/dnd_ai/commands/recovery.py#L148)) | No (admin only) | Not a bypass, but a recovery gap (§3, "Left out on purpose") |
-| Invitation acceptance ([campaign_invitations.py:247](../src/dnd_ai/commands/campaign_invitations.py#L247)) | Invitation from an `access.manage` holder; acceptance reopens the same membership and gives no role | No | Only by data: an ended membership that still has a live owner role row would get it back. `end_campaign_membership` revokes every role row, so the app never creates one. The preflight in §6 checks |
+| `create_campaign` ([campaigns.py:613](../../src/dnd_ai/commands/campaigns.py#L613)) | System `campaign.host` + world `campaign.create`; the owner is the creator, in a brand-new campaign | No | Safe: ownership of a new campaign gives nothing in any other campaign |
+| `assign_membership_role` ([api :260](../../src/dnd_ai/api/memberships.py#L260) → [cmd :337](../../src/dnd_ai/commands/memberships.py#L337)) | `access.manage`; the role must be built-in or belong to this campaign; the target must be active. Assigning to yourself is allowed | No | **Bypass:** they can assign `campaign_owner` to themselves |
+| `change_membership_role` ([api :422](../../src/dnd_ai/api/memberships.py#L422) → [cmd :591](../../src/dnd_ai/commands/memberships.py#L591)) | Same checks | No | **Bypass:** they can change their own custom role row into `campaign_owner` |
+| `add_campaign_member` ([api :155](../../src/dnd_ai/api/memberships.py#L155) → [cmd :779](../../src/dnd_ai/commands/memberships.py#L779)) | `access.manage`; campaign active; account active with a local login | No | **Bypass by proxy:** they can add a second account they control as owner |
+| `transfer_campaign_ownership` ([api :629](../../src/dnd_ai/api/memberships.py#L629) → [cmd :1206](../../src/dnd_ai/commands/memberships.py#L1206)) | `access.manage` only. The target can be the caller. "Relinquish" does nothing for a non-owner | No | **Bypass:** they can transfer ownership to themselves |
+| `recover_campaign_access_manager` ([recovery.py:129](../../src/dnd_ai/commands/recovery.py#L129)) | Operator script, active admin, a required reason, and no active non-expiring `access.manage` holder in the campaign ([recovery.py:148](../../src/dnd_ai/commands/recovery.py#L148)) | No (admin only) | Not a bypass, but a recovery gap (§3, "Left out on purpose") |
+| Invitation acceptance ([campaign_invitations.py:247](../../src/dnd_ai/commands/campaign_invitations.py#L247)) | Invitation from an `access.manage` holder; acceptance reopens the same membership and gives no role | No | Only by data: an ended membership that still has a live owner role row would get it back. `end_campaign_membership` revokes every role row, so the app never creates one. The preflight in §6 checks |
 | Role expiry lapsing, role `is_active`, membership suspension | No app path writes these | — | Only ever removes authority |
 
 **Bottom line:** there is no bypass through the app today. Four routes become bypasses the moment any non-owner role carries `access.manage`, and today that only takes an operator writing to the database directly.
@@ -134,22 +136,22 @@ So a non-owner can hold `access.manage` only through a custom role capability: a
 
    Remaining, not changed here: `change_membership_role` locks its role row, membership and current role in one statement, whose internal order follows the query plan rather than a stated rule; it has always been so, and it follows the same role-row-then-membership order in practice.
 
-3. **Server-side role list.** `list_assignable_campaign_roles` ([access_overview.py:436](../src/dnd_ai/queries/access_overview.py#L436)) takes the caller's membership and leaves out the built-in owner role unless the caller is a live owner. The portal is never offered an action that would be refused.
+3. **Server-side role list.** `list_assignable_campaign_roles` ([access_overview.py:436](../../src/dnd_ai/queries/access_overview.py#L436)) takes the caller's membership and leaves out the built-in owner role unless the caller is a live owner. The portal is never offered an action that would be refused.
 
 4. **No database trigger.** Campaign creation, recovery and test factories all insert owner rows with `granted_by_membership_id = NULL`, so a trigger couldn't tell legitimate inserts apart. Authorization stays at the application layer, where every other campaign-role check already lives.
 
 **Left out on purpose.** Recovery, and every path that revokes or ends an owner, stays unchanged. A custom manager revoking an owner doesn't give anyone reveal. Two issues only matter once custom `access.manage` gets an app path, so they are recorded as conditions on that future work:
 
-- the recovery precondition and the stranded-campaign reports ([stranded.py:45](../src/dnd_ai/queries/stranded.py#L45)) look for any `access.manage` holder. With a custom manager present, an admin couldn't restore an owner, so the campaign would permanently lose reveal authority;
+- the recovery precondition and the stranded-campaign reports ([stranded.py:45](../../src/dnd_ai/queries/stranded.py#L45)) look for any `access.manage` holder. With a custom manager present, an admin couldn't restore an owner, so the campaign would permanently lose reveal authority;
 - the database retention rule (`security.campaign_has_access_manager`, migration 080) only guarantees that someone holds non-expiring `access.manage`. It does not guarantee a built-in owner exists.
 
 ## 4. What changes against ADR 0020
 
 ADR 0020 doesn't mention campaign transfer itself. The behavior comes from documents it points to:
 
-- [SCOPED_ROLE_IMPLEMENTATION_PLAN.md](SCOPED_ROLE_IMPLEMENTATION_PLAN.md) §4.2: "Invite to a campaign; assign campaign roles: campaign `access.manage` (unchanged)" and "Transfer campaign ownership: campaign `access.manage`";
+- [SCOPED_ROLE_IMPLEMENTATION_PLAN.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/SCOPED_ROLE_IMPLEMENTATION_PLAN.md#42-who-may-change-what) §4.2: "Invite to a campaign; assign campaign roles: campaign `access.manage` (unchanged)" and "Transfer campaign ownership: campaign `access.manage`";
 - the same plan's §7 entry: `POST /campaigns/{id}/ownership-transfer` (`access.manage`);
-- [PHASE13E_ACCESS_CONTRACT.md](PHASE13E_ACCESS_CONTRACT.md) §3a and the `assignable_roles` read contract, which say every role an `access.manage` holder may assign is equally assignable because the role model is flat.
+- [PHASE13E_ACCESS_CONTRACT.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PHASE13E_ACCESS_CONTRACT.md#3-get-campaignscampaign_idaccess-overview-new-13e-a) §3a and the `assignable_roles` read contract, which say every role an `access.manage` holder may assign is equally assignable because the role model is flat.
 
 All three change for exactly one role. Nobody using an app-created campaign would notice, because today every `access.manage` holder is a built-in owner. ADR 0020 decision 7 (authorship is provenance) and decision 9 (explicit, audited recovery) are unchanged. A1 updates the three documents in the same change and adds an amendment note to ADR 0020.
 
@@ -173,7 +175,7 @@ The reveal-delegation rules in the last four sentences are implemented by the ne
 
 **Legitimate paths still work.**
 
-- [test_stranding_and_recovery.py:206](../tests/database/test_stranding_and_recovery.py#L206) and `:267` pass unchanged.
+- [test_stranding_and_recovery.py:206](../../tests/database/test_stranding_and_recovery.py#L206) and `:267` pass unchanged.
 - An owner can make a co-owner, and can add a new member as owner.
 - A campaign's creator gets `owner` from the reveal resolver.
 - Recovery works as before, and the recovered owner gets `owner` from the reveal resolver.
@@ -202,7 +204,7 @@ If either count is not zero, the deployment would see the gate change behavior, 
 
 ## 7. Follow-ups recorded outside D3
 
-Each is recorded in the [defect register](PHASE14_15_DEFECT_REGISTER.md) §9 with a proposed grading. F1 and F2 are checked by `scripts/preflight_campaign_owner_gate.py`. F1 is fixed; F2 and F3 are open.
+Each is recorded in the [defect register](defects.md) §9 with a proposed grading. F1 and F2 are checked by `scripts/preflight_campaign_owner_gate.py`. F1 is fixed; F2 and F3 are open.
 
 - **F1 (DEF-011), expired-target transfer.** Fixed in a later checkpoint, then corrected after review: see the defect register and §3 ("The recipient check"). A transfer replaces a recipient's already-expired, unrevoked owner row with a live one. It counts a recipient as an existing owner only by the shared live-owner definition at a fresh database instant. It refuses atomically when the recipient's row expires during a lock wait, or when the recipient is not a live owner at completion. Under the approved policy (option b), a relinquishing transfer also refuses a recipient whose live owner assignment has a finite `expires_at`.
 - **F3 (DEF-013), caller expiry during a lock wait.** Fixed in a later checkpoint: see the defect register and §3 ("Caller's expiry during a lock wait").

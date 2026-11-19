@@ -1,5 +1,7 @@
 # Phase 14/15 acceptance — environment and evidence handoff (CP-11)
 
+Use the [work register](work-register.md) for current disposition. Dated instructions, environment paths, execution heads, findings and results below belong to their recorded baseline.
+
 Prepared 2026-10-26. **This document prepares the owner's manual run; it does not record any acceptance.** No secret (password, hash, token, cookie, connection string, authenticated header) appears here or in the evidence folder.
 
 Evidence folder (outside every repository): `C:\Users\nemes\dnd_ai_evidence_20261026\cp11\`
@@ -251,7 +253,7 @@ Scripted browser evidence covered at least one variant of each of the 26 DEF-001
 ### 11.4 For the owner
 
 - **Portal:** `http://127.0.0.1:5174/` (use `127.0.0.1`, not `localhost`: the allowed origin and the session cookie are host-specific).
-- **Guide:** [docs/PHASE14_15_HOWTO_FIRST_CAMPAIGN.md](PHASE14_15_HOWTO_FIRST_CAMPAIGN.md). **Ledger:** [docs/PHASE14_15_ACCEPTANCE_LEDGER.md](PHASE14_15_ACCEPTANCE_LEDGER.md) (fill the Run header first: tester, dates, Chrome and screen-reader versions, viewports).
+- **Guide:** [docs/first campaign acceptance](first-campaign-acceptance.md). **Ledger:** [docs/acceptance ledger](acceptance-ledger.md) (fill the Run header first: tester, dates, Chrome and screen-reader versions, viewports).
 - **First account and first task:** Task **A1**, `admin` with your existing password (never written down by me). In a fresh ADMIN profile open the portal root (expect Sign in); type `admin` in **Email or Username**, your password in **Password**, press **Sign In** (expect **Campaigns**); in DevTools → Network read `/auth/session` (`system_roles`, capabilities; do not copy it); open the account menu (expect **Administrator**). Expect "You are not in any campaigns yet." with **Create a world**, **Accept a campaign invitation**, **Create campaign**, a **Platform accounts** link, and no data.
 - **Recording:** in the ledger set the row's Result to `Pass`, `Fail` or `Blocked` (or `Owner-Accepted Exception` with your written reason) and write what you saw in the Human/manual column (tester, date, screenshot path under `…\cp11\human\`; no passwords, links or tokens). Never fill the Automated, Scripted, Database or Accessibility columns from a manual look, and never mark a row `Pass` from the scripted evidence. Report a defect by adding a block from the defect register's template (DEF-0nn) with the ledger row, steps, expected/actual, screenshot path, and tell me; a defect that blocks acceptance gets a bounded fix handoff and a new Code change log entry.
 - **Stop / restart** (PowerShell):

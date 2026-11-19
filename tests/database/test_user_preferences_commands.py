@@ -1,6 +1,6 @@
 """`dnd_ai.commands.user_preferences` and the preference read path of
 `dnd_ai.queries.bootstrap.get_session_bootstrap` against real PostgreSQL
-(docs/UI_DESIGN.md §4.2, §4.7).
+(docs/reference/portal-behavior.md §4.2, §4.7).
 
 HTTP-layer behavior (CSRF, Origin, 401/404 bodies) lives in
 `tests/database/test_api_user_preferences.py`.

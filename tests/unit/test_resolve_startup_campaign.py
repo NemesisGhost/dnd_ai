@@ -1,5 +1,5 @@
 """`dnd_ai.queries.bootstrap.resolve_startup_campaign_id` — the pure landing
-precedence (docs/UI_DESIGN.md §4.2 steps 2-6)."""
+precedence (docs/reference/portal-behavior.md §4.2 steps 2-6)."""
 
 import uuid
 

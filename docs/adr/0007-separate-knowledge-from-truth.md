@@ -17,4 +17,4 @@ Knowledge and belief are per knower. Discovery is not a boolean on the object, a
 
 ## References
 
-- [PLAN.md §15.2](../README.md) and [DATABASE_CONVENTIONS.md §15](../DATABASE_CONVENTIONS.md#15-knowledge-and-visibility-conventions)
+- [PLAN.md §15.2 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#152-truth-and-belief) and [DATABASE_CONVENTIONS.md §15](../DATABASE_CONVENTIONS.md#15-knowledge-and-visibility-conventions)

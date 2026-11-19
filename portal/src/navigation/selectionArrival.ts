@@ -3,7 +3,7 @@ import { activationFor, releaseActivation } from "./activationOwner"
 import { differsOnlyInSection, entryRoot, normalizationRoot, sameStateButCtx, stampRoot } from "./entryStamp"
 import type { SelectionChange, SelectionScope } from "./selectionChange"
 
-// One accepted selection arrival (docs/UI_DESIGN.md §4.8.4): the Infobox choice the router has accepted
+// One accepted selection arrival (docs/reference/portal-behavior.md §4.8.4): the Infobox choice the router has accepted
 // and committed, up to the point a newer navigation replaces it. It holds ids and two one-shot claims
 // (the announcement and the heading focus), never a name or a label, so nothing private is kept after
 // the person loses access. SelectionArrivalProvider creates it from the accepted location; the

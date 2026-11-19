@@ -74,7 +74,7 @@ than silently omitted):
 
 - `security.users.lifecycle_status_id`'s own raw status code — that
   remains account-wide administration, a different capability scope than
-  this campaign's `access.manage` (docs/UI_DESIGN.md's "do not merge
+  this campaign's `access.manage` (docs/reference/portal-behavior.md's "do not merge
   account-wide administration with campaign administration unless the
   existing authorization model explicitly does so"). Only the
   campaign-scoped `membership_statuses` value is exposed as a code/display
@@ -104,7 +104,7 @@ than silently omitted):
   character relationships — the portal's own resource-grant management UI
   is scoped to character targets only this checkpoint for the identical
   reason (see `dnd_ai.commands.access_grants`' module docstring and
-  `docs/PHASE13E_ACCESS_CONTRACT.md` §3k for the full rationale).
+  `docs/api/ACCESS_CONTROL.md` §3k for the full rationale).
 
 This is a pure read: no idempotency key, no `audit.change_log` row, no
 mutation. Authorization is entirely the caller's concern
@@ -657,7 +657,7 @@ def find_eligible_campaign_account(
     step (Phase 13E-B checkpoint 3).
 
     **Exact match, not directory-style search** (a deliberate choice,
-    docs/PHASE13E_ACCESS_CONTRACT.md's own instruction to prefer this over
+    docs/api/ACCESS_CONTROL.md's own instruction to prefer this over
     a search endpoint when the security model favors it): this codebase's
     established non-disclosure posture treats "does an account with this
     name exist" as sensitive everywhere else (`dnd_ai.domain.access.

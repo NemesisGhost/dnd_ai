@@ -22,7 +22,7 @@
 - **Acceptance record**: Owner approval followed independent review at `2ca4648`; the reviewed ADR content is unchanged. R19-P0 completion separately retains the plan criterion that the primary PC acknowledge ADR 0021. P03-B/P03-C/P03-S contracts freeze only after their applicable checkpoints and acceptance gates.
 - **Date**: 2026-11-02
 - **Would amend, once accepted**: [ADR 0020](0020-scoped-system-world-and-campaign-roles.md) decision 6, for player-character identity only (§4.6). ADR 0020 remains fully in force until this ADR is accepted *and* the P03-C cutover for each character has completed.
-- **Implemented by**: Phase 15 checkpoints P03-A, P03-B, P03-C, and **P03-S** (campaign mechanical-state isolation, §3). The P03-S name is provisional; Phase 15 may fold it into P03-B/C, but it must precede controller operations that write state ([PLANv2.md](../PLANv2.md) §8, 15H). Phase 19 consumes the contracts ([R19_FOUNDATION_IMPLEMENTATION_PLAN.md §5.1](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md#51-actor-contract-owner-phase-15)) and implements none of them.
+- **Implemented by**: Phase 15 checkpoints P03-A, P03-B, P03-C, and **P03-S** (campaign mechanical-state isolation, §3). The P03-S name is provisional; Phase 15 may fold it into P03-B/C, but it must precede controller operations that write state ([roadmap](../delivery/roadmap.md) §8, 15H). Phase 19 consumes the contracts ([rules foundations §5.1](../delivery/rules-foundations.md#51-actor-contract-owner-phase-15)) and implements none of them.
 - **Related**: [ADR 0003](0003-separate-world-timeline-and-campaign.md), [ADR 0010](0010-use-sort-key-ranges-for-fictional-time-intervals.md), [ADR 0016](0016-data-classification-and-private-data-handling.md), [ADR 0022](0022-creature-templates-combatants-and-promotion.md), [ADR 0023](0023-rules-engine-calculation-validation-and-source-authorization.md).
 
 ## Context
@@ -1032,7 +1032,7 @@ P03-C and P03-S may land in either order. The port's intermediate behavior is sp
 
 ## References
 
-- [PLANv2.md](../PLANv2.md) §6.1, §8 (15C, 15H, 15.9), §9 (16A), §12 (19.0)
+- [roadmap](../delivery/roadmap.md) §6.1, §8 (15C, 15H, 15.9), §9 (16A), §12 (19.0)
 - Code: `src/dnd_ai/domain/access.py`, `src/dnd_ai/domain/record_authoring.py`, `src/dnd_ai/commands/{access_grants,character_builds,npcs,player_characters,npc_portrayal}.py`, `src/dnd_ai/queries/{character_build_resolution,campaign_clock,party_membership_period}.py`, `src/dnd_ai/persistence/tables/{characters,security,campaign}.py`, `database/migrations/versions/080_security_identity_and_access.py`
 - Supplementary, untracked: `PHASE14_15_APP_INTERACTION_INVESTIGATION_2026-11-01.md` §D6, `PHASE14_15_DEF007_EFFECTIVE_TIME_MEMBERSHIP_PLAN_2026-11-01.md`, `PHASE14_15_REMAINING_WORK_AND_HANDOFF_2026-11-02.md` §6
 - [DATABASE_CONVENTIONS.md](../DATABASE_CONVENTIONS.md) §12, §26, §34

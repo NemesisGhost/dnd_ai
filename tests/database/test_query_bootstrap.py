@@ -876,7 +876,7 @@ def test_no_disclosure_of_a_campaign_the_user_is_not_a_member_of(
 # ---------------------------------------------------------------------------
 # World and timeline identity (Phase 13D — the additive world_id/world_name/
 # timeline_id/timeline_name fields the portal's World -> Timeline -> Campaign
-# hierarchy needs, docs/UI_DESIGN.md §4.1/§5.2)
+# hierarchy needs, docs/reference/portal-behavior.md §4.1/§5.2)
 # ---------------------------------------------------------------------------
 
 

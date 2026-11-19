@@ -1,5 +1,5 @@
 """Audience-filtered discovery/browse reads for the Phase 13D Knowledge
-screen (docs/UI_DESIGN.md §5.6, docs/api/READ_API.md §3/§9).
+screen (docs/reference/portal-behavior.md §5.6, docs/api/READ_API.md §3/§9).
 
 The existing `dnd_ai.queries.knowledge.get_knowledge_view` answers "show me
 *this one* knowledge item" and the portal had no way to discover the ids to

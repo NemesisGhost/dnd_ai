@@ -1,6 +1,6 @@
 # ADR 0022: Creature templates, encounter combatants, and promotion
 
-- **Status**: Accepted by the owner on 2026-11-06, as reviewed at `2ca4648` (the ADR file is unchanged from that revision). R19-P0 architecture deliverable, corrected after independent review (finding R19-07). It implements owner Decision 3 (hybrid creature representation) and is the creature-model ADR that [PLANv2.md](../PLANv2.md) 19.3 and §18 item 8 require.
+- **Status**: Accepted by the owner on 2026-11-06, as reviewed at `2ca4648` (the ADR file is unchanged from that revision). R19-P0 architecture deliverable, corrected after independent review (finding R19-07). It implements owner Decision 3 (hybrid creature representation) and is the creature-model ADR that [roadmap](../delivery/roadmap.md) 19.3 and §18 item 8 require.
 - **Owner decisions applied (Owner-approved 2026-11-03)**: OD-5 (no delegation for creating and publishing a promoted character, §6) and OD-11 (no promotion during an active encounter, §6). These are policy approvals, not acceptance of this ADR.
 - **Date**: 2026-11-02
 - **Extends**: [ADR 0005](0005-separate-rules-definitions-from-world-instances.md). A creature template is a rules definition; a persistent creature is a world instance.
@@ -216,7 +216,7 @@ All schema changes are additive or relax a NOT NULL, so existing encounters need
 
 ## References
 
-- [PLANv2.md](../PLANv2.md) 19.0, 19.3, 19.4, §6.1
+- [roadmap](../delivery/roadmap.md) 19.0, 19.3, 19.4, §6.1
 - [DATABASE_MODEL.md](../architecture/DATABASE_MODEL.md) §9.2, §12, §13; [DATABASE_CONVENTIONS.md](../DATABASE_CONVENTIONS.md) §5.7, §18, §34
 - Code: `src/dnd_ai/persistence/tables/{encounters,interaction,narrative}.py`, `src/dnd_ai/commands/{encounters,encounter_operations,encounter_preparation,integration}.py`, `src/dnd_ai/queries/{encounter,encounter_preparation}.py`, `src/dnd_ai/api/{encounters,encounter_preparation}.py`
-- [R19_FOUNDATION_IMPLEMENTATION_PLAN.md](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md) §5.3, §6 (P2d, P4a, P4b)
+- [rules foundations](../delivery/rules-foundations.md) §5.3, §6 (P2d, P4a, P4b)

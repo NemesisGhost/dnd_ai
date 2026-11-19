@@ -315,7 +315,7 @@ class ChangeMembershipRoleNoOpError(SafeMessageError):
 class CampaignOwnerRequiredError(DomainAuthorizationError):
     """Raised when a caller who is not a live built-in `campaign_owner` of the campaign tries to
     grant that role: assign it, change a role to it, add a member with it, or transfer ownership
-    (P03-A decision D3, docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md).
+    (P03-A decision D3, docs/delivery/ownership-design.md).
     `access.manage` alone no longer reaches those four paths. 403 `campaign_owner_required`, not the
     base 404: the caller is an authorized campaign member and learns nothing about any target from
     being told the role is owner-only."""
@@ -851,7 +851,7 @@ def change_membership_role(
     manager()`'s `campaign.campaigns` row lock, invoked by the `DEFERRABLE
     INITIALLY DEFERRED` constraint trigger on `security.membership_roles`
     (migration 080) — which this function relies on rather than duplicates;
-    see `docs/PHASE13E_ACCESS_CONTRACT.md` §3a for the full argument.
+    see `docs/api/ACCESS_CONTROL.md` §3a for the full argument.
 
     Changing a role to the built-in `campaign_owner` additionally requires the caller to be a live
     built-in owner of `campaign_id` (`CampaignOwnerRequiredError`, 403; decision D3), checked first,
@@ -1320,7 +1320,7 @@ def end_campaign_membership(
     has no command anywhere in this codebase that mutates an existing row
     (only inserts new ones), so there is no concurrent writer for this
     `UPDATE` to race against."""
-    # Lock order (docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md §3): this
+    # Lock order (docs/delivery/ownership-design.md §3): this
     # membership's active role rows first, then the membership row. Every command that holds a
     # role row and later wants its membership (change, a gated assign) takes them in that order, so
     # ending a membership can no longer wait on a role row the other side holds while holding the

@@ -17,7 +17,7 @@ interface QuestCardProps {
 
 // The list contract supplies only a quest name and status — this card
 // never invents a description, objective count, reward, participant, or
-// location (UI_STYLE_GUIDE.md §12.1).
+// location (docs/reference/portal-style.md §12.1).
 export function QuestCard({
     campaignId,
     quest,

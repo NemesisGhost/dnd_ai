@@ -1,6 +1,6 @@
 # Production-oriented image for the D&D AI World Platform.
 #
-# One image, multiple entrypoints (docs/DEVELOPMENT.md §2, PLAN.md §31.3):
+# One image, multiple entrypoints (docs/DEVELOPMENT.md §2, docs/architecture/SYSTEM_ARCHITECTURE.md §17):
 # the database toolchain (Alembic) and the FastAPI application under
 # Uvicorn both run from this same image today; a background worker/Discord
 # adapter would too, once that role has committed source. Role selection

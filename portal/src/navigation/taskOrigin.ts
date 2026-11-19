@@ -4,7 +4,7 @@ import { NAV_ROOTS, defaultAncestors, executionScopeOf, patternParams, routeMeta
 import type { NavRoot, RouteMatch, RouteRef } from "./routeMeta"
 
 // The task origin: which Navbar section a task started from, and a short chain of related records that
-// led to the current page (docs/UI_DESIGN.md §4.8). It lives only in a history entry's `state.task`.
+// led to the current page (docs/reference/portal-behavior.md §4.8). It lives only in a history entry's `state.task`.
 // It is navigation state: it never grants access, a trail entry is never an access hint, and following
 // an ancestor the person cannot read gives the server's normal non-disclosing answer.
 //

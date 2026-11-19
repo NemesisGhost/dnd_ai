@@ -1,4 +1,4 @@
-"""Per-resource audience preview (Phase 13E-B checkpoint 15, docs/UI_DESIGN.md
+"""Per-resource audience preview (Phase 13E-B checkpoint 15, docs/reference/portal-behavior.md
 §16 / PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md §8.4b) — the spoiler-checking
 half of D-1's "preview as a selected member" answer. `dnd_ai.queries.
 effective_access` (checkpoint 13) already tells a GM *what capabilities* a

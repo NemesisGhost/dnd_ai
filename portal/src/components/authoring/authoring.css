@@ -1,4 +1,4 @@
-/* Authoring patterns (docs/UI_DESIGN.md §5.11). Layout:
+/* Authoring patterns (docs/reference/portal-behavior.md §5.11). Layout:
    - phone (< 40rem): one column, 16px gutters, full-width buttons, no
      horizontal page scroll;
    - desktop (>= 64rem): the form column is capped at 40rem and an optional

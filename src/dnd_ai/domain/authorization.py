@@ -1,5 +1,5 @@
-"""R01 authorization plans: the fail-closed final check (docs/R01_FRESH_AUTHORIZATION_PLAN_2026-11-12.md,
-sections 6.2, 6.5 and 6.9-6.11).
+"""R01 authorization plans: the fail-closed final check (docs/api/ACCESS_CONTROL.md,
+Authorization timing and the final check).
 
 A protected write registers **requirements** (a fact captured under lock, an authority predicate over
 one `AuthoritySnapshot`, and the exact error its early counterpart raises today) in an

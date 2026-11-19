@@ -13,7 +13,7 @@ import { installMockServer } from "../test/authoringHarness"
 import type { MockServer } from "../test/authoringHarness"
 import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
 
-// Campaign-only Timeline navigation and the inline campaign chooser (docs/UI_DESIGN.md §4.8.12, CN-1).
+// Campaign-only Timeline navigation and the inline campaign chooser (docs/reference/portal-behavior.md §4.8.12, CN-1).
 // jsdom proves the structure and the rules; keyboard, focus visibility and screen-reader behavior are
 // real-browser checks that stay pending (plan §6).
 

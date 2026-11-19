@@ -1,4 +1,4 @@
-// Which REPLACEs are the internal context stamp (docs/UI_DESIGN.md §4.8.4).
+// Which REPLACEs are the internal context stamp (docs/reference/portal-behavior.md §4.8.4).
 //
 // The selected-context owners restate the entry they have just accepted with a same-entry REPLACE
 // (navigation/replaceOwnEntry.ts, the one place that writes it). Nothing about such a state *looks* like a

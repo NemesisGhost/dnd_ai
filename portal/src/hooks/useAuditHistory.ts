@@ -65,7 +65,7 @@ function filtersKeyOf(filters: AuditHistoryFilters): string {
 }
 
 // Campaign-scoped, filter-scoped audit history with "load more" keyset
-// pagination (dnd_ai.api.audit_history — see docs/AUDIT_HISTORY_API.md).
+// pagination (dnd_ai.api.audit_history — see docs/reference/audit-history.md).
 //
 // A campaign or filter change is always a full reset to "loading" — never
 // a "refreshing" carry-over of the previous scope's items (unlike

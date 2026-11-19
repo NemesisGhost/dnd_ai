@@ -66,7 +66,7 @@ function WithCharactersHeader({
 }
 
 // /app/:campaignId/characters. With a selected perspective it is a REPLACE to that character's record
-// (`/characters/:id`, the sheet and the same section row as every other entry; docs/UI_DESIGN.md §5.5,
+// (`/characters/:id`, the sheet and the same section row as every other entry; docs/reference/portal-behavior.md §5.5,
 // decision PD-4): the index is never a second rendering of the sheet, and Back does not return to it. The
 // entry's state (its task and context mirror) is carried over, so the record opens in the task that
 // reached the index. With no perspective (typically a GM, or a player who can only view characters) it is

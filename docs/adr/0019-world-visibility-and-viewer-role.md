@@ -48,7 +48,7 @@ The world and timeline read models also computed `available_actions` from lifecy
 
 ## Amendment: campaign-derived timeline navigation and stale world entries (2026-11-11)
 
-Owner decisions CN-1 and CN-2 ([UI_DESIGN.md §4.8.12](../UI_DESIGN.md), [correction plan](../PHASE15_CONTEXT_NAVIGATION_CORRECTION_PLAN_2026-11-11.md)); approved design, implemented in the portal by the Phase 15 context-navigation correction (CNC-1 to CNC-3; awaiting independent review). Decisions 1, 2 and 4–8 are unchanged, and no server authorization changes.
+Owner decisions CN-1 and CN-2 ([portal behavior §4.8.12](../reference/portal-behavior.md), [correction plan](../delivery/context-navigation.md)); approved design, implemented in the portal by the Phase 15 context-navigation correction (CNC-1 to CNC-3; awaiting independent review). Decisions 1, 2 and 4–8 are unchanged, and no server authorization changes.
 
 - **Decision 3 is extended to timelines.** A caller without `world.view` on a world is offered, in the hierarchy panel only, the timelines of their authorized campaigns on it. A timeline with one such campaign opens that campaign; several require an explicit campaign choice; none is picked arbitrarily. This grants no world or timeline route and reveals no timeline that no authorized campaign is on. Where the caller holds `world.view`, explicit authority wins: timelines open `/worlds/{w}/timelines/{t}`.
 - **Decision 3's "the list does not depend on the current route" is qualified.** An explicit entry is withdrawn while a world read of it that started after the list read was refused (404/403); a campaign-derived entry for the same world survives. Transient failures change nothing.
@@ -59,5 +59,5 @@ Owner decisions CN-1 and CN-2 ([UI_DESIGN.md §4.8.12](../UI_DESIGN.md), [correc
 - [ADR 0014](0014-world-authoring-authority.md), [ADR 0018](0018-world-creation-eligibility.md)
 - [DOMAIN_MODEL.md](../DOMAIN_MODEL.md) — World authority
 - [DATABASE_MODEL.md §19.2a](../architecture/DATABASE_MODEL.md) — `security.world_roles`, `security.world_memberships`
-- [UI_DESIGN.md §4.1, §4.4, §4.7](../UI_DESIGN.md)
+- [portal behavior §4.1, §4.4, §4.7](../reference/portal-behavior.md)
 - `src/dnd_ai/queries/bootstrap.py`, `src/dnd_ai/domain/world_authority.py`, `src/dnd_ai/queries/worlds.py`, `src/dnd_ai/queries/timeline_detail.py`, `src/dnd_ai/commands/world_memberships.py`, `scripts/manage_world_membership.py`, `portal/src/utils/worldAccess.ts`

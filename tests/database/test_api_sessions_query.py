@@ -1,7 +1,7 @@
 """Tests for `dnd_ai.api.sessions`'s read side — Phase 13D backend-
 readiness workstream's `GET /campaigns/{campaign_id}/sessions` (list) and
 `GET /campaigns/{campaign_id}/sessions/{session_id}` (detail), added
-because the portal's Session detail screen (docs/UI_DESIGN.md §5.8) had no
+because the portal's Session detail screen (docs/reference/portal-behavior.md §5.8) had no
 endpoint to call at all before this (only the GM-only `POST .../end`
 write existed).
 
