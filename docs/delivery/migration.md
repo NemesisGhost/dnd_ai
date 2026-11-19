@@ -62,8 +62,7 @@ The destinations were selected before migration. Frequently cited technical cont
 | `portal/README.md` | [Contract or component guidance retained](../../portal/README.md) |
 | `terraform/README.md` | [Contract or component guidance retained](../../terraform/README.md) |
 | `docs/adr/0001…0023` and `_template.md` | [All decisions and template retained under original IDs](../adr/) |
-| `docs/R01_FRESH_AUTHORIZATION_PLAN_2026-11-12.md` | Local owner record, including historical failures, targeting disclosure and §6.61 acceptance. Remains at the original path. |
-| `docs/R01_S6_READINESS_ASSESSMENT_2026-11-18.md` and `docs/R01_E4_REFERENCE_CORPUS_DESIGN_2026-11-18.md` | Local readiness and four-route design evidence retained in place. The tracked register stands on its own. |
+| `docs/R01_FRESH_AUTHORIZATION_PLAN_2026-11-12.md`, `docs/R01_S6_READINESS_ASSESSMENT_2026-11-18.md`, and `docs/R01_E4_REFERENCE_CORPUS_DESIGN_2026-11-18.md` | Local source notes reconciled into the [R01 work-register entry](work-register.md#r01--runtime-authorization-and-transaction-defects) and the [ACCESS_CONTROL final-check contract](../api/ACCESS_CONTROL.md#authorization-timing-and-the-final-check-r01-s6), then removed. Detailed iteration history and local probe logs were not promoted to maintained documentation. |
 | Ignored `docs/Testing Notes.txt` | Private local scratch, preserved in place. Editorial feedback on time entry, layout, navigation and publication belongs with the interaction findings. Account material and environment identifiers stay local. |
 | `.env.example`, Compose comments, scripts, Terraform examples and CI | Operational inputs remain beside their consumers. The deployment and development guides explain how to use them. |
 
