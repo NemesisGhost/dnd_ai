@@ -506,3 +506,27 @@ Luna's re-review in §11.6 (finding, verdict and evidence) is unchanged. This se
 **Remaining limitations.** Real-browser, accessibility, integrated-head CI, checkpoint merge and owner acceptance remain separate and pending. A5c and P15-C01-S02 were not started.
 
 **Luna re-review boundary.** Base `d80bdc8b64677269cf3d01664fccd30a7552506a`; head = the correction commit.
+
+## 11.8 L-1 final independent review (Luna), 2026-11-19
+
+**Boundary and checkout.** Reviewed the complete breadcrumb correction range `d80bdc8b64677269cf3d01664fccd30a7552506a..cdfdf21b8efa91172372906bd676cfb2636d5c4c`, including its interaction with the original slice range `4645d243e3825586985926f9677ffead71e5976c..63eda42bb8764ba236bdd8743bbfb6b9f23c2ede` and the earlier L-1 correction/review records (§11.4–§11.7). HEAD was `cdfdf21b8efa91172372906bd676cfb2636d5c4c`; initial status was clean on `phase15/completion`, three commits ahead of origin. No repository-path `AGENTS.md` was present. No production changes were made.
+
+**Outcome: L-1 resolved; P15-C01-S01 passes independent implementation review.** The earlier finding remains at score 3, Low, as historical evidence; its correction boundary is now closed. No remaining finding was identified in this slice. This pass does not close the checkpoint or its separate obligations.
+
+### Breadcrumb boundary review
+
+- Both character label publishers in `WorldRecordWorkspace` now use the same recognized character read. The `characters.detail` label and the separate `world.record` label publish only `recognizedCharacter?.name`.
+- A ready character answer rejected by normalization sets `characterRejected`, which is passed through the breadcrumb hook's existing `denied` removal path for both keys. The real hook calls `authority.forget(key)`; this only removes a tab-local label. It does not alter authorization, read state or route access. It removes the rejected record's previous label and cannot remove another record's label because each key includes its route and identity parameters.
+- Malformed first responses and summary responses carrying populated mechanics publish no label. A valid-to-rejected transition removes both old labels. Valid public, summary, full and recognized pre-tier reads continue to publish correct labels. Non-character records retain their existing `world.record` publisher; the location case verifies that behavior.
+- The test mounts the real `BreadcrumbLabelProvider`, reads both registry keys through `useBreadcrumbLabelReader`, and renders the real `TaskBreadcrumb` on a child history route. Thus it tests what navigation displays, not only the internal registration call.
+- On superseded navigation, n1's delayed answer resolves only after n2 has rendered. The test then verifies n2 retains `Nia|Nia`, n1's rejected name is absent, and `Nia` is not shown under n1. The `openHistory` helper waits for both the router pathname and the probe's requested entity before checking labels. This corrects the earlier test timing race without masking the stale-response behavior.
+- The previous implementation's failed mutation had demonstrated the missing rejection-removal behavior: omitting `characterRejected` from the `world.record` publisher left `-|Mira` after the rejected read. In this review's independent probe, the same mutation again failed the valid-to-rejected test for exactly that stale-label trigger.
+
+### Verification and disposition
+
+- **Focused PowerShell run:** `npm test -- src/components/world/WorldRecordWorkspace.breadcrumb.test.tsx src/components/world/WorldRecordWorkspace.test.tsx` passed, 2 files and 126 tests.
+- **Full suite:** `npm test` passed on the first independent full run, 427 files and 5,245 tests. This is separate from §11.7's earlier first-run superseded-test race, subsequent unrelated CampaignSettings timeout, and final passing rerun; no conclusion about those failures is inferred from this separate pass.
+- **Other checks:** `npm run lint` passed; `npm run build` passed with the Vite chunk-size warning; `uv run python scripts/check_documentation.py` passed; `git diff --check d80bdc8b64677269cf3d01664fccd30a7552506a cdfdf21b8efa91172372906bd676cfb2636d5c4c` passed.
+- **Mutation probe:** Removed `characterRejected` from the `world.record` `denied` publication, leaving the earlier label uncleared. The focused breadcrumb suite failed the valid-to-rejected test: expected `-|-`, received `-|Mira`. Restored the original file immediately; SHA-256 before and after was `7AEA7E34DA8FE0C328C7C3D525E12ADEF03D072B6A054A7333DD4319B9198C64`. No probe changes remain.
+- **Rubric:** No active defect remains to score. L-1's prior Low score and acceptance-blocking verdicts are preserved in §§11.4 and 11.6; the complete corrective boundary now passes review. The slice/task register status is updated to reviewed/pass.
+- **Still pending:** real-browser verification, accessibility, integrated-head CI, checkpoint merge, and owner acceptance. This slice review alone does not establish checkpoint merge readiness. A5c and P15-C01-S02 were not started.
