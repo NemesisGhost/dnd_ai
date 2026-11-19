@@ -2,7 +2,7 @@ import { fireEvent, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
-import { MARKER_FIELDS, publicBody } from "../fixtures/publicCharacter"
+import { liveBody, MARKER_FIELDS, publicBody } from "../fixtures/publicCharacter"
 import { NpcRuntimePanel } from "./NpcRuntimePanel"
 
 const BASE = "/campaigns/c1/characters/n1"
@@ -55,6 +55,7 @@ function setup(
         body: readBody ?? {
             character_id: "n1",
             name: "Mira",
+            character_kind: "npc",
             canon_status: canon,
             lifecycle_status: lifecycle,
             species_code: "human",
@@ -113,6 +114,77 @@ describe("NpcRuntimePanel", () => {
         expect(screen.queryByRole("form", { name: "Move this NPC" })).not.toBeInTheDocument()
         expect(document.body.textContent).not.toMatch(/MARKER|777|Released|wary river guide/)
         expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
+
+    // L-1: nothing but a valid full or recognized pre-tier body is runnable.
+    const FULL_NPC = (over: Record<string, unknown> = {}) => ({
+        ...liveBody("full", { character_id: "n1", name: "Mira", character_kind: "npc", canon_status: "canon", lifecycle_status: "active" }),
+        conditions: [{ condition_code: "poisoned", source_description: "A dart" }],
+        resources: [{ resource_code: "ki_points", current_amount: 2, maximum_amount: 4 }],
+        current_hit_points: 12,
+        maximum_hit_points: 20,
+        ...over,
+    })
+    const INCOMPLETE = {
+        character_id: "n1",
+        name: "Mira",
+        canon_status: "canon",
+        lifecycle_status: "active",
+        current_hit_points: 12,
+        maximum_hit_points: 20,
+        conditions: [{ condition_code: "poisoned", source_description: "A dart" }],
+        resources: [],
+    }
+
+    it.each([
+        ["an incomplete un-tiered body", INCOMPLETE],
+        ["an un-tiered body missing its live state keys", { ...FULL_NPC(), view_tier: undefined, conditions: undefined, resources: undefined }],
+        ["a malformed public body", publicBody({ character_id: "n1", public_profile: undefined })],
+        ["a summary body that carries live mechanics", FULL_NPC({ view_tier: "summary" })],
+        ["a valid summary body", liveBody("summary", { character_id: "n1", name: "Mira", character_kind: "npc" })],
+        ["a full body without its sections", FULL_NPC({ sections: undefined })],
+    ])("offers no controls and sends no command for %s (L-1)", async (_label, body) => {
+        const server = setup("canon", ["canon.edit"], "active", { current: 12, maximum: 20 }, false, body)
+        expect(await screen.findByText("This NPC is not available to run.")).toBeInTheDocument()
+        expect(screen.queryAllByRole("form")).toHaveLength(0)
+        expect(screen.queryAllByRole("button")).toHaveLength(0)
+        expect(screen.queryAllByRole("textbox")).toHaveLength(0)
+        expect(screen.queryAllByRole("combobox")).toHaveLength(0)
+        expect(screen.queryByText(/12 of 20/)).not.toBeInTheDocument()
+        expect(screen.queryByText(/poisoned/)).not.toBeInTheDocument()
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
+
+    it("runs a valid full-tier answer and sends exactly the one command asked for", async () => {
+        const server = setup("canon", ["canon.edit"], "active", { current: 12, maximum: 20 }, false, FULL_NPC())
+        await chooseTime()
+        const form = await screen.findByRole("form", { name: "Adjust hit points" })
+        expect(screen.getByText("12 of 20")).toBeInTheDocument()
+        fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-5" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
+        await vi.waitFor(() => expect(server.callsTo("POST", `${BASE}/hit-points`)).toHaveLength(1))
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(1)
+    })
+
+    it.each([
+        ["a summary answer", () => liveBody("summary", { character_id: "n1", name: "Mira", character_kind: "npc" })],
+        ["a malformed answer", () => INCOMPLETE],
+    ])("withdraws the controls when a read after a command is %s, and sends nothing more", async (_label, next) => {
+        const server = setup("canon", ["canon.edit"], "active", { current: 12, maximum: 20 }, false, FULL_NPC())
+        server.on("POST", `${BASE}/hit-points`, () => {
+            server.on("GET", BASE, { body: next() })
+            return { body: { changed: true } }
+        })
+        await chooseTime()
+        const form = await screen.findByRole("form", { name: "Adjust hit points" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Change/ }), { target: { value: "-5" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Apply hit point change" }))
+        expect(await screen.findByText("This NPC is not available to run.")).toBeInTheDocument()
+        expect(screen.queryAllByRole("form")).toHaveLength(0)
+        expect(screen.queryAllByRole("button", { name: /Apply|Add condition|Adjust resource|Move NPC|Remove/ })).toHaveLength(0)
+        expect(screen.queryByText(/12 of 20/)).not.toBeInTheDocument()
+        // Only the command that was asked for before the read changed.
+        expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(1)
     })
 
     it("shows the state of a published NPC", async () => {
@@ -233,6 +305,7 @@ describe("NpcRuntimePanel", () => {
         const character = (hp: number) => ({
             character_id: "n1",
             name: "Mira",
+            character_kind: "npc",
             canon_status: "canon",
             lifecycle_status: "active",
             species_code: "human",

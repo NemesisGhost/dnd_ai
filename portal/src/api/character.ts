@@ -64,6 +64,20 @@ function profile(value: unknown): CharacterPublicProfile {
     }
 }
 
+// Fields the server nulls for a caller authorized only for the summary tier.
+const SUMMARY_NULL_FIELDS = [
+    "current_hit_points",
+    "maximum_hit_points",
+    "temporary_hit_points",
+    "exhaustion_level",
+    "death_save_successes",
+    "death_save_failures",
+    "current_location_id",
+    "active_encounter_id",
+    "conditions",
+    "resources",
+] as const
+
 function nullableArray(value: unknown): boolean {
     return value === null || Array.isArray(value)
 }
@@ -130,6 +144,11 @@ export function normalizeCharacterRead(body: unknown): CharacterRead {
         ) {
             throw new CharacterContractError(`${tier} tier is incomplete`)
         }
+        // The summary tier carries no live mechanics. A summary body that does is contradictory: it is
+        // refused rather than shown or run as if it were the full read.
+        if (tier === "summary" && SUMMARY_NULL_FIELDS.some((field) => body[field] !== null && body[field] !== undefined)) {
+            throw new CharacterContractError("summary tier carries live fields")
+        }
         const released = body.public_profile === undefined || body.public_profile === null ? null : profile(body.public_profile)
         return { ...(body as unknown as CharacterDetail), public_profile: released }
     }
@@ -167,23 +186,22 @@ export async function fetchCharacter(
 }
 
 // The editors' pages (the World workspace, the NPC runtime panel) hold the raw JSON of this read
-// through the authoring resource and never had a strict shape check; their existing partial reads
-// keep working. This applies only the tier rules those pages need: the public tier is rebuilt from
-// its allowlist, an unknown tier or a public-shaped body without a tier is refused (null), and a
-// released profile on any tier is projected like the reader's. A body with no tier and no profile
-// passes as before. The caller shows no character content for null.
+// through the authoring resource. They recognize it with the same rules as the reader: the one
+// normalizer, so a body that is neither a valid tiered answer nor the recognized pre-tier shape is
+// null, and the caller shows a controlled "unavailable" state with no character content or controls.
 export function editorCharacterRead(body: unknown): CharacterRead | null {
-    if (!isRecord(body)) return null
     try {
-        const tier = body.view_tier
-        if (tier === "public_profile") return normalizeCharacterRead(body)
-        if (tier === "summary" || tier === "full") {
-            const released = body.public_profile === undefined || body.public_profile === null ? null : profile(body.public_profile)
-            return { ...(body as unknown as CharacterDetail), public_profile: released }
-        }
-        if (tier === undefined && !("public_profile" in body)) return body as unknown as CharacterDetail
-        return null
-    } catch {
-        return null
+        return normalizeCharacterRead(body)
+    } catch (error) {
+        if (error instanceof CharacterContractError) return null
+        throw error
     }
+}
+
+// Whether this answer is one the NPC runtime panel may offer its controls for. Hit points,
+// conditions and resources are full-tier mechanics: the public and summary tiers carry none, so
+// neither can be run. A recognized pre-tier body (no `view_tier`) is the full read of a server that
+// predates tiers. The server still authorizes every command.
+export function isRunnableRead(read: CharacterRead): read is CharacterDetail {
+    return read.view_tier === "full" || read.view_tier === undefined
 }

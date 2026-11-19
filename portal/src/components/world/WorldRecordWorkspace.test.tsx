@@ -7,7 +7,7 @@ import type { MockServer } from "../../test/authoringHarness"
 import { CAMPAIGN_ONLY_RECORD_AUTHORING, FULL_RECORD_AUTHORING, REVIEWER_RECORD_AUTHORING } from "../../test/recordAuthoring"
 import { installRecordReads } from "../../test/worldWorkspaceMocks"
 import type { RevisionFixture } from "../../test/worldWorkspaceMocks"
-import { MARKER_FIELDS, publicBody } from "../../fixtures/publicCharacter"
+import { liveBody, MARKER_FIELDS, publicBody } from "../../fixtures/publicCharacter"
 import { CampaignWorldDetailPage } from "../../pages/CampaignWorldDetailPage"
 
 const C = "c1"
@@ -1973,7 +1973,10 @@ describe("World record workspace: characters", () => {
     it.each([
         ["a public-tier read", () => publicBody({ character_id: "n1", name: "Mira", character_kind: "npc", ...MARKER_FIELDS })],
         ["an unknown tier", () => publicBody({ character_id: "n1", name: "Mira", view_tier: "everything" })],
-    ])("renders %s without throwing and without live content or runtime controls (A17)", async (label, build) => {
+        ["an incomplete un-tiered body", () => ({ character_id: "n1", name: "Mira", character_kind: "npc", current_hit_points: 12, conditions: [] })],
+        ["a malformed public body", () => publicBody({ character_id: "n1", name: "Mira", character_kind: "npc", public_profile: undefined })],
+        ["a summary body carrying live mechanics", () => ({ ...liveBody("full", { character_id: "n1", name: "Mira", character_kind: "npc" }), view_tier: "summary" })],
+    ])("renders %s without throwing and without live content or runtime controls (A17, L-1)", async (label, build) => {
         const { server } = setup({
             category: "character",
             entityId: "n1",
@@ -1985,16 +1988,46 @@ describe("World record workspace: characters", () => {
                 s.on("GET", `/campaigns/${C}/authoring/npcs/n1`, { body: { canon_status: "canon", available_actions: ["update"], blocked_actions: [] } })
             },
         })
-        await screen.findByRole("heading", { level: 1, name: "Mira" })
         if (label === "a public-tier read") {
+            await screen.findByRole("heading", { level: 1, name: "Mira" })
             expect(screen.getByRole("heading", { name: "Public profile" })).toBeInTheDocument()
             expect(screen.getByText("Released Elf")).toBeInTheDocument()
         } else {
-            expect(screen.getByText("Character information is unavailable.")).toBeInTheDocument()
+            // An unrecognized answer lends no content: not its name, panels, links or sections.
+            expect(await screen.findByText("Character information is unavailable.")).toBeInTheDocument()
+            expect(screen.queryByText("Mira")).not.toBeInTheDocument()
+            expect(screen.queryByRole("link", { name: "Open character sheet" })).not.toBeInTheDocument()
+            expect(screen.queryByRole("link", { name: "Edit NPC" })).not.toBeInTheDocument()
+            expect(screen.queryByRole("heading", { name: "Current state" })).not.toBeInTheDocument()
+            // No kind is taken from it, so the NPC's runtime section is not offered (the section every
+            // character shares is).
+            fireEvent.click(await screen.findByRole("link", { name: "3. Use in play" }))
+            expect(screen.queryByRole("link", { name: "Run this NPC" })).not.toBeInTheDocument()
+            expect(screen.queryByRole("heading", { name: "Run this NPC" })).not.toBeInTheDocument()
+            expect(screen.queryByRole("form", { name: "Move this NPC" })).not.toBeInTheDocument()
         }
         expect(document.body.textContent).not.toMatch(/MARKER|777/)
         expect(screen.queryByRole("form", { name: "Adjust hit points" })).not.toBeInTheDocument()
         expect(server.calls.filter((c) => c.method !== "GET")).toHaveLength(0)
+    })
+
+    it.each([
+        ["full-tier", () => ({ ...liveBody("full", { character_id: "n1", name: "Mira", character_kind: "npc" }), authoring: FULL_RECORD_AUTHORING })],
+        ["pre-tier", () => characterDetail()],
+    ])("shows a valid %s read as before", async (_label, build) => {
+        setup({
+            category: "character",
+            entityId: "n1",
+            typeCode: "npc",
+            detailPath: `/campaigns/${C}/characters/n1`,
+            detail: build(),
+            lifecycle: lifecycle({ entity_id: "n1", entity_type_code: "npc", available_actions: [] }),
+            extra: (s) => {
+                s.on("GET", `/campaigns/${C}/authoring/npcs/n1`, { body: { canon_status: "canon", available_actions: ["update"], blocked_actions: [] } })
+            },
+        })
+        expect(await screen.findByRole("link", { name: "Open character sheet" })).toBeInTheDocument()
+        expect(screen.getByRole("heading", { level: 1, name: "Mira" })).toBeInTheDocument()
     })
 
     it("gives an NPC Run and Inventory under Use in play, and the NPC's edit link", async () => {

@@ -6,6 +6,7 @@ import {
   CharacterRequestError,
   editorCharacterRead,
   fetchCharacter,
+  isRunnableRead,
   normalizeCharacterRead,
 } from "./character"
 
@@ -231,12 +232,41 @@ describe("editorCharacterRead", () => {
     expect(editorCharacterRead(null)).toBeNull()
   })
 
-  it("keeps the existing partial editor reads working and projects a released profile", () => {
-    expect(editorCharacterRead({ character_id: "c1", name: "Aldric" })).toEqual({ character_id: "c1", name: "Aldric" })
+  it("refuses an incomplete or contradictory body, with no permissive fallback (L-1)", () => {
+    expect(editorCharacterRead({ character_id: "c1", name: "Aldric" })).toBeNull()
+    expect(editorCharacterRead({ ...characterFixture, species_code: undefined })).toBeNull()
+    expect(editorCharacterRead(liveBody("summary", { current_hit_points: 5 }))).toBeNull()
+    expect(editorCharacterRead(liveBody("summary", { conditions: [] }))).toBeNull()
+    expect(editorCharacterRead(liveBody("full", { sections: undefined }))).toBeNull()
+  })
+
+  it("accepts a valid full, summary and pre-tier body, projecting a released profile", () => {
+    expect(editorCharacterRead({ ...characterFixture })).toEqual(characterFixture)
+    expect(editorCharacterRead(liveBody("summary"))).toMatchObject({ view_tier: "summary" })
     expect(editorCharacterRead(liveBody("full", { public_profile: { ...RELEASED, x: 1 } }))).toMatchObject({
       public_profile: RELEASED,
     })
     expect(editorCharacterRead(liveBody("summary", { public_profile: { summary: 3 } }))).toBeNull()
+  })
+})
+
+describe("isRunnableRead", () => {
+  it("is true only for the full tier and a recognized pre-tier body", () => {
+    expect(isRunnableRead(normalizeCharacterRead(liveBody("full")))).toBe(true)
+    expect(isRunnableRead(normalizeCharacterRead({ ...characterFixture }))).toBe(true)
+    expect(isRunnableRead(normalizeCharacterRead(liveBody("summary")))).toBe(false)
+    expect(isRunnableRead(normalizeCharacterRead(publicBody()))).toBe(false)
+  })
+})
+
+describe("normalizeCharacterRead: contradictory summary", () => {
+  it.each([
+    ["hit points", { current_hit_points: 3 }],
+    ["a condition list", { conditions: [] }],
+    ["a resource list", { resources: [{ resource_code: "x", current_amount: 1, maximum_amount: 2 }] }],
+    ["a location", { current_location_id: "l1" }],
+  ])("refuses a summary body carrying %s", (_label, extra) => {
+    expect(() => normalizeCharacterRead(liveBody("summary", extra))).toThrow(CharacterContractError)
   })
 })
 

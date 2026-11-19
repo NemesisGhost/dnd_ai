@@ -10,9 +10,8 @@ import { useAuthoringResource } from "../hooks/useAuthoringResource"
 import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
-import { isPublicTier } from "../types/character"
 import type { CharacterDetail } from "../types/character"
-import { editorCharacterRead } from "../api/character"
+import { editorCharacterRead, isRunnableRead } from "../api/character"
 import type { RuntimeOptions } from "../types/npcPortrayal"
 import { useAnnounce } from "./authoring/announcer"
 import { SelectField, TextField } from "./authoring/fields"
@@ -93,10 +92,10 @@ function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged, bl
     if (characterView === null || (optionsView === null && options.state.kind === "loading")) {
         return null
     }
-    // Only a summary/full read is a character this panel can run. A public-tier or unrecognized
-    // answer has no hit points, conditions or resources to show or change: no controls, no command.
+    // Only a full read (or a recognized pre-tier one) is a character this panel can run. A public-tier,
+    // summary-tier or unrecognized answer has no mechanics to show or change: no controls, no command.
     const read = editorCharacterRead(characterView)
-    if (read === null || isPublicTier(read)) {
+    if (read === null || !isRunnableRead(read)) {
         return (
             <PanelFrame embedded={embedded} title="Run this NPC" headingId="npc-runtime-heading">
                 <p>This NPC is not available to run.</p>
@@ -120,9 +119,9 @@ function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged, bl
     const blocked =
         blockedText !== undefined
             ? blockedText
-            : (characterView.lifecycle_status !== undefined && characterView.lifecycle_status !== "active"
+            : (read.lifecycle_status !== undefined && read.lifecycle_status !== "active"
             ? "This NPC is archived. Restore it before changing their hit points, conditions, resources or location."
-            : characterView.canon_status !== undefined && characterView.canon_status !== "canon"
+            : read.canon_status !== undefined && read.canon_status !== "canon"
               ? "Publish this NPC to change their hit points, conditions, resources or location."
               : null)
     if (blocked !== null) {
@@ -144,7 +143,7 @@ function Loaded({ campaignId, characterId, embedded, refreshToken, onChanged, bl
             embedded={embedded}
             options={optionsView}
             optionsRetry={options.state.kind === "error" ? () => void options.refetch() : null}
-            detail={characterView}
+            detail={read}
             refetch={character.refetch}
             pageStale={characterStale}
             onChanged={onChanged}

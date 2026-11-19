@@ -21,7 +21,6 @@ import { LocationPanels } from "../../pages/WorldLocationDetailPage"
 import { OrganizationPanels } from "../../pages/WorldOrganizationDetailPage"
 import { ReligionPanels } from "../../pages/WorldReligionDetailPage"
 import { isPublicTier } from "../../types/character"
-import type { CharacterRead } from "../../types/character"
 import { editorCharacterRead } from "../../api/character"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import type { Provenance } from "../../types/provenance"
@@ -142,7 +141,10 @@ function Loaded({ campaignId, category, entityId }: Props) {
     useBreadcrumbLabel({
         route: "characters.detail",
         params: { campaignId, characterId: entityId },
-        name: category === "character" && detail.state.kind === "ready" ? (detail.state.data as CharacterRead).name : undefined,
+        name:
+            category === "character" && detail.state.kind === "ready"
+                ? (editorCharacterRead(detail.state.data)?.name ?? undefined)
+                : undefined,
         denied: category === "character" && (detail.state.kind === "denied" || detail.state.kind === "unavailable"),
         authority: category === "character" ? detail.authority : null,
     })
@@ -310,7 +312,8 @@ function typeCodeOf(category: WorkspaceCategory, data: WorkspaceDetail): string 
         case "location":
             return (data as LocationDetail).location_type_code
         case "character":
-            return (data as CharacterRead).character_kind
+            // Only a recognized answer names a kind; an unrecognized one offers no kind's sections.
+            return editorCharacterRead(data)?.character_kind ?? null
         default:
             return null
     }
@@ -341,9 +344,10 @@ function describe(category: WorkspaceCategory, kind: WorldKind, data: WorkspaceD
             return { name: d.name, eyebrow: "Religion", summary: d.summary }
         }
         case "character": {
-            const d = data as CharacterRead
+            // An unrecognized answer lends no name either.
+            const d = editorCharacterRead(data)
             return {
-                name: d.name,
+                name: d?.name ?? "Character",
                 eyebrow: kind === "npc" ? "NPC" : kind === "pc" ? "Player character" : "Character",
                 summary: null,
             }

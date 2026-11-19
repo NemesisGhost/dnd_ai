@@ -1,6 +1,6 @@
 # D/P15-C01-S01 implementation plan: render the public character tier
 
-**Status:** T01 implemented 2026-11-19; Luna review pending (see the [implementation record](#113-implementation-record)). Prepared 2026-11-19 for Sonnet. Work-register row: [D/P15-C01-S01](work-register.md#p15-c01-s01), task [T01](work-register.md#p15-c01-s01-t01). Parent PR: [D/P15-C01](work-register.md#p15-c01).
+**Status:** T01 implemented 2026-11-19; Luna found L-1 (see [§11.4](#114-independent-review-luna-2026-11-19)); corrected 2026-11-19, Luna re-review pending (see the [correction record](#115-correction-of-l-1-sonnet-2026-11-19) and the [implementation record](#113-implementation-record)). Prepared 2026-11-19 for Sonnet. Work-register row: [D/P15-C01-S01](work-register.md#p15-c01-s01), task [T01](work-register.md#p15-c01-s01-t01). Parent PR: [D/P15-C01](work-register.md#p15-c01).
 
 **Baseline.** Read at `2a9599e89b332c8cbe0aca32ff6928433d0632f5` ("Adopt delivery hierarchy documentation") on `phase15/completion`, the expected documentation baseline. Porcelain status was clean before this plan. No `AGENTS.md` exists on the repository path. The user-level `~/.codex/AGENTS.md` was empty when the [register](work-register.md#baseline-and-authority) was adopted; this plan did not re-read it.
 
@@ -363,3 +363,74 @@ The documentation check and `git diff --check` results are recorded in the hando
 **Acceptance coverage.** A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12, A14 (route), A15 in `App.characterRecord.test.tsx`; A4 and A15 (normalizer, allowlist, D-3) in `api/character.test.ts`; A5 in the panel and detail-page tests; A6/A7/A8 also in `CharacterDetailPage.test.tsx`; A10–A13, A15 and the 401 reload in `useCharacter.test.ts`; A16 in `CharacterContextDetails.test.tsx`; A17 in `WorldRecordWorkspace.test.tsx` and `NpcRuntimePanel.test.tsx`; A18 by the unchanged existing suites (426 files passed).
 
 **Remaining limitations.** The route harness does not exercise a session-expiry reload at route level (A14), and a superseded read is covered at hook level only (A13). A real-browser run, accessibility checks and owner acceptance are separate (§8). Revocation while a page is open is seen on the next request only.
+
+## 11.4 Independent review (Luna), 2026-11-19
+
+**Boundary and checkout.** Reviewed the complete range `4645d243e3825586985926f9677ffead71e5976c..63eda42bb8764ba236bdd8743bbfb6b9f23c2ede` on `phase15/completion`. HEAD was `63eda42bb8764ba236bdd8743bbfb6b9f23c2ede`; the checkout was clean and one commit ahead of `origin/phase15/completion`. No push or branch switch was needed. No repository-path `AGENTS.md` was present. No production changes were made.
+
+**Verdict: CHANGES REQUIRED.** The tiered reader path meets the public-profile projection and ordinary read-transition contract. One acceptance-blocking, Low-severity finding remains in the editor adapter.
+
+### Finding L-1 — editor adapter accepts malformed un-tiered reads
+
+- **Track / score:** Application. Supported-path exposure 1 (authenticated `canon.edit` users on the World workspace or NPC runtime panel, when a legacy or malformed read is returned); impact 1 (incorrect editor/runtime content and available controls); triggerability 1 (requires a nonconforming response); detection/recovery 0 (visible and a fresh read recovers); blast radius 0 (one record). Score 3, Low. The current A4 server always emits `view_tier`, and the ordinary reader uses the strict normalizer, so this does not establish a current lower-tier reader disclosure.
+- **Evidence and trigger:** `portal/src/api/character.ts`, `editorCharacterRead`, accepts every object with no `view_tier` and no `public_profile` at lines 175–185. It does not call the strict normalizer or require the pre-tier shape. The unit test at `portal/src/api/character.test.ts` explicitly treats `{ character_id, name }` as an accepted read at lines 233–235. `WorldRecordWorkspace` then passes that value to `CharacterPanels`; `NpcRuntimePanel` treats every non-public non-null result as runnable and mounts its controls. An incomplete body with live fields (or a `summary`-tier body carrying mechanics) can therefore be interpreted as an editor/runtime read. The runtime request still has server-side authorization; no unauthorized command or current-server response was demonstrated.
+- **Expected / actual:** Only a valid public, summary/full or explicitly recognized pre-tier body should reach rendering. Unknown, incomplete and contradictory bodies should fail closed. Actual: the special editor adapter preserves partial test-fixture shapes and bypasses the stricter D-3 legacy validation. The implementation record's rationale identifies those partial fixtures as the cause; it does not establish a production compatibility requirement for incomplete legacy responses.
+- **Readiness:** Blocks this slice because the read boundary accepts malformed bodies and the editor route can render them or offer runtime controls, contrary to the declared fail-closed boundary. Keep Low product severity separate from this specific acceptance failure.
+- **Bounded correction:** Make editor reads accept the same recognized public and pre-tier shapes as the ordinary path, validate the `summary`/`full` envelope before rendering, and ensure the NPC runtime panel cannot offer controls for a lower-tier answer. Update partial fixtures to valid legacy bodies where they are intended to represent an old server; otherwise assert the controlled unavailable state. Add focused tests for incomplete un-tiered and contradictory lower-tier bodies in both editor surfaces, including request logs proving no command is sent. Keep the change in `portal/` and do not alter backend behavior.
+
+### Review evidence
+
+- **Contract and consumer review:** Compared the allowlist to `PublicCharacterResponse` and `CharacterPublicProfileResponse` in `src/dnd_ai/api/characters.py`; read the current register, A4 access/read contracts, portal behavior and the entire base-to-head diff. Public normalization projects the public envelope and each nested profile value; unknown tiers and incomplete public bodies are rejected. Ordinary fetch, both routes, context panel, navigation and section-triggered requests use the tier-aware read. No new public-profile fetch is introduced. The workspace and NPC panel are separately guarded for a public-tier answer, but the lenient non-public adapter is the finding above. Editor retained data follows the existing `useKeptData` rule: it clears on loading, 403/404 and record/owner changes, and retains the last good same-owner answer only on transport/server error with a stale notice.
+- **Acceptance map:** A1–A3 route and request-log assertions; A4/A15 normalizer tests; A5 profile and null-field assertions; A6–A8 summary/full rendering; A9 list navigation and return state; A10–A12 tier/unavailable transitions; A13 hook-level superseded-read assertion; A14 route content assertion plus existing hook 401 reload assertion; A15 retry/error assertions; A16 selected-context test; A17 editor/NPC tests; A18 full existing suite. Hook-level A13 directly exercises the request ordering and stale-answer suppression, so an extra duplicate route test is not required. A14's route and hook tests jointly cover content removal and reload invocation; the route harness limitation is recorded in §11.3. Route tests inspect request logs for granted/withheld sections and commands where applicable.
+- **Plan deviations:** D-1/D-2 and the panel structure are within the plan's decisions. D-3 is strict in `normalizeCharacterRead`; the editor-only leniency is not justified by an established production compatibility contract and requires correction. A13/A14 test placement is reasonable. Fixture/expected-value changes recorded in §11.3 do not weaken pre-existing assertions. No excluded backend or separate-slice work was added.
+- **Verification (reviewer's independent runs):** `npm test` passed: 426 files, 5216 tests. `npm run lint` passed. `npm run build` passed with the existing Vite chunk-size warning. `uv run python scripts/check_documentation.py` passed. `git diff --check 4645d243e3825586985926f9677ffead71e5976c 63eda42bb8764ba236bdd8743bbfb6b9f23c2ede` passed. The implementation record's earlier failed runs and subsequent passes remain separate evidence; this review's first full runs passed.
+- **Mutation probe:** Temporarily replaced the `Array.isArray` live-state guard in `CharacterPanels` with a null-only check. `CharacterDetailPage.test.tsx` failed on the missing-key regression with `Cannot read properties of undefined (reading 'length')`. Restored the original bytes immediately; SHA-256 before and after was `441881B480E9FD1D26F391333A2BABDD976C8BB49A7AA034A90AE9082662FBBD`. No probe change remains.
+- **Remaining obligations:** Real-browser persona/network verification remains with `browser`; keyboard and accessibility checks remain with `ax`; owner acceptance remains with `actor-a`, each at its integrated-head boundary. Portal CI is still required after push/integration. This slice alone does not establish checkpoint merge readiness. A5c remains separate; P15-C01-S02 and the separate A5c review were not started.
+
+**Correction handoff:** Sonnet: fix only L-1 in the portal editor read boundary and its focused fixtures/tests; preserve public allowlist projection, valid pre-tier compatibility, editor retained-data behavior, request boundaries and unrelated working changes. Run the focused tests plus the documented portal suite, lint, build, documentation check and diff check; record first runs and reruns. Do not change backend files, push, merge, begin S02, or perform A5c. **Luna re-review boundary:** exact correction base = `63eda42bb8764ba236bdd8743bbfb6b9f23c2ede`; head = the correction commit (or last correcting commit), reviewing the full base-to-head range and updating only this owning review record and the two register status cells.
+
+## 11.5 Correction of L-1 (Sonnet), 2026-11-19
+
+Luna's finding and verdict above are unchanged. This section is the correction evidence; it does not accept the slice. **Status: corrected; Luna re-review pending.**
+
+**Base and head.** Starting HEAD `63eda42bb8764ba236bdd8743bbfb6b9f23c2ede` (the review base) on `phase15/completion`. Before work the tree held only Luna's two uncommitted edits (this plan's §11.4 and the register status cells); both are preserved and committed with the correction. No `AGENTS.md`. The correction commit is titled `P15-C01-S01: validate editor character reads and runtime eligibility`; its SHA is reported in the handoff, not inside itself. Nothing was pushed. Only `portal/` and `docs/` changed.
+
+**What changed (portal).**
+
+- `api/character.ts`: `editorCharacterRead` no longer has its own permissive rules. It calls `normalizeCharacterRead` and returns `null` for a `CharacterContractError`, so editor reads accept exactly the reader's recognized shapes (public, summary/full, the D-3 pre-tier shape). The public allowlist and nested projection are the same code as before.
+- `normalizeCharacterRead` now refuses a **contradictory summary body**: a `summary` tier answer carrying any of the fields the server nulls at that tier (hit points, temporary hit points, exhaustion, death saves, location, encounter, conditions, resources) throws. A full tier body is unchanged.
+- New `isRunnableRead`: an answer is runnable only at the `full` tier or as a recognized pre-tier body. Public and summary are not.
+- `NpcRuntimePanel`: controls are offered only when the answer is recognized **and** `isRunnableRead`; otherwise the existing "This NPC is not available to run." frame is shown with no form, button or field. The `canon.edit` gate, the page's status text and the status/blocked logic are unchanged and still apply on top. The panel's `detail` and status fields now come from the recognized read.
+- `WorldRecordWorkspace`: the heading name, breadcrumb name and the kind that decides which sections (Run, Player, edit links) are offered now come from the recognized read; an unrecognized answer shows "Character information is unavailable." with no name, panels, links or NPC section.
+
+**Pre-tier rule used (unchanged, D-3).** `character_id` and `name` as text, a known `character_kind`, `species_code` and `size_category` as text, `conditions` and `resources` each present as an array or `null`, no `public_profile` key. A recognized pre-tier body is treated as the full read of a server that predates tiers, so it is runnable (the server still authorizes each command). This is the one place a body without `view_tier` can reach controls, and only when it satisfies that rule.
+
+**Fixtures.** The NPC panel's default and re-read fixtures were partial (no `character_kind`) and are now valid pre-tier bodies (`character_kind: "npc"` added). The previous test that asserted `{ character_id, name }` is accepted was replaced by one asserting it is refused. No other existing assertion was changed or weakened.
+
+**New tests.**
+
+- `api/character.test.ts`: editor read refusals (incomplete body, missing live key, summary carrying hit points or conditions, full without sections) and acceptances (valid full, summary, pre-tier); `isRunnableRead` for full, pre-tier, summary and public; the contradictory-summary refusals.
+- `NpcRuntimePanel.test.tsx`: incomplete un-tiered, un-tiered without live-state keys, malformed public, summary carrying live mechanics, valid summary, and full without sections each show the unavailable state with **no forms, buttons, text fields or comboboxes**, no hit-point or condition text, and no non-GET request. A valid full answer runs and sends exactly the one command asked for. A transition test runs a command from a runnable read, then the next read is a summary answer or a malformed one: the controls are withdrawn and the request log holds exactly the one earlier command, none after.
+- `WorldRecordWorkspace.test.tsx`: unknown tier, incomplete un-tiered, malformed public and summary-with-mechanics bodies show the unavailable state with no name, sheet or edit link, no Current state panel and no NPC Run section, and no non-GET request; the public tier still shows only the released profile; valid full-tier and pre-tier reads still show the sheet link and heading.
+- Mutation probe: loosening `isRunnableRead` to "not public" failed the three tests that assert a summary answer is not runnable; the source was restored.
+
+**Preserved.** The exact public allowlist and nested projection; valid pre-tier compatibility; the authorized full-tier behavior; retained data (`useKeptData`: a transport/server error still keeps the last good read with the stale notice, and the existing re-read failure test passes unmodified); read-recovery and request boundaries. No backend, migration, Foundry or OpenAPI file changed.
+
+**Docs.** `READ_API.md` (Portal consumption) and `portal-behavior.md` §5.5 now state that the editors' pages recognize an answer by the reader's rules, that a summary body carrying live fields is refused, and that the runtime panel is offered only for a full-tier or pre-tier answer.
+
+**Verification (portal/, PowerShell).**
+
+| Run | Result |
+|---|---|
+| Focused: `api/character`, `NpcRuntimePanel`, `WorldRecordWorkspace` first run | 1 failed / 171 passed: a re-read test in `NpcRuntimePanel.test.tsx` used a second partial fixture without `character_kind` (fixed to a valid pre-tier body) |
+| Focused after that fix, first workspace test run | 5 failed: my new test asserted that no request for the NPC runtime options is made, which the page makes for its own reasons (removed, since it is a read), and a "Use in play" link assertion that is wrong because the section every character shares remains (replaced by assertions that no Run section or NPC form is offered) |
+| Focused rerun | 3 files, 186 tests passed |
+| `npm test` | 426 files, 5236 tests passed (first run; no failures) |
+| `npm run lint` | passed |
+| `npm run build` | passed (existing chunk-size warning) |
+| `uv run python scripts/check_documentation.py` | see handoff |
+| `git diff --check` | see handoff |
+
+**Remaining limitations.** Real-browser, accessibility, integrated-head CI, checkpoint merge and owner acceptance remain separate and pending. A pre-tier body is runnable by the portal; the server remains the only authority for each command. A5c and P15-C01-S02 were not started.
+
+**Luna re-review boundary.** Base `63eda42bb8764ba236bdd8743bbfb6b9f23c2ede`; head = the correction commit.
