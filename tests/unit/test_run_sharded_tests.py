@@ -105,8 +105,12 @@ def test_the_shard_count_matches_ci() -> None:
     ci = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
-    assert f"CI_TEST_SHARD: ${{{{ matrix.shard }}}}/{runner.DEFAULT_SHARDS}" in ci
-    assert "shard: [1, 2, 3, 4]" in ci and runner.DEFAULT_SHARDS == 4
+    assert f"CI_TEST_SHARD: ${{{{ matrix.shard }}}}/{runner.CI_SHARDS}" in ci
+    assert "shard: [1, 2, 3, 4, 5, 6, 7, 8]" in ci and runner.CI_SHARDS == 8
+    assert f"shard ${{{{ matrix.shard }}}}/{runner.CI_SHARDS})" in ci  # the job name
+    assert (
+        1 <= runner.DEFAULT_SHARDS <= runner.CI_SHARDS
+    )  # the local default is a resource choice, not CI's count
 
 
 def test_the_free_ports_are_distinct() -> None:

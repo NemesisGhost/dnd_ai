@@ -502,15 +502,16 @@ PYTHONPATH=. python -m pytest -p default_config_plugin /path/to/dnd_ai/tests \
 
 `DATABASE_URL` still comes from the repository `.env` through conftest, so the database tests run unchanged. Report a run made this way as "defaults, `.env` override removed", and a run made from the repository root with your `.env` as it is separately.
 
-### 6.3 Running all four CI shards locally
+### 6.3 Running the CI shards locally (four by default; CI uses eight)
 
 ```bash
 uv run python scripts/run_sharded_tests.py
 ```
 
-One command, Windows or POSIX. It reproduces CI's `postgres-tests` job: the same partition
-(`CI_TEST_SHARD=<index>/4`, whole files dealt round-robin by `tests/conftest.py`), the whole of
-`tests/` (unit, database and scenario), four shards at once. The cause of the "don't run shards
+One command, Windows or POSIX. It reproduces CI's `postgres-tests` job: the same partition mechanism
+(`CI_TEST_SHARD=<index>/<total>`, whole files dealt round-robin by `tests/conftest.py`), the whole of
+`tests/` (unit, database and scenario), four shards at once by default (CI groups the same suite eight ways;
+`--shards 8` reproduces that grouping). The cause of the "don't run shards
 concurrently" warning above is that the migrations and downgrade tests create and drop
 **cluster-global roles**, so two shards on one server collide. CI gives each shard its own server;
 so does this script, with a throwaway PostgreSQL 18 cluster per shard (`initdb` into the run
@@ -595,7 +596,7 @@ anything created inside the window or by an in-flight utility may still be runni
 anywhere else, and your own server is untouched.
 
 Extra pytest arguments go after `--` (for example `-- -x`), subject to the allowlist above;
-`--shards N` changes the count, but CI's is four, set in `ci.yml`.
+`--shards N` changes the count. The local default is four (a resource choice); CI runs the same suite as eight shards, set in `ci.yml` (`CI_SHARDS` in the runner); `--shards 8` reproduces CI's grouping but needs about twice the CPU and RAM.
 
 A second cause of one run harming another was fixed alongside: every pytest session used to delete
 every other session's `.tmp/pytest-tmp-*` directory at startup, so a focused test run started while a
@@ -698,7 +699,7 @@ Run the same three commands locally before pushing portal changes.
 - seed idempotency — apply the complete seed set twice and require byte-identical lookup rows
 - schema comparison — autogenerate against head must produce an empty diff, proving migrations and metadata agree
 
-**`postgres-tests`** runs the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) as four parallel matrix shards, each against its own fresh `postgres:18.4` service container — `tests/conftest.py` provisions its own ephemeral database off it exactly as it does against a local server. The suite outgrew a single 30-minute job (PR #66: ~26 minutes of pytest alone). `CI_TEST_SHARD=<index>/<total>` makes `tests/conftest.py` keep only that shard's test files (whole files, dealt round-robin in sorted order — disjoint and together covering every file, proven by `tests/unit/test_conftest_sharding.py`); unset, as locally, every test runs. To reproduce one CI shard locally, run `CI_TEST_SHARD=2/4 uv run pytest`. Don't run several shards concurrently against one local server: migrations and downgrade tests create and drop cluster-global roles (`migration_owner` and the application roles), and concurrent sessions collide on them (`tuple concurrently deleted`) — CI avoids this by giving every shard its own server. Locally, [`scripts/run_sharded_tests.py`](../scripts/run_sharded_tests.py) does the same ([section 6.3](#63-running-all-four-ci-shards-locally)).
+**`postgres-tests`** runs the full pytest suite (`tests/unit`, `tests/database`, `tests/scenario`) as eight parallel matrix shards (four took 28-31 minutes for the slowest, and one was cancelled at the 30-minute cap), each against its own fresh `postgres:18.4` service container — `tests/conftest.py` provisions its own ephemeral database off it exactly as it does against a local server. The suite outgrew a single 30-minute job (PR #66: ~26 minutes of pytest alone). `CI_TEST_SHARD=<index>/<total>` makes `tests/conftest.py` keep only that shard's test files (whole files, dealt round-robin in sorted order — disjoint and together covering every file, proven by `tests/unit/test_conftest_sharding.py`); unset, as locally, every test runs. To reproduce one CI shard locally, run `CI_TEST_SHARD=2/4 uv run pytest`. Don't run several shards concurrently against one local server: migrations and downgrade tests create and drop cluster-global roles (`migration_owner` and the application roles), and concurrent sessions collide on them (`tuple concurrently deleted`) — CI avoids this by giving every shard its own server. Locally, [`scripts/run_sharded_tests.py`](../scripts/run_sharded_tests.py) does the same ([section 6.3](#63-running-all-four-ci-shards-locally)).
 
 **`docker-build`**: validates `compose.yaml`/`compose.ci.yaml`, builds the application image, brings up disposable PostgreSQL via compose, and runs the `migrate` service against it as an end-to-end smoke test of the self-hosted deployment topology itself.
 

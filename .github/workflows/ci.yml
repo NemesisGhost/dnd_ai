@@ -183,11 +183,11 @@ jobs:
         run: uv run alembic -c database/alembic.ini check
 
   postgres-tests:
-    name: Tests (PostgreSQL 18, shard ${{ matrix.shard }}/4)
+    name: Tests (PostgreSQL 18, shard ${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
-    # 45 (was 30): the suite grew with the R01 authorization work and the slowest shard now takes 28-31 minutes of
-    # pytest on a hosted runner, so a 30-minute cap cancelled a shard at 95% (a cancelled shard is not a test failure).
-    timeout-minutes: 45
+    # With four shards the slowest took 28-31 minutes of pytest on a hosted runner and a 30-minute cap cancelled one at
+    # 95% (a cancelled shard is not a test failure). Eight shards halve that (about 15 minutes each); 30 is a hang cap.
+    timeout-minutes: 30
     # The complete unit/database/scenario suite outgrew a single 30-minute
     # job (PR #66: ~26 minutes of pytest alone), so it runs as parallel
     # shards. Each shard gets its own fresh postgres:18.4 service container
@@ -196,12 +196,12 @@ jobs:
     # test files this shard runs (tests/conftest.py's sharding hook — whole
     # files, dealt round-robin, disjoint and covering every file; proven by
     # tests/unit/test_conftest_sharding.py). Changing the shard count means
-    # updating both the matrix and the "/4" in CI_TEST_SHARD and the
-    # job name together.
+    # updating the matrix, the "/8" in CI_TEST_SHARD and the
+    # job name together (and CI_SHARDS in scripts/run_sharded_tests.py).
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     services:
       postgres:
         image: postgres:18.4
@@ -219,7 +219,7 @@ jobs:
 
     env:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dnd_ai_ci
-      CI_TEST_SHARD: ${{ matrix.shard }}/4
+      CI_TEST_SHARD: ${{ matrix.shard }}/8
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
