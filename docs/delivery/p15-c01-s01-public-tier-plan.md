@@ -1,6 +1,6 @@
 # D/P15-C01-S01 implementation plan: render the public character tier
 
-**Status:** T01 implemented 2026-11-19; Luna found L-1 (see [§11.4](#114-independent-review-luna-2026-11-19)); corrected 2026-11-19, Luna re-review pending (see the [correction record](#115-correction-of-l-1-sonnet-2026-11-19) and the [implementation record](#113-implementation-record)). Prepared 2026-11-19 for Sonnet. Work-register row: [D/P15-C01-S01](work-register.md#p15-c01-s01), task [T01](work-register.md#p15-c01-s01-t01). Parent PR: [D/P15-C01](work-register.md#p15-c01).
+**Status:** T01 implemented 2026-11-19; Luna found L-1 (see [§11.4](#114-independent-review-luna-2026-11-19)); corrected 2026-11-19 and again for the breadcrumb trigger (§11.7), Luna re-review pending (see the [correction record](#115-correction-of-l-1-sonnet-2026-11-19) and the [implementation record](#113-implementation-record)). Prepared 2026-11-19 for Sonnet. Work-register row: [D/P15-C01-S01](work-register.md#p15-c01-s01), task [T01](work-register.md#p15-c01-s01-t01). Parent PR: [D/P15-C01](work-register.md#p15-c01).
 
 **Baseline.** Read at `2a9599e89b332c8cbe0aca32ff6928433d0632f5` ("Adopt delivery hierarchy documentation") on `phase15/completion`, the expected documentation baseline. Porcelain status was clean before this plan. No `AGENTS.md` exists on the repository path. The user-level `~/.codex/AGENTS.md` was empty when the [register](work-register.md#baseline-and-authority) was adopted; this plan did not re-read it.
 
@@ -434,3 +434,75 @@ Luna's finding and verdict above are unchanged. This section is the correction e
 **Remaining limitations.** Real-browser, accessibility, integrated-head CI, checkpoint merge and owner acceptance remain separate and pending. A pre-tier body is runnable by the portal; the server remains the only authority for each command. A5c and P15-C01-S02 were not started.
 
 **Luna re-review boundary.** Base `63eda42bb8764ba236bdd8743bbfb6b9f23c2ede`; head = the correction commit.
+
+## 11.6 L-1 independent re-review (Luna), 2026-11-19
+
+**Boundary and checkout.** Correction base `63eda42bb8764ba236bdd8743bbfb6b9f23c2ede`; head `d80bdc8b64677269cf3d01664fccd30a7552506a` (requested abbreviation `d80bdc`). This is the complete correction range, reviewed with the original slice range `4645d243e3825586985926f9677ffead71e5976c..63eda42bb8764ba236bdd8743bbfb6b9f23c2ede`. HEAD matched the requested head on `phase15/completion`; initial status was clean, branch ahead 2, and no repository-path `AGENTS.md` was found. No production changes were made.
+
+**Outcome: L-1 is not fully resolved; CHANGES REQUIRED remains.** The permissive editor-only fallback is removed, invalid/public/unknown reads fail closed in the editor surfaces, and runtime eligibility now requires full tier or a recognized pre-tier body. The summary predicate matches the backend summary projection. One workspace breadcrumb still consumes an unrecognized raw body, so the complete L-1 boundary is not closed.
+
+### Remaining L-1 trigger
+
+In [WorldRecordWorkspace.tsx](../../portal/src/components/world/WorldRecordWorkspace.tsx), the `characters.detail` breadcrumb at lines 141–148 now uses `editorCharacterRead`, but the separate `world.record` publisher at lines 157–162 still supplies `(detail.state.data as { name: string }).name` whenever the raw request is ready. A 2xx malformed response such as `{ name: "unrecognized marker" }`, or a summary response rejected for carrying mechanics, is ready to `useAuthoringResource` but rejected by `editorCharacterRead`; the raw name nevertheless reaches `useBreadcrumbLabel`, which registers any non-null name. A linked breadcrumb can then display a label from a response the workspace itself rejects. This is a bounded presentation/integrity defect, not evidence of protected character-data disclosure: canonical names are public at every recognized tier. It violates the explicit requirement that breadcrumbs not consume unrecognized bodies.
+
+**Finding disposition and grade.** This remains within L-1's existing application finding; no second finding is needed. Score remains 3, Low (exposure 1: authenticated workspace with a nonconforming response; impact 1: misleading/stale breadcrumb label; triggerability 1: malformed response; detection/recovery 0: visible and refreshable; blast radius 0: one record). It blocks slice acceptance because a named boundary requirement is still unmet. Required correction: derive both workspace breadcrumb names only from `editorCharacterRead(data)`, and ensure a rejected answer clears/does not preserve a label from an earlier answer in the same authority. Add a focused test that supplies a malformed ready response with a distinctive `name`, then verifies the `world.record` label is not registered/shown; keep the existing valid public/full/legacy breadcrumb behavior.
+
+### Re-review evidence
+
+- **Shape and compatibility:** `editorCharacterRead` now calls `normalizeCharacterRead` only. Public allowlisting and nested projection remain intact; unknown tiers and malformed public answers return `null`; recognized legacy bodies require the D-3 identity/live-state fields and no profile key. `isRunnableRead` permits only `full` or a recognized legacy body. Legacy runtime compatibility is intentionally full-like: it applies only to an older server's complete pre-tier `CharacterDetail`; it is runnable only in the already `canon.edit`-gated NPC panel, and every command remains server-authorized. The current A4 route always emits a tier.
+- **Summary projection:** `get_character_view(include_full=False)` in `src/dnd_ai/queries/character.py` explicitly returns `None` for each of the ten protected fields checked by `SUMMARY_NULL_FIELDS`; `src/dnd_ai/api/characters.py` maps those values into the required nullable `CharacterResponse` fields. Thus legitimate current summary reads have these fields null and remain accepted. In normalization, absent (`undefined`) and null are accepted as non-populated; empty arrays, zero, empty strings, identifiers, and other populated values are rejected for the protected fields. The current backend emits explicit nulls because these required response fields are supplied from the query result; permitting absence is safe omission and preserves structural compatibility. Full bodies are unchanged. Ordinary reader routes share this normalizer, and their existing summary/full tests pass.
+- **Workspace consumers:** kind selection and `describe` now use the recognized result; rejected character data yields generic name/kind and the unavailable details presentation. The `world.record` breadcrumb publisher described above is the remaining raw-name consumer. The correction tests cover no character heading/content, edit/sheet links, or NPC Run section for rejected bodies, plus public, full, and legacy accepted workspace reads. They do not test the breadcrumb registry for malformed ready data.
+- **NPC runtime and transitions:** Full and recognized legacy reads are runnable; summary/public/invalid reads are not, in addition to the existing `canon.edit` operation gate and backend command authorization. Tests exercise a valid full read issuing exactly one requested POST and a subsequent summary/malformed GET withdrawing controls with the non-GET request log still exactly one. The invalid cases assert no forms, buttons, text inputs, comboboxes, state text or non-GET calls. Thus the relevant logs are exercised through a real command/read transition, not inferred from an initially empty log.
+- **Five workspace test failures:** The correction record preserves the first-run failure. One was a re-read fixture missing `character_kind`, updated to a valid legacy fixture. The workspace failures included an assertion that no NPC runtime-options GET should occur; that unrelated read is part of the page and the assertion was removed. A “Use in play” link was expected to disappear, but it is shared by all characters; it was replaced with checks that no NPC-specific Run section or runtime form is offered. Those replacements test the intended boundary, though they missed the breadcrumb publisher above. No unrelated existing assertion was weakened.
+- **Retained data:** Existing `useKeptData` behavior remains unchanged: same-owner last-good data is retained only on a transport/server error with a stale notice, and cleared for loading or denied/unavailable states. A malformed 2xx body becomes the current ready value but fails normalization at render, so the previously runnable controls are removed. The full-to-summary/malformed transition test proves no further command is issued. The existing retained-data re-read failure test remains unchanged and passed.
+- **Independent verification:** Focused PowerShell run `npm test -- src/api/character.test.ts src/components/NpcRuntimePanel.test.tsx src/components/world/WorldRecordWorkspace.test.tsx`: 3 files, 186 tests passed. Full `npm test`: 426 files, 5,236 tests passed. `npm run lint` passed. `npm run build` passed with the Vite chunk-size warning. `uv run python scripts/check_documentation.py` passed. `git diff --check 63eda42bb8764ba236bdd8743bbfb6b9f23c2ede d80bdc8b64677269cf3d01664fccd30a7552506a` passed. These are this review's first runs; Sonnet's earlier correction failures and reruns remain separately recorded in §11.5.
+- **Mutation probe:** Temporarily weakened `isRunnableRead` to accept every non-public tier. The focused API/runtime suite failed 3 assertions: summary eligibility in the API test, summary unavailability in the runtime panel, and summary transition withdrawal after a command. Restored the original bytes immediately; SHA-256 before and after was `27B7F88E053BD63AE67B054C6DAB0FF2FABEC76CBA9775FF5104359AD303328`. No probe change remains.
+- **Remaining obligations:** Browser, accessibility, integrated-head CI, checkpoint merge and owner acceptance remain pending. A5c and P15-C01-S02 remain outside this review and were not started.
+
+**Bounded Sonnet correction prompt:** Fix only the remaining L-1 raw `world.record` breadcrumb read. Publish labels from the recognized character result, and clear or avoid stale labels when a ready response fails normalization. Add a focused registry/navigation test for a malformed ready response with a distinctive name, while retaining valid public/full/legacy behavior. Do not change production backend behavior or unrelated consumers; run the focused tests and documented verification, preserving first-run failures and reruns. Do not push, merge, start S02, or review A5c. **Luna re-review boundary:** base `d80bdc8b64677269cf3d01664fccd30a7552506a`; head the correction commit or last correcting commit; review the full base-to-head range and update only this review record and the two owning register status cells.
+
+## 11.7 Correction of the L-1 breadcrumb trigger (Sonnet), 2026-11-19
+
+Luna's re-review in §11.6 (finding, verdict and evidence) is unchanged. This section is the correction evidence for its remaining trigger; it does not accept the slice. **Status: corrected; Luna re-review pending.**
+
+**Base and head.** Starting HEAD `d80bdc8b64677269cf3d01664fccd30a7552506a` on `phase15/completion`. Before work the tree held only Luna's uncommitted §11.6 and the register status cells; both are preserved and committed with the correction. No `AGENTS.md`. The correction commit is titled `P15-C01-S01: validate workspace breadcrumb names`; its SHA is reported in the handoff, not inside itself. Nothing was pushed. Only `portal/` and `docs/` changed.
+
+**Cause.** `WorldRecordWorkspace` published the `world.record` label from `detail.state.data.name` whenever the raw read was ready, so a ready body that `editorCharacterRead` rejects still registered its raw name. The `characters.detail` publisher had the opposite gap: it published nothing for a rejected body but did not drop a label an earlier answer had registered.
+
+**Change (`components/world/WorldRecordWorkspace.tsx` only).** For a character record both publishers take their name only from the recognized read (`editorCharacterRead`, computed once). A ready answer that is rejected is published as `denied`, which is the registry's existing convention for dropping a label (`forget`), so a rejected answer neither publishes its raw name nor leaves an earlier label behind. Unavailable and denied answers behave as before. Records of other categories keep the raw-name publisher unchanged. No registry or hook was changed, and no second parser was added.
+
+**Other character breadcrumb publishers (inspected).**
+
+- `CharacterBoundary` (the reader): publishes `state.character.name` from `fetchCharacter`, which is the strict normalizer; a body it rejects is an `error` state and never `success`. Not affected.
+- `CharacterBuildPages`, `NpcPortrayalPage`: publish from their own endpoints' responses (the builds and portrayal DTOs), not the character read. Not affected.
+- `ContentEditPage`: publishes from the authoring view of the record being edited, not the character read. Not affected.
+
+**New tests (`components/world/WorldRecordWorkspace.breadcrumb.test.tsx`, 9 tests).** They run the workspace under the real `BreadcrumbLabelProvider` and read the registry as its consumers do: the real `TaskBreadcrumb` on the record's history page (reached with a task whose trail names the record) and the label reader for both keys the workspace publishes (`characters.detail` and `world.record`).
+
+1. A malformed 2xx body with a distinctive name never reaches either key or the breadcrumb.
+2. A valid read (label "Mira" in both keys and the breadcrumb link), then the same record read again as a rejected body: both labels are removed and the rejected name is never published.
+3. A superseded read: record n1's late response is still pending when the person opens n2 (valid, "Nia"); n1 is then answered with a rejected body. n2 shows "Nia"; n1 shows no label; the rejected name appears nowhere and "Nia" is not under n1.
+4. Valid public, full, summary and recognized pre-tier reads each publish "Mira" under both keys.
+5. A summary rejected for populated mechanics cannot publish its raw name.
+6. A location record still publishes its name under `world.record` (non-character behavior unchanged).
+
+**Mutation probe.** Restoring the raw-name `world.record` publisher (and removing the rejected-answer drop) failed tests 1, 5 and 2 (three tests); the superseded-read and valid-tier tests passed under the mutation, as expected, because they guard other regressions. The source was restored; SHA-256 of `WorldRecordWorkspace.tsx` before and after the probe was `7AEA7E34DA8FE0C328C7C3D525E12ADEF03D072B6A054A7333DD4319B9198C64`.
+
+**Verification (portal/, PowerShell).**
+
+| Run | Result |
+|---|---|
+| New breadcrumb test file, first run | 9 passed |
+| Full `npm test`, first run (before the test was hardened) | 1 failed / 5244 passed: the superseded-read test read the previous record's probe before the next one had rendered, a race in my test under load; it passed alone in six consecutive runs |
+| Fix | `openHistory` waits for the router location and for the probe of the requested record before reading labels |
+| Focused rerun | 9 passed |
+| Full `npm test`, second run | 1 failed / 5244 passed: `CampaignSettingsPage.test.tsx` "treats the saved values as saved, but guards navigation for anything typed after them" timed out at 8 s under load; unrelated (not changed), and it passed alone (13/13) |
+| Full `npm test`, third run | 427 files, 5245 tests passed |
+| `npm run lint` | passed (each run) |
+| `npm run build` | passed (each run; existing chunk-size warning) |
+| `uv run python scripts/check_documentation.py` | passed (run after these records were written) |
+| `git diff --check` | clean (run after these records were written) |
+
+**Remaining limitations.** Real-browser, accessibility, integrated-head CI, checkpoint merge and owner acceptance remain separate and pending. A5c and P15-C01-S02 were not started.
+
+**Luna re-review boundary.** Base `d80bdc8b64677269cf3d01664fccd30a7552506a`; head = the correction commit.

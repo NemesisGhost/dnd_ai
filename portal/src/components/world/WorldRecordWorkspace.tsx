@@ -138,14 +138,18 @@ function Loaded({ campaignId, category, entityId }: Props) {
     const detail = useAuthoringResource<WorkspaceDetail>(worldDetailPath(campaignId, category, entityId))
     // A character's name, from this page's own authorized read, for the breadcrumbs of its Characters
     // pages (builds, portrayal, edit). Other categories register nothing.
+    // A character's label comes only from the recognized read. A ready answer the workspace rejects
+    // publishes no name and drops any label an earlier answer registered (the registry's `denied`
+    // convention), exactly as an unavailable record does.
+    const recognizedCharacter =
+        category === "character" && detail.state.kind === "ready" ? editorCharacterRead(detail.state.data) : null
+    const characterRejected = category === "character" && detail.state.kind === "ready" && recognizedCharacter === null
+    const characterGone = category === "character" && (detail.state.kind === "denied" || detail.state.kind === "unavailable")
     useBreadcrumbLabel({
         route: "characters.detail",
         params: { campaignId, characterId: entityId },
-        name:
-            category === "character" && detail.state.kind === "ready"
-                ? (editorCharacterRead(detail.state.data)?.name ?? undefined)
-                : undefined,
-        denied: category === "character" && (detail.state.kind === "denied" || detail.state.kind === "unavailable"),
+        name: recognizedCharacter?.name,
+        denied: characterGone || characterRejected,
         authority: category === "character" ? detail.authority : null,
     })
     // The last read that succeeded for this record. A refresh that fails recoverably (a network or
@@ -157,8 +161,13 @@ function Loaded({ campaignId, category, entityId }: Props) {
     useBreadcrumbLabel({
         route: "world.record",
         params: { campaignId, category, entityId },
-        name: detail.state.kind === "ready" ? (detail.state.data as { name: string }).name : undefined,
-        denied: detail.state.kind === "denied" || detail.state.kind === "unavailable",
+        name:
+            category === "character"
+                ? recognizedCharacter?.name
+                : detail.state.kind === "ready"
+                  ? (detail.state.data as { name: string }).name
+                  : undefined,
+        denied: detail.state.kind === "denied" || detail.state.kind === "unavailable" || characterRejected,
         authority: detail.authority,
     })
     const [kept, setKept] = useState<WorkspaceDetail | null>(null)
