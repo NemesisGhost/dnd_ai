@@ -1,6 +1,6 @@
 # D/P15-C02-S01 implementation plan: save a draft and release a snapshot
 
-**Status:** Opus plan prepared 2026-11-20; Sonnet implementation pending. Work-register row: [D/P15-C02-S01](work-register.md#p15-c02-s01), tasks [T01](work-register.md#p15-c02-s01-t01) and [T02](work-register.md#p15-c02-s01-t02). Parent checkpoint: [D/P15-C02](work-register.md#p15-c02).
+**Status:** Opus plan prepared 2026-11-20; Sonnet implementation complete 2026-11-20 ([Section 11.3](#113-implementation-record)); independent review pending. Work-register row: [D/P15-C02-S01](work-register.md#p15-c02-s01), tasks [T01](work-register.md#p15-c02-s01-t01) and [T02](work-register.md#p15-c02-s01-t02). Parent checkpoint: [D/P15-C02](work-register.md#p15-c02).
 
 **Baseline.** Read at `c794c6341933ae964773533358562bca5ea1ffa1` ("docs: record A5c independent review PASS at b00a593"), the head of `phase15/completion`, equal to `origin/phase15/completion` after `git fetch`. The worktree was clean. No repository-path `AGENTS.md` exists. This head contains the PR #70 merge (see §1.1). Since that merge it adds only the A5c review records and a docstring correction in `tests/database/test_player_profile_copy_races.py`. No portal, backend source, migration or Foundry file changed after the merge.
 
@@ -438,4 +438,76 @@ None blocks Sonnet if the recommendation is taken. The owner may override any of
 
 ### 11.3 Implementation record
 
-Pending. Sonnet appends it here.
+**Implemented by Sonnet, 2026-11-20. Independent review (Luna) pending.** Nothing below is review evidence, owner acceptance, browser or assistive-technology evidence, or final integrated-head evidence.
+
+**Base and commits.**
+
+| Role | Commit |
+|---|---|
+| Planning baseline (this plan and the register changes, committed before any implementation) | `6a4e67e633788f3c38e1042b7d4e0e74544b08d2` |
+| T01 | `c91a9e235f8fed92e42f4b3797480b45bb7a2f60` |
+| T02 | `c31e4f808fd402be3daf066bbd2c29215568b941` |
+| Records commit (this section and the register; documentation only) | The commit that follows T02 on the branch (`git log --grep "record P15-C02-S01"`) |
+
+The base was `c794c6341933ae964773533358562bca5ea1ffa1` plus the uncommitted plan and register changes, which were verified (`scripts/check_documentation.py` and `git diff --check`) and committed alone as `6a4e67e` before any code. At that point `git status --short` was clean. No unrelated change existed to preserve.
+
+**Contract re-check (instruction 2).** The request models (`SaveCharacterPublicProfileDraftRequest`, `ReleaseCharacterPublicProfileRequest`), the receipts, and the keys returned by `read_character_public_profile` and `_release_json` were read at the base and equal plan §2.1 and §2.2. No difference, no invented field, and no backend, migration, Foundry or manifest file changed. One detail the plan did not state, confirmed by reading: `publish_species` and `publish_size` default to `false` in the model, and the route passes them to the command only when the request names them (`model_fields_set`), so an absent flag is untouched. The portal therefore sends a flag only when it changed. The release receipt has no `released_at` or `released_by`, so the receipt type does not extend the release metadata type.
+
+**Contract baseline (informational, run once at the base).** `uv run pytest tests/database/test_character_public_profile_api.py tests/database/test_character_public_profile_concurrency.py` at the T02 head: BASELINE_RESULT. No backend file changed in this slice.
+
+**What changed (portal only).**
+- New: `types/characterPublicProfile.ts`, `api/characterPublicProfile.ts` (path, save, release), `pages/CharacterPublicProfilePage.tsx`, and two test files.
+- Changed: `App.tsx` (the route), `navigation/routeMeta.ts` (`characters.publicProfile`, parent `characters.detail`, label "Public profile"), `components/CharacterManageLinks.tsx` (the link, for every kind, inside the existing `canEdit` gate), `navigation/legacyCharactersReturn.test.ts` (the route list and the rejected-return list, as for `portrayal`).
+- Docs: [portal behavior §5.5](../reference/portal-behavior.md#55-character-workspace) (two paragraphs) and [ACCESS_CONTROL §3v](../api/ACCESS_CONTROL.md#3v-character-public-profile-p03-a-a2a) (one "Portal" bullet).
+- No new mutation or resource hook: the page uses `useAuthoringResource`, `useKept`, `useAuthoringMutation`, `useConfirmedRefresh`, `useAnnounceWhenRead`, `useUnsavedChangesGuard`, `ConfirmDialog` and the existing feedback components. No CSS was added.
+
+**Design points the review should check.**
+1. **Hidden source fields.** A withheld field arrives as `null`; the page renders no text and no input for it, never sends its key except as an explicit **Clear** (`null`), and shows no origin, provenance, `legacy_copy` or `player_profile_copy` value. Withheld text cannot be in client-held editable values because the server never sends it; the typed keys for those unrendered values exist only in the response type.
+2. **Conflicts.** A refused write that means the page is out of date or authority changed (save: 409 `stale_write`, `public_profile_draft_missing`, `public_profile_character_not_active`, any 403; release: 403, 409, and the 422 for the missing character version) is handled once, in the request wrapper, before the mutation hook sees the error. The page raises an `epoch` (so the form is rebuilt whatever version the next read carries), re-reads, and shows the person's own changed fields back, taken from the refused request body and not from the form or the server, in a read-only "Your unsaved changes" section. Typed edits are never re-applied to a newer draft, so the next save or release can only send tokens from the new read. The page holds every write while a read is in flight or has failed (`held`).
+3. **Scope.** The page is keyed on campaign and character; the mutations' scope keys name both, so a late response is aborted and discarded when the character changes. A 404 on either write or on the read drops every server value and keeps only the person's own input.
+4. **Release.** The button needs `can_release` and a saved draft, and is disabled while the form is dirty, while a read is held, and while a request is pending. The body is built from the saved read, never from the form. A release makes no request other than the release and the re-read.
+5. **Choices that the plan left to the implementer.** After a refusal the form is rebuilt and the page offers no "re-apply my text" action: the typed values are shown for copying (the `PermissionLost` and `StaleWriteNotice` contract). **Clear** is a toggle (`aria-pressed`) that the save then sends, not an immediate write. A release is offered even when `has_unreleased_changes` is false, because R9 (a retry of an already-released version) must be reachable and the server decides.
+
+**Acceptance cases to tests.** `CharacterPublicProfilePage.test.tsx` has 44 tests; `CharacterManageLinks.publicProfile.test.tsx` has 6 (D1 and D2, for each of three kinds).
+
+| Case | Test (name prefix) |
+|---|---|
+| D1, D2 | `CharacterManageLinks.publicProfile.test.tsx`: "D1: a canon editor sees the link", "D2: without canon.edit there is no link and no public-profile request" |
+| D3 to D17 | `CharacterPublicProfilePage.test.tsx`: the test whose name begins with the case number (D4, D13 and D16 have two each) |
+| R1 to R17 | The same file: the test whose name begins with the case number (R5, R6 and R17 have two or three each; R15 is one table of five codes) |
+| Extra | A confirmed release whose re-read fails is not repeated, and writes wait for a read |
+
+D2's "no request on any character route" for a public-tier reader or a summary-tier player is by reading and by absence: the only callers of `publicProfilePath` are this page and `api/characterPublicProfile.ts`, and the only link is in the Manage row's own `canEdit` gate. No existing character-page test was changed or added for it.
+
+**Commands and results** (from `portal/` in PowerShell, because the Bash tool's path casing makes `vitest` fail to find its suite; from the repository root otherwise).
+
+| Run | Command | Result |
+|---|---|---|
+| T01 focused | `npm test -- src/pages/CharacterPublicProfilePage.test.tsx src/components/CharacterManageLinks.publicProfile.test.tsx src/navigation` | 30 files, 823 tests passed (first run at T01 after two test-code corrections, below) |
+| T01 full, first run | `npm test` | 431 passed, 1 failed (432 files; 5311 passed, 1 failed of 5312): `CharacterRelationshipsSection.test.tsx` "does not show a previous character's list for the next one while it loads" timed out at 8 s under full-suite load |
+| T01 rerun of that file | `npm test -- src/components/CharacterRelationshipsSection.test.tsx` | 11 of 11 passed. A load timeout in a file this slice does not touch; reported, not fixed |
+| T01 lint, build, docs, diff | `npm run lint`; `npx tsc -b`; `npm run build`; `uv run python scripts/check_documentation.py`; `git diff --check` | All passed |
+| T02 focused | `npm test -- src/pages/CharacterPublicProfilePage.test.tsx` | 44 of 44 passed on the first run |
+| T02 full | `npm test` | 432 files, 5338 tests, all passed |
+| T02 lint, typecheck, build, docs, diff | as above | All passed |
+
+Corrections made to the tests before T01 was committed, each a defect in the test and not in the page: the first draft's D17 and D16 clicked an ambiguous "Discard changes" button and a button the page's own notice replaces; and the D11 fixture used an incomplete release. The D4 announcement test was rewritten after its first draft asserted nothing useful. No existing assertion was changed.
+
+**Mutation probes** (each restored; SHA-256 of `portal/src/pages/CharacterPublicProfilePage.tsx` at the time).
+
+| Commit | Probe | Result | SHA-256 before and after |
+|---|---|---|---|
+| T01 | The save always sends `expected_row_version: null` | D5, D6, D8, both D13 and D14 failed (6 of 18) | `289badee1a8926393a9481d985bc5cd410ff597c53d5f671ee1607aaf7594c19`, restored |
+| T01 | A stale 409 is no longer treated as a refusal (the old page and token stay) | D8 failed | `289badee1a8926393a9481d985bc5cd410ff597c53d5f671ee1607aaf7594c19`, restored |
+| T02 | The release never adds `expected_character_row_version` | R7 and R14 failed | `ffea00cf8919571bc6c8974f7d2c1deb3c4e7a53da4b7e68a5ae261fb1563e5b`, restored |
+| T02 | The latest-release panel also renders the draft's summary text | R8 and R10 failed | `ffea00cf8919571bc6c8974f7d2c1deb3c4e7a53da4b7e68a5ae261fb1563e5b`, restored |
+
+**Deviations from the plan.** None of behavior. (a) The plan's file list named `CharacterPublicProfilePage.test.tsx` for D1 and D2; they are in `CharacterManageLinks.publicProfile.test.tsx`, beside the component they test. (b) The routes were also added to `navigation/routeMeta.ts`, which the plan anticipated ("the breadcrumb route registry if it enumerates character routes"). (c) The page reads `identity_differs_from_latest_release` as one read-only line (OB-2). (d) The plan allowed the 422 identity-version refusal to map to the stale message; it does.
+
+**Limitations and not performed.**
+- **Not performed:** every browser check, every assistive-technology check (dialog focus trap and return in a real browser, announcements, error-summary focus, checkbox label association, the withheld notice read in context, reflow at 320 CSS px, actual zoom), and the persona checks of plan §7.3. jsdom tests assert focus return to **Release** after Cancel, and nothing about a screen reader. These belong to [browser](work-register.md#browser), [ax](work-register.md#ax) and [b16](work-register.md#b16) at the final integrated head.
+- **Focus after a release or a refusal** is not moved: the form is rebuilt from the next read, so the control that had focus is replaced and focus falls to the page, as it does after a portrayal save. Whether to move it to a heading is for the AX review.
+- No CI has run on these commits (the workflow runs only on pushes to `main` and pull requests into `main`). The C02 pull request's own CI is the checkpoint gate and has not been opened.
+- No final integrated-head evidence, no owner acceptance, no `actor-a`, and nothing for S02 to S04, `copy-ui`, `preview` or C01 files.
+
+**Luna review range.** Base `6a4e67e633788f3c38e1042b7d4e0e74544b08d2`, head the records commit that follows `c31e4f808fd402be3daf066bbd2c29215568b941` (the code is complete at T02; the records commit changes only documentation). Review T01 (`6a4e67e..c91a9e2`) and T02 (`c91a9e2..c31e4f8`) each on their own and together, per [Section 11.2](#112-luna-independent-review-boundary).
