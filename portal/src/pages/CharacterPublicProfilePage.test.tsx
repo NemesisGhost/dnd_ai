@@ -899,3 +899,35 @@ describe("CharacterPublicProfilePage: F2, focus survives a write or a refusal", 
         expect(screen.getByRole("button", { name: "Release" })).toHaveFocus()
     })
 })
+
+describe("CharacterPublicProfilePage: F1-R1, discarded recovery text stays discarded", () => {
+    it("stale refusal, then a read that withholds the field, then Clear, save and a read that restores access", async () => {
+        const { server } = setup()
+        await form()
+        server.on("POST", SAVE, stale)
+        server.on("GET", PATH, () => ({
+            body: profile({ draft: draft({ row_version: 5, public_background: null, public_background_withheld: true }) }),
+        }))
+        type(/Public summary/, "Typed summary kept")
+        type(/Public background/, "PREVIOUSLY-CARRIED-PROTECTED-TEXT")
+        fireEvent.click(saveButton())
+        // The authoritative read withholds the background: the typed text is gone from the recovery alert.
+        fireEvent.click(await screen.findByRole("button", { name: "Clear public background" }))
+        expect(document.body).not.toHaveTextContent(/PREVIOUSLY-CARRIED/)
+        // Clear it and save; the follow-up read restores access with the server's own current text.
+        server.on("POST", SAVE, { status: 200, body: { row_version: 6, created: false, changed: true } })
+        server.on("GET", PATH, () => ({
+            body: profile({ draft: draft({ row_version: 6, public_background: "Server background now" }) }),
+        }))
+        fireEvent.click(saveButton())
+        await vi.waitFor(() => expect(posts(server)).toHaveLength(2))
+        expect(posts(server)[1]!.body).toEqual({ expected_row_version: 5, public_background: null })
+        expect(await screen.findByDisplayValue("Server background now")).toBeInTheDocument()
+        // Access is back, and the old rejected input is still gone; the permitted summary is still shown.
+        expect(document.body).not.toHaveTextContent(/PREVIOUSLY-CARRIED/)
+        expect(screen.queryByDisplayValue(/PREVIOUSLY-CARRIED/)).not.toBeInTheDocument()
+        const mine = within(screen.getByRole("region", { name: "Your unsaved changes" }))
+        expect(mine.getByText("Typed summary kept")).toBeInTheDocument()
+        expect(mine.queryByText("Public background")).not.toBeInTheDocument()
+    })
+})

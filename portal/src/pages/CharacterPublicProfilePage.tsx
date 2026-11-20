@@ -255,6 +255,14 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
     const headingRef = usePageArrival(state.kind === "ready")
     const [handoff] = useState(createFocusHandoff)
 
+    // Once an applied read withholds a field, what was typed into it is discarded from the stored refusal,
+    // not only hidden: when access comes back the old rejected input must not return. The state is this
+    // character's own (the page is keyed on campaign and character), and `view` is its own read.
+    const keptCarried = refusal === null ? null : shownBack(refusal.carried, view)
+    if (refusal !== null && keptCarried !== null && keptCarried.length !== refusal.carried.length) {
+        setRefusal({ ...refusal, carried: keptCarried })
+    }
+
     function refuse(next: Refusal) {
         setRefusal(next)
         setEpoch((n) => n + 1)
@@ -282,7 +290,7 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
                 {stale ? <StaleReadNotice what="public profile" onRetry={() => void refetch()} /> : null}
                 {refusal !== null ? (
                     <RefusalNotice
-                        refusal={{ ...refusal, carried: shownBack(refusal.carried, view) }}
+                        refusal={{ ...refusal, carried: keptCarried ?? refusal.carried }}
                         onDismiss={() => setRefusal(null)}
                     />
                 ) : null}
