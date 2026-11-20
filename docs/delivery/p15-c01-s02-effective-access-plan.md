@@ -432,7 +432,7 @@ Refresh intent includes campaign and a per-page episode, and the completion call
 
 The requested mutation probe replaced the connected-focus early return with an unconditional restore and ran the move-away regression alone. It failed at the expected assertion: focus was on the member toggle instead of the Access link. `CampaignAccessPage.tsx` was restored byte-for-byte; SHA-256 before and after was `1BBB2DFB00F510897C9F16C95BFB939CF1DB92C6F2E5CAD1FCAAC6B57D5AAFC3`. This was the only intentional failed test run.
 
-**Remaining P15-C01 checkpoint obligations.** S02/T01 is reviewed, but the checkpoint is not PR-ready until browser and accessibility evidence and integrated-head CI are complete. Checkpoint merge and owner acceptance remain separate pending events. S01 remains passed; G-1/G-2 and O-1–O-4 retain their separately recorded dispositions. C02 and A5c were not started or reviewed.
+**Remaining P15-C01 checkpoint obligations.** S02/T01 is reviewed, but the checkpoint is not PR-ready until browser and accessibility evidence and integrated-head CI are complete. *(Gate-order correction, 2026-11-20: that clause stated the order wrongly. Browser and accessibility evidence at the integrated head cannot precede the checkpoint merge; see [Section 11.13](#1113-gate-order-clarification-2026-11-20). The original sentence is kept as written.)* Checkpoint merge and owner acceptance remain separate pending events. S01 remains passed; G-1/G-2 and O-1–O-4 retain their separately recorded dispositions. C02 and A5c were not started or reviewed.
 
 ## 11.7 Browser and accessibility evidence; inherited observation O-5 (Sonnet), 2026-11-19
 
@@ -619,6 +619,42 @@ O-5-R1 and the S01/S02 implementation reviews are closed. The corrected C01 code
 | Final integrated-head accessibility (`ax`) | Pending. C01 structure/keyboard/reflow checks are partial, and no screen reader was run. | At the same final head, complete the real keyboard/focus checks and a screen-reader run; verify announcement speech, headings/regions, viewport/reflow, zoom, and the separately tracked B9/B16/B20/B21 dispositions. Do not infer spoken output from DOM/live-region checks. |
 | Human checks | Pending; scripted automation is not a human review. | A person reviews the integrated browser flows, visible focus, wording, layout, and actual zoom; record their observations separately from automated results. |
 | Owner acceptance | Pending. | The owner reviews the exact final evidence SHA, performs/accepts the GM campaign release journey and persona checks, decides fixture/risk dispositions and exceptions, and records acceptance plus remaining obligations. |
-| Checkpoint merge | Pending and not authorized by this review. | Only after integrated CI/browser/ax evidence, human checks, owner decision, and all checkpoint entry criteria are recorded. |
+| Checkpoint merge | Pending and not authorized by this review. | Corrected 2026-11-20 ([Section 11.13](#1113-gate-order-clarification-2026-11-20)): the original cell required integrated CI/browser/ax evidence, human checks and an owner decision *before* the merge, which cannot be met because those events need C01 already merged. The merge gate is the register's: included slice reviews, PR acceptance cases, CI on the checkpoint head, entry criteria. |
 
 These final integration obligations remain owned by `p15-integration`, `browser`, `ax`, `b16`, and `p15-owner` in the maintained register; they are not reassigned to C01. PR #70 remains unmerged. C02 and A5c remain outside this work.
+
+## 11.13 Gate-order clarification (2026-11-20)
+
+This section clarifies the order of the gates. It is not owner acceptance, and it performs no verification. No review verdict, finding closure or evidence above is changed.
+
+**The conflict.** Earlier wording in this plan (Section 11.6's "not PR-ready until browser and accessibility evidence and integrated-head CI are complete", and the checkpoint-merge row of Section 11.12) put final browser/ax evidence before the C01 merge. The register puts it after: [p15-integration](work-register.md#p15-integration) requires `P15-C01` through `P15-C21` merged, and [browser](work-register.md#browser) and [ax](work-register.md#ax) require `p15-integration` verified. Read together, C01 could not merge until evidence existed that cannot exist until C01 has merged.
+
+**Governing rule.** The register's stage rule decides it: "A checkpoint PR is ready to merge only after all included slices are independently reviewed, PR acceptance cases pass, and CI passes on the integration head. Merge, operational cutover/enabling, browser verification, and owner acceptance remain separate events with separate evidence." The work-register introduction states it; the hierarchy review repeats it.
+
+**Intended sequence.**
+
+1. **Checkpoint merge gate (C01).** Included slices independently reviewed; the checkpoint's acceptance cases pass; CI passes on the checkpoint integration head (the PR head, through the PR's generated merge checkout).
+2. **Merge readiness** is assessed from step 1 and the entry criteria (`a4` merged, `r01` owner accepted). The merge is its own event, decided by the owner.
+3. **After the required checkpoints merge,** `p15-integration` is verified on the combined head.
+4. **Final Phase 15 evidence:** integrated-head `browser` and `ax` (including `b9`, `b16`, `b20`, `b21`), actual browser zoom, human checks, `release-review`, and release owner acceptance at `p15-owner`.
+
+"Integrated-head CI" in the sections above means two different things. CI on the **checkpoint head** is a step 1 gate. CI and evidence on the **final integrated Phase 15 head** belong to steps 3 and 4. Only the second is pending after the merge.
+
+**Status at this section.**
+
+| Item | Gate | State |
+|---|---|---|
+| S01 and S02/T01 independent reviews | Step 1 | Passed (S01 L-1 closed; S02/S02-R1 and O-5/O-5-R1 closed in Section 11.11). Inherited O-3, G-1/G-2 and O-1 to O-4 keep their own dispositions. |
+| Checkpoint acceptance cases | Step 1 | S01 A1 to A18 and S02 E1 to E19 are recorded as passing in the reviewed ranges. This is the reviewed slice evidence, not a new run. |
+| CI on the checkpoint head | Step 1 | Passed at `3247436` on synthetic merge `9c1933b` (Section 11.11). Each later head needs its own run before merge; a documentation-only commit changes the head. |
+| Entry criteria `a4`, `r01` | Step 1 | Recorded as merged and owner accepted in the register. |
+| Merge of PR #70 | Step 2 | **Pending.** The PR is a draft, and nothing here authorizes the merge. |
+| `p15-integration`, final `browser`, `ax`, `b9`/`b16`/`b20`/`b21`, `release-review`, `p15-owner` | Steps 3 and 4 | **Pending**, unchanged. They are not C01 merge prerequisites. |
+| Actual browser zoom, screen-reader run, human checks | Step 4 | **Not performed**, unchanged. The scripted C01 runs at `61da59e` stay as the C01 field and are not AT, human or actual-zoom evidence. |
+
+**C01-specific requirements that are preserved, not waived.** Two requirements belong to C01 and are not final-release items:
+
+- **Section 8 item 2 (S02 `ax` checks)** (`aria-expanded` after reload, heading order, whether announcements are *spoken* for a mutation and for Refresh access, the O-3 focus observation, narrow-viewport and zoom reflow of Revealed characters). A person with assistive technology performs these. They move to the final integrated-head `ax` run, where the register owns them, and must be recorded there as C01 items. The scripted evidence covers only the DOM parts.
+- **Scoped owner acceptance of A** at [actor-a](work-register.md#actor-a) (the corrected Sella persona run on namespaced fixtures and the owner's decision). Its prerequisites are `P15-C01` merged, `P15-C02` merged and `a5c` independently reviewed, so it follows the C01 merge and also depends on C02 and A5c. It is distinct from release acceptance at `p15-owner`, and the later one does not substitute for it.
+
+Neither was accepted, performed or waived by this clarification.

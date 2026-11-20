@@ -222,6 +222,8 @@ First attempt of this re-run: S02 33 of 34; G10's check for leftover content mat
 
 ### C01 scripted evidence versus the final integrated-head obligations
 
+*Gate-order note (2026-11-20).* The rows below are owed at the final integrated head, which exists only after C01 to C21 are merged; they are not prerequisites of the C01 merge. See [S02 plan Section 11.13](p15-c01-s02-effective-access-plan.md#1113-gate-order-clarification-2026-11-20). Nothing here was performed or waived by that clarification.
+
 None of the evidence in this record satisfies an integrated-head obligation. It is C01-scoped, scripted, and taken at `efe5a77` (first run) and `e8613f9` (re-run), neither of which is the integrated P15 head; the register also lists `p15-integration` verified as a prerequisite of `browser` and `ax`.
 
 | Register obligation | Still owed | What this record contributes |
