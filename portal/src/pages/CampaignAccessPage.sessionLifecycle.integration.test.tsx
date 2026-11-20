@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { MemoryRouter, Route, Routes } from "react-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { useState } from "react"
+import { SessionContext } from "../context/SessionContext"
 import { SessionProvider } from "../context/SessionProvider"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { AuthenticatedSessionBoundary } from "../layouts/AuthenticatedSessionBoundary"
@@ -46,6 +48,9 @@ interface World {
     capabilities: string[]
     overviewStatus: number
     explainCalls: number
+    // Held explanation answers (each may carry content that is no longer true when it is released).
+    explainHold: Deferred[]
+    overviewCalls: number
 }
 
 function newWorld(): World {
@@ -57,6 +62,8 @@ function newWorld(): World {
         capabilities: ["access.manage"],
         overviewStatus: 200,
         explainCalls: 0,
+        explainHold: [],
+        overviewCalls: 0,
     }
 }
 
@@ -123,6 +130,7 @@ function install(world: World) {
                 })
             }
             if (method === "GET" && url.includes("/access-overview")) {
+                world.overviewCalls += 1
                 if (world.overviewStatus !== 200) {
                     return json({ error: { code: "x", message: "m", correlation_id: "c" } }, world.overviewStatus)
                 }
@@ -131,7 +139,22 @@ function install(world: World) {
             const explain = /\/members\/([^/]+)\/effective-access/.exec(url)
             if (method === "GET" && explain !== null) {
                 world.explainCalls += 1
+                const hold = world.explainHold.shift()
                 const id = decodeURIComponent(explain[1]!)
+                if (hold !== undefined) {
+                    await hold.promise
+                    return json({
+                        display_name: "Bram",
+                        capabilities: [
+                            {
+                                code: "character.view_summary",
+                                display_name: "View summary",
+                                sources: [{ kind: "character_relationship", label: "Viewer", target_display_name: "LATE-SOURCE" }],
+                            },
+                        ],
+                        denials: [],
+                    })
+                }
                 const sources = overviewOf(world)
                     .members.find((m) => m.campaign_membership_id === id)!
                     .character_relationships.map((r) => ({
@@ -324,5 +347,120 @@ describe("Access writes and the real session lifecycle (O-5)", () => {
         await screen.findByText("Bram", { selector: "strong" })
         expect(sessionReadsAfterLoad(world)).toBeGreaterThanOrEqual(3)
         watch.stop()
+    })
+    // O-5-R1: the ordering Luna reported. The overview read SUCCEEDS (authorized), and the in-place session read
+    // is then applied without access.manage. No overview denial is involved.
+    it("unmounts the overview, members and explanations when an applied session lacks access.manage, though the overview read succeeded", async () => {
+        const world = newWorld()
+        const { container } = renderApp(world)
+        await screen.findByText("Bram", { selector: "strong" })
+        await openExplanation("Bram")
+        // The session read that follows the write is held until the overview read has been answered 200 and rendered.
+        const sessionRead = deferred()
+        world.sessionHold = [sessionRead]
+        world.capabilities = []
+        expect(world.overviewStatus).toBe(200)
+        const explainBefore = world.explainCalls
+        await removeAccess("Bram", "Mira Vale")
+        await screen.findByText("Olen Reed", { exact: false })
+        expect(world.overviewCalls).toBeGreaterThanOrEqual(2)
+        expect(screen.queryByRole("heading", { name: "Access unavailable" })).not.toBeInTheDocument()
+        // Now the applied session says the caller no longer holds access.manage.
+        await act(async () => {
+            sessionRead.resolve()
+        })
+        await screen.findByRole("heading", { name: "Access unavailable" })
+        expect(document.body.textContent).not.toMatch(/Bram|Aria the GM|Olen Reed|Character access:|Refresh access|Revealed characters/)
+        // the overview was answered 200 after the write, yet nothing protected is shown
+        await act(async () => {
+            await Promise.resolve()
+        })
+        // and no explanation is read for the member once the capability is gone
+        expect(world.explainCalls).toBeLessThanOrEqual(explainBefore + 1)
+        const afterLoss = world.explainCalls
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        expect(world.explainCalls).toBe(afterLoss)
+        expect(status(container).textContent).toBe("Character access removed.")
+    })
+
+    it("cannot be restored by an explanation answer that arrives after the authority was lost", async () => {
+        const world = newWorld()
+        renderApp(world)
+        await screen.findByText("Bram", { selector: "strong" })
+        await openExplanation("Bram")
+        // The explanation read that follows the write is held; the session read that follows it loses access.manage.
+        const late = deferred()
+        const sessionRead = deferred()
+        world.explainHold = [late]
+        world.sessionHold = [sessionRead]
+        world.capabilities = []
+        const explainBefore = world.explainCalls
+        await removeAccess("Bram", "Mira Vale")
+        await waitFor(() => expect(world.explainCalls).toBe(explainBefore + 1))
+        expect(within(cardOf("Bram")).getByText("Loading access explanation…")).toBeInTheDocument()
+        await act(async () => {
+            sessionRead.resolve()
+        })
+        await screen.findByRole("heading", { name: "Access unavailable" })
+        const reads = world.explainCalls
+        await act(async () => {
+            late.resolve()
+            await Promise.resolve()
+        })
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(document.body.textContent).not.toMatch(/LATE-SOURCE|Bram|Character access:/)
+        expect(screen.getByRole("heading", { name: "Access unavailable" })).toBeInTheDocument()
+        expect(world.explainCalls).toBe(reads)
+    })
+    it("does not bring the old overview or explanations back when the capability returns: fresh reads, everything closed", async () => {
+        const world = newWorld()
+        install(world)
+        let setCapabilities: (capabilities: string[]) => void = () => undefined
+        function Session() {
+            const [capabilities, set] = useState<string[]>(["access.manage"])
+            setCapabilities = set
+            return (
+                <SessionContext.Provider
+                    value={{
+                        state: {
+                            status: "authenticated",
+                            bootstrap: { ...sessionBootstrapFixture, campaigns: [{ ...sessionBootstrapFixture.campaigns[0], capabilities }] },
+                        },
+                        reload: vi.fn(),
+                        refresh: vi.fn(),
+                    }}
+                >
+                    <CampaignAccessPage />
+                </SessionContext.Provider>
+            )
+        }
+        render(
+            <MemoryRouter initialEntries={[`/app/${CAMPAIGN}/access`]}>
+                <Routes>
+                    <Route path="/app/:campaignId/access" element={<Session />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+        await screen.findByText("Bram", { selector: "strong" })
+        await openExplanation("Bram")
+        await act(async () => {
+            setCapabilities([])
+        })
+        await screen.findByRole("heading", { name: "Access unavailable" })
+        expect(document.body.textContent).not.toMatch(/Bram|Character access:/)
+        const overviewReads = world.overviewCalls
+        const explainReads = world.explainCalls
+        await act(async () => {
+            setCapabilities(["access.manage"])
+        })
+        await screen.findByText("Bram", { selector: "strong" })
+        // a fresh overview read, nothing restored from before: the card and its explanation are closed and unread
+        expect(world.overviewCalls).toBe(overviewReads + 1)
+        expect(world.explainCalls).toBe(explainReads)
+        expect(cardOf("Bram").open).toBe(false)
+        expect(within(cardOf("Bram")).getByRole("button", { name: "Explain access" })).toHaveAttribute("aria-expanded", "false")
+        expect(document.body.textContent).not.toMatch(/Character access: Viewer|Hide access explanation/)
+        await openExplanation("Bram")
+        expect(world.explainCalls).toBe(explainReads + 1)
     })
 })

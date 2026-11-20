@@ -3,6 +3,7 @@ import { Link, MemoryRouter, Route, Routes } from "react-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { SessionContext } from "../context/SessionContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
+import { bootstrapWithAccessManage } from "../test/accessBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
@@ -194,7 +195,7 @@ function renderAt(world: World, reload: () => Promise<void> = vi.fn().mockResolv
     install(world)
     const view = render(
         <SessionContext.Provider
-            value={{ state: { status: "authenticated", bootstrap: sessionBootstrapFixture }, reload, refresh: vi.fn() }}
+            value={{ state: { status: "authenticated", bootstrap: bootstrapWithAccessManage(CAMPAIGN, OTHER_CAMPAIGN) }, reload, refresh: vi.fn() }}
         >
             <MemoryRouter initialEntries={[`/app/${CAMPAIGN}/access`]}>
                 <Link to={`/app/${OTHER_CAMPAIGN}/access`}>Go to the other campaign</Link>

@@ -5,6 +5,7 @@ import { AccessTabNav } from "../components/AccessTabNav"
 import { AudiencePreviewPanel } from "../components/AudiencePreviewPanel"
 import { useSession } from "../context/SessionContext"
 import { useAccessDisclosure } from "../hooks/useAccessDisclosure"
+import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { AccessDisclosure } from "../hooks/useAccessDisclosure"
 import { canPreviewAudience as canPreviewAudienceFor } from "../utils/canPreviewAudience"
 import { AccessPage } from "./AccessPage"
@@ -90,6 +91,24 @@ export function CampaignAccessPage() {
         useState<RefreshIntent | null>(null)
     // Counts refreshes asked for on this page. A completion acts only if it still belongs to the latest.
     const refreshEpisode = useRef(0)
+
+    // The mounted Access content is bound to what the applied session says THIS campaign grants: the
+    // existing capability resolver (the bootstrap's per-campaign capabilities), read on every render. A
+    // session read that is applied in place (a write the caller could not be affected by, O-5) does not
+    // remount this page, so the overview must not be allowed to outlive the capability that authorizes it.
+    // Without `access.manage` nothing below is mounted: the overview, members, sources, explanations and
+    // the hooks holding their responses are gone (a response still in flight is aborted with them and
+    // cannot publish), and no explanation is read. The ids held here are dropped too, so a capability that
+    // comes back starts from a fresh overview read with every card and explanation closed.
+    const canManageAccess = useCampaignCapability(campaignId, "access.manage")
+    const { prune } = disclosure
+    useEffect(() => {
+        if (!canManageAccess) {
+            prune(new Set())
+            // A refresh asked for before the loss no longer belongs to anything: its completion is ignored.
+            refreshEpisode.current += 1
+        }
+    }, [canManageAccess, prune])
 
     if (campaignId === undefined) {
         return (
@@ -193,6 +212,12 @@ export function CampaignAccessPage() {
                 {announcementMessage}
             </p>
 
+            {!canManageAccess ? (
+                <PlaceholderPage
+                    title="Access unavailable"
+                    description="The requested access information is not available."
+                />
+            ) : (
             <AccessOverviewBoundary campaignId={activeCampaignId}>
                 {(overview, retry) => (
                     <>
@@ -228,6 +253,7 @@ export function CampaignAccessPage() {
                     </>
                 )}
             </AccessOverviewBoundary>
+            )}
         </>
     )
 }
