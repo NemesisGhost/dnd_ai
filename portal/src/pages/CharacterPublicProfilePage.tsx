@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useLayoutEffect, useState } from "react"
 import type { ReactNode } from "react"
 import { AlertTriangle } from "lucide-react"
 import { Link, useParams } from "react-router"
@@ -23,6 +23,7 @@ import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedR
 import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
+import { canTakeFocus } from "../utils/focusEligibility"
 import { classifyApiError } from "../types/apiError"
 import type { AuthoringError } from "../types/apiError"
 import type {
@@ -53,9 +54,92 @@ const TEXT_FIELDS: readonly { key: TextKey; label: string; id: string }[] = [
 // What the page says after the server refuses a write for a reason that means the page is out of
 // date or the person's rights changed. The person's own unsent input (and nothing the server sent)
 // is shown back read-only, because the form is replaced by the latest read.
+interface CarriedChange extends RetainedChange {
+    // Which draft field the value was typed into (absent for the release note).
+    field?: string
+}
+
 interface Refusal {
     message: string
-    carried: RetainedChange[]
+    carried: CarriedChange[]
+}
+
+// The text fields that can hold copied text under a source-read restriction. What the person typed into
+// one of them is not shown back once the server has said, by refusal or by a read, that it is withheld
+// from them: the page cannot tell what in that text came from the restricted source.
+const PROTECTABLE: ReadonlySet<string> = new Set(["public_appearance", "public_background"])
+
+function withheldIn(view: CharacterPublicProfileRead | null, field: string): boolean {
+    if (view?.draft == null) return false
+    return (
+        (field === "public_appearance" && view.draft.public_appearance_withheld) ||
+        (field === "public_background" && view.draft.public_background_withheld)
+    )
+}
+
+// What may be shown back: every carried value except one for a field the latest read withholds.
+function shownBack(carried: readonly CarriedChange[], view: CharacterPublicProfileRead | null): CarriedChange[] {
+    return carried.filter((change) => change.field === undefined || !withheldIn(view, change.field))
+}
+
+// The ids of the controls whose focus the page keeps across a rebuild of the form, and of the status
+// heading that takes it when the control cannot.
+const IDS = {
+    status: "public-profile-draft-status",
+    save: "public-profile-save",
+    discard: "public-profile-discard",
+    release: "public-profile-release",
+    species: "public-profile-publish-species",
+    size: "public-profile-publish-size",
+    clear: "public-profile-clear-background",
+}
+const KEPT_FOCUS: ReadonlySet<string> = new Set([
+    ...Object.values(IDS),
+    "public-profile-summary", "public-profile-appearance", "public-profile-background",
+])
+
+// Where focus was last (by control id) and whether the form that held it has been replaced since.
+// A rebuilt form puts focus back only if it was lost with the old form and nothing else has it.
+interface FocusHandoff {
+    // A control took focus (by id), or the control that will take it back (a dialog's opener).
+    note: (element: Element | null, id?: string) => void
+    // The form that held focus is going away.
+    leaving: () => void
+    // The form that replaces it: give focus back if it was lost with the old form and nothing else has it.
+    arrive: () => void
+}
+
+function createFocusHandoff(): FocusHandoff {
+    let target: string | null = null
+    let lost = false
+    let restoring = false
+    return {
+        note: (element, id) => {
+            if (id !== undefined) {
+                target = id
+                return
+            }
+            if (restoring || !(element instanceof HTMLElement) || element.closest("dialog") !== null) return
+            target = element.id === "" ? null : element.id
+            lost = false
+        },
+        leaving: () => {
+            const active = document.activeElement
+            if (active instanceof HTMLElement && (active.closest("dialog") !== null || KEPT_FOCUS.has(active.id))) lost = true
+        },
+        arrive: () => {
+            if (!lost) return
+            lost = false
+            const active = document.activeElement
+            if (active !== null && active !== document.body) return
+            const wanted = target === null ? null : document.getElementById(target)
+            const place = canTakeFocus(wanted) ? wanted : document.getElementById(IDS.status)
+            if (place === null) return
+            restoring = true
+            place.focus()
+            restoring = false
+        },
+    }
 }
 
 const trimmed = (value: string | null | undefined): string => (value ?? "").trim()
@@ -120,12 +204,13 @@ const FIELD_LABEL: Readonly<Record<string, string>> = {
 
 // What the person had changed in a refused save, from the request itself (never from the form or
 // the server's read), for showing back to them.
-function retainedFromSave(body: SavePublicProfileDraftBody): RetainedChange[] {
-    const out: RetainedChange[] = []
+function retainedFromSave(body: SavePublicProfileDraftBody): CarriedChange[] {
+    const out: CarriedChange[] = []
     for (const [key, label] of Object.entries(FIELD_LABEL)) {
         if (!(key in body)) continue
         const value = (body as unknown as Record<string, unknown>)[key]
         out.push({
+            field: key,
             label,
             value:
                 typeof value === "boolean"
@@ -168,6 +253,7 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
     })
     const announceWhenRead = useAnnounceWhenRead(state.kind === "ready" && !state.refreshing, state)
     const headingRef = usePageArrival(state.kind === "ready")
+    const [handoff] = useState(createFocusHandoff)
 
     function refuse(next: Refusal) {
         setRefusal(next)
@@ -194,7 +280,12 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
         body = (
             <>
                 {stale ? <StaleReadNotice what="public profile" onRetry={() => void refetch()} /> : null}
-                {refusal !== null ? <RefusalNotice refusal={refusal} onDismiss={() => setRefusal(null)} /> : null}
+                {refusal !== null ? (
+                    <RefusalNotice
+                        refusal={{ ...refusal, carried: shownBack(refusal.carried, view) }}
+                        onDismiss={() => setRefusal(null)}
+                    />
+                ) : null}
                 <Loaded
                     key={`${epoch}:${view.draft?.row_version ?? 0}:${view.latest_release?.version_number ?? 0}`}
                     campaignId={campaignId}
@@ -204,6 +295,7 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
                     held={reading || stale}
                     pageStale={stale}
                     onUnread={announceWhenRead}
+                    handoff={handoff}
                     onRefused={refuse}
                     onLost={setLost}
                 />
@@ -211,7 +303,13 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
         )
     }
     return (
-        <section className="authoring-page" aria-labelledby="public-profile-heading">
+        <section
+            className="authoring-page"
+            aria-labelledby="public-profile-heading"
+            // The control the person last used, so a rebuilt form can give it back. A control inside a
+            // dialog is represented by the button that opened it (noted where it opens).
+            onFocus={(event) => handoff.note(event.target)}
+        >
             <TaskBreadcrumb />
             <h1 id="public-profile-heading" ref={headingRef} tabIndex={-1}>
                 Public profile
@@ -305,6 +403,7 @@ function Loaded({
     held,
     pageStale,
     onUnread,
+    handoff,
     onRefused,
     onLost,
 }: {
@@ -317,6 +416,7 @@ function Loaded({
     held: boolean
     pageStale: boolean
     onUnread: (message: string) => void
+    handoff: FocusHandoff
     onRefused: (refusal: Refusal) => void
     onLost: (retained: RetainedChange[]) => void
 }) {
@@ -330,6 +430,35 @@ function Loaded({
     const [releasing, setReleasing] = useState(false)
     const [note, setNote] = useState("")
     const [releasedMessage, setReleasedMessage] = useState<string | null>(null)
+
+    // A field the latest read withholds holds no text here, whatever was typed before it was withheld, and
+    // a field that stops being withheld shows the draft's text, not what was typed under the old read.
+    const withheldNow = {
+        appearance: draft?.public_appearance_withheld === true,
+        background: draft?.public_background_withheld === true,
+    }
+    const [seenWithheld, setSeenWithheld] = useState(withheldNow)
+    if (seenWithheld.appearance !== withheldNow.appearance || seenWithheld.background !== withheldNow.background) {
+        setSeenWithheld(withheldNow)
+        setValues((current) => ({
+            ...current,
+            ...(seenWithheld.appearance !== withheldNow.appearance
+                ? { public_appearance: draft?.public_appearance ?? "" }
+                : {}),
+            ...(seenWithheld.background !== withheldNow.background
+                ? { public_background: draft?.public_background ?? "", clear_background: false }
+                : {}),
+        }))
+    }
+
+    // This form is replaced when a read changes the draft or the latest release, and after a refusal. If
+    // focus was on something it is about to remove, say so; the form that replaces it gives focus back
+    // to that control, or to the status, unless focus has moved to something else that is still there.
+    useLayoutEffect(() => {
+        handoff.arrive()
+        return handoff.leaving
+        // Once per form: it runs for the form that replaces the old one, and cleans up for the old one.
+    }, [handoff])
 
     const pending = saveBody(draft, values)
     const dirty = pending !== null
@@ -346,7 +475,12 @@ function Loaded({
                 // token is never sent again.
                 if (!ctx.signal.aborted) {
                     const error = classifyApiError(cause)
-                    const carried = retainedFromSave(body)
+                    const typed = retainedFromSave(body)
+                    // A refusal for a withheld field cannot say which field, so none that could be withheld is kept.
+                    const carried =
+                        error.code === "public_profile_field_withheld"
+                            ? typed.filter((change) => !PROTECTABLE.has(change.field ?? ""))
+                            : typed
                     if (error.kind === "unavailable") onLost(carried)
                     else if (error.kind === "stale") onRefused({ message: SAVE_REFUSAL.stale_write!, carried })
                     else if (error.kind === "denied")
@@ -481,7 +615,9 @@ function Loaded({
                 see a release only after you reveal the character.
             </p>
             <section aria-label="Draft status">
-                <h2>Draft</h2>
+                <h2 id={IDS.status} tabIndex={-1}>
+                    Draft
+                </h2>
                 <p>
                     {draft === null ? "No draft has been saved yet." : `Draft version ${draft.row_version}.`}
                     {view.has_unreleased_changes ? " Unreleased changes." : ""}
@@ -526,6 +662,7 @@ function Loaded({
                                 can clear it, but not edit it.
                             </p>
                             <button
+                                id={IDS.clear}
                                 type="button"
                                 className="authoring-button"
                                 aria-pressed={values.clear_background}
@@ -554,6 +691,7 @@ function Loaded({
                         </p>
                         <label className="authoring-checkbox">
                             <input
+                                id={IDS.species}
                                 type="checkbox"
                                 checked={values.publish_species}
                                 onChange={(event) => set("publish_species", event.currentTarget.checked)}
@@ -562,6 +700,7 @@ function Loaded({
                         </label>
                         <label className="authoring-checkbox">
                             <input
+                                id={IDS.size}
                                 type="checkbox"
                                 checked={values.publish_size}
                                 onChange={(event) => set("publish_size", event.currentTarget.checked)}
@@ -574,6 +713,7 @@ function Loaded({
                     </fieldset>
                     <div className="authoring-actions">
                         <button
+                            id={IDS.save}
                             type="submit"
                             className="authoring-button authoring-button--primary"
                             disabled={!dirty || busy}
@@ -582,6 +722,7 @@ function Loaded({
                             {saving ? "Saving…" : "Save draft"}
                         </button>
                         <button
+                            id={IDS.discard}
                             type="button"
                             className="authoring-button"
                             disabled={!dirty || saving}
@@ -603,10 +744,15 @@ function Loaded({
                     {view.can_release ? (
                         <>
                             <button
+                                id={IDS.release}
                                 type="button"
                                 className="authoring-button authoring-button--primary"
                                 disabled={dirty || busy || releaseBody === null}
-                                onClick={() => setReleasing(true)}
+                                onClick={() => {
+                                    // The dialog returns here; so does a rebuilt form if the page is replaced meanwhile.
+                                    handoff.note(null, IDS.release)
+                                    setReleasing(true)
+                                }}
                             >
                                 Release
                             </button>

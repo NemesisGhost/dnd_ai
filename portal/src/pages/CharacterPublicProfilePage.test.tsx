@@ -684,3 +684,218 @@ describe("CharacterPublicProfilePage: release (T02)", () => {
         expect(releases(server)).toHaveLength(1)
     })
 })
+
+
+// Review corrections F1 and F2 (docs/delivery/p15-c02-s01-draft-release-plan.md section 11.4).
+
+// A response the test releases when it chooses, so the person can act while a request is pending.
+function held<T>() {
+    let release!: (value: T) => void
+    const promise = new Promise<T>((resolve) => {
+        release = resolve
+    })
+    return { promise, release }
+}
+
+const withheldRead = (extra: object = {}) =>
+    profile({
+        draft: draft({
+            row_version: 3,
+            public_appearance: null,
+            public_appearance_withheld: true,
+            public_background: null,
+            public_background_withheld: true,
+        }),
+        ...extra,
+    })
+
+describe("CharacterPublicProfilePage: F1, withheld text is never kept in recovery", () => {
+    it("a withheld-field refusal, then a read that withholds the field, shows no protected text anywhere", async () => {
+        const { server } = setup()
+        await form()
+        server.on("POST", SAVE, refused(403, "public_profile_field_withheld"))
+        // The source-read right is lost between the first read and the save.
+        server.on("GET", PATH, () => ({ body: withheldRead() }))
+        type(/Public summary/, "Typed summary kept")
+        type(/Public appearance/, "PROTECTED-APPEARANCE")
+        type(/Public background/, "PROTECTED-BACKGROUND")
+        fireEvent.click(saveButton())
+        const notice = await screen.findByRole("alert")
+        expect(notice).toHaveTextContent(/withheld from you/)
+        expect(notice).not.toHaveTextContent("SERVER-SECRET")
+        // The applied read withholds both fields.
+        expect(await screen.findByRole("button", { name: "Clear public background" })).toBeInTheDocument()
+        await vi.waitFor(() => expect(server.callsTo("GET", PATH).length).toBeGreaterThanOrEqual(2))
+        expect(document.body).not.toHaveTextContent(/PROTECTED-/)
+        expect(screen.queryByDisplayValue(/PROTECTED-/)).not.toBeInTheDocument()
+        // Text that could not have been withheld is still the person's to recover.
+        const mine = within(screen.getByRole("region", { name: "Your unsaved changes" }))
+        expect(mine.getByText("Typed summary kept")).toBeInTheDocument()
+        expect(mine.queryByText("Public appearance")).not.toBeInTheDocument()
+        expect(mine.queryByText("Public background")).not.toBeInTheDocument()
+        expect(posts(server)).toHaveLength(1)
+    })
+
+    it("a withheld-field refusal drops the protected text at once, before the re-read has applied", async () => {
+        const { server } = setup()
+        await form()
+        const reread = held<{ body: object }>()
+        server.on("POST", SAVE, refused(403, "public_profile_field_withheld"))
+        server.on("GET", PATH, () => reread.promise)
+        type(/Public background/, "PROTECTED-BACKGROUND")
+        fireEvent.click(saveButton())
+        await screen.findByRole("alert")
+        expect(document.body).not.toHaveTextContent(/PROTECTED-/)
+        await act(async () => reread.release({ body: withheldRead() }))
+        expect(document.body).not.toHaveTextContent(/PROTECTED-/)
+    })
+
+    it("a stale refusal whose re-read withholds a field does not show that field's typed text", async () => {
+        const { server } = setup()
+        await form()
+        server.on("POST", SAVE, stale)
+        server.on("GET", PATH, () => ({ body: withheldRead({ draft: draft({ row_version: 5, public_background: null, public_background_withheld: true }) }) }))
+        type(/Public summary/, "Typed summary kept")
+        type(/Public background/, "PROTECTED-BACKGROUND")
+        fireEvent.click(saveButton())
+        expect(await screen.findByRole("button", { name: "Clear public background" })).toBeInTheDocument()
+        expect(document.body).not.toHaveTextContent(/PROTECTED-/)
+        const mine = within(screen.getByRole("region", { name: "Your unsaved changes" }))
+        expect(mine.getByText("Typed summary kept")).toBeInTheDocument()
+    })
+
+    it("a stale refusal on a still-readable field keeps that typed text (permitted recovery)", async () => {
+        const { server } = setup()
+        await form()
+        server.on("POST", SAVE, stale)
+        server.on("GET", PATH, () => ({ body: profile({ draft: draft({ row_version: 5 }) }) }))
+        type(/Public background/, "My own background")
+        fireEvent.click(saveButton())
+        const mine = within(await screen.findByRole("region", { name: "Your unsaved changes" }))
+        expect(mine.getByText("My own background")).toBeInTheDocument()
+    })
+
+    it("text typed into a field that a later read withholds does not come back when it is readable again", async () => {
+        const { server } = setup()
+        await form()
+        // Same draft version throughout, so the form is not rebuilt: only the withheld flag changes.
+        server.on("GET", PATH, () => ({ body: withheldRead() }))
+        type(/Public summary/, "S2")
+        type(/Public background/, "STALE-TYPED-BACKGROUND")
+        fireEvent.click(saveButton())
+        expect(await screen.findByRole("button", { name: "Clear public background" })).toBeInTheDocument()
+        expect(document.body).not.toHaveTextContent(/STALE-TYPED/)
+        server.on("GET", PATH, () => ({ body: profile({ draft: draft({ row_version: 3, public_summary: "S2" }) }) }))
+        type(/Public summary/, "S3")
+        // The textarea for the background is gone; save S3 so the page re-reads.
+        fireEvent.click(saveButton())
+        const background = await screen.findByRole("textbox", { name: /Public background/ })
+        expect(background).toHaveValue("Raised on the river")
+        expect(screen.queryByDisplayValue(/STALE-TYPED/)).not.toBeInTheDocument()
+    })
+})
+
+describe("CharacterPublicProfilePage: F2, focus survives a write or a refusal", () => {
+    it("after a save the page does not leave focus on the body: it goes to the new draft status", async () => {
+        const { server } = setup()
+        await form()
+        server.on("GET", PATH, () => ({ body: profile({ draft: draft({ row_version: 4, public_summary: "New" }) }) }))
+        type(/Public summary/, "New")
+        const save = saveButton()
+        save.focus()
+        fireEvent.click(save)
+        expect(await screen.findByText("Draft version 4.")).toBeInTheDocument()
+        await vi.waitFor(() => expect(screen.getByRole("heading", { name: "Draft" })).toHaveFocus())
+    })
+
+    it("after a save, focus that was on a control that still works stays on it", async () => {
+        const { server } = setup()
+        await form()
+        server.on("GET", PATH, () => ({ body: profile({ draft: draft({ row_version: 4, public_summary: "New" }) }) }))
+        type(/Public summary/, "New")
+        const summary = screen.getByRole("textbox", { name: /Public summary/ })
+        summary.focus()
+        fireEvent.submit(await form())
+        expect(await screen.findByText("Draft version 4.")).toBeInTheDocument()
+        await vi.waitFor(() => expect(screen.getByRole("textbox", { name: /Public summary/ })).toHaveFocus())
+    })
+
+    it("a person who moved focus to another connected control while the save was pending keeps it there", async () => {
+        const { server } = setup()
+        await form()
+        const answer = held<{ status: number; body: object }>()
+        server.on("POST", SAVE, () => answer.promise)
+        server.on("GET", PATH, () => ({ body: profile({ draft: draft({ row_version: 4, public_summary: "New" }) }) }))
+        type(/Public summary/, "New")
+        const save = saveButton()
+        save.focus()
+        fireEvent.click(save)
+        await vi.waitFor(() => expect(posts(server)).toHaveLength(1))
+        // Focus moves to a link outside the form while the request is out.
+        const home = screen.getAllByRole("link")[0]!
+        home.focus()
+        expect(home).toHaveFocus()
+        await act(async () => answer.release({ status: 200, body: { row_version: 4, created: false, changed: true } }))
+        expect(await screen.findByText("Draft version 4.")).toBeInTheDocument()
+        expect(home).toHaveFocus()
+    })
+
+    it("a refusal that rebuilds the form returns focus to the field that had it, or to the status", async () => {
+        const { server } = setup()
+        await form()
+        server.on("POST", SAVE, stale)
+        server.on("GET", PATH, () => ({ body: profile({ draft: draft({ row_version: 5, public_appearance: "Newer text" }) }) }))
+        type(/Public summary/, "Typed")
+        const save = saveButton()
+        save.focus()
+        fireEvent.click(save)
+        await vi.waitFor(() => expect(screen.getByRole("textbox", { name: /Public appearance/ })).toHaveValue("Newer text"))
+        expect(document.activeElement).not.toBe(document.body)
+        expect(screen.getByRole("heading", { name: "Draft" })).toHaveFocus()
+    })
+
+    it("a release that returns a new snapshot returns focus to the Release button", async () => {
+        const { server } = releaseSetup()
+        server.on("GET", PATH, () => ({
+            body: profile({ can_release: true, latest_release: release({ version_number: 1 }), releases: [meta()] }),
+        }))
+        confirm(await openRelease())
+        expect(await screen.findByRole("region", { name: "Latest release" })).toBeInTheDocument()
+        await vi.waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toHaveFocus())
+        expect(screen.queryByRole("dialog", { name: /Release draft version/ })).not.toBeInTheDocument()
+    })
+
+    it("a refused release returns focus to a usable place, not the body", async () => {
+        const { server } = releaseSetup()
+        server.on("POST", RELEASE, refused(409, "stale_write"))
+        server.on("GET", PATH, () => ({ body: profile({ can_release: true, draft: draft({ row_version: 5 }) }) }))
+        confirm(await openRelease())
+        expect(await screen.findByText(/Nothing was released/)).toBeInTheDocument()
+        await vi.waitFor(() => expect(screen.getByRole("button", { name: "Release" })).toHaveFocus())
+    })
+
+    it("a person who moved focus away while the release was pending keeps it", async () => {
+        const { server } = releaseSetup()
+        const answer = held<{ status: number; body: object }>()
+        server.on("POST", RELEASE, () => answer.promise)
+        server.on("GET", PATH, () => ({
+            body: profile({ can_release: true, latest_release: release({ version_number: 1 }), releases: [meta()] }),
+        }))
+        const dialog = await openRelease()
+        confirm(dialog)
+        await vi.waitFor(() => expect(releases(server)).toHaveLength(1))
+        await act(async () => answer.release(receipt()))
+        expect(await screen.findByRole("region", { name: "Latest release" })).toBeInTheDocument()
+        const home = screen.getAllByRole("link")[0]!
+        home.focus()
+        await act(async () => undefined)
+        expect(home).toHaveFocus()
+    })
+
+    it("Cancel still returns focus to Release", async () => {
+        releaseSetup()
+        const dialog = await openRelease()
+        fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+        expect(screen.getByRole("button", { name: "Release" })).toHaveFocus()
+    })
+})
