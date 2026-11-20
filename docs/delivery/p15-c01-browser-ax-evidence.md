@@ -1,5 +1,7 @@
 # D/P15-C01 browser and accessibility evidence
 
+> **Update (O-5):** §4's grading of finding C01-B1 / O-5 (Low, 3) is superseded. It was regraded Medium (5), corrected at `e8613f9`, and re-run; see §7. Sections 1 to 6 are the first run at `efe5a77` and are kept as the historical record.
+
 **Status:** recorded 2026-11-19 by Sonnet. Scripted real-browser and structural accessibility evidence for [D/P15-C01](work-register.md#p15-c01) (S01 public tier, S02 effective access). **Not** a human run, **not** an assistive-technology run, and **not** owner acceptance. The register's [browser](work-register.md#browser), [ax](work-register.md#ax) and [actor-a](work-register.md#actor-a) obligations keep their own scope and status; this record is the C01 slice of them.
 
 ## 1. What was tested
@@ -150,3 +152,85 @@ Each row is one scripted check on the recorded run. 'Observed' is what the page 
 - **A human run.** No person drove the pages; the run is scripted. Human review of focus visibility, wording and layout is not claimed.
 - **Zoom** was checked as equivalent viewport widths (640 px for 200%, 320 px for 400%) and not with browser zoom; **other browsers** (Firefox, Safari) were not run.
 - **Integrated head.** The register's `browser` and `ax` obligations are owned at the integrated P15 head; this record is at the C01 head. Owner acceptance ([actor-a](work-register.md#actor-a)), the corrected Sella persona run, and D/P15-C02 are outside it. A5c and P15-C02 were not started.
+
+## 7. Re-run after the O-5 correction (tested commit `e8613f9`)
+
+**O-5 is regraded and resolved.** §4's grading of C01-B1 / O-5 as Low (3) is superseded: the factors were re-scored as exposure 2, impact 1, triggerability 2, detection 0, blast radius 0 = **Medium (5)**, and it **blocked S02's stated acceptance** (E5, and "preserve expanded explanations across member-list reloads") for mutation-triggered reloads until corrected; see [S02 plan §11.8](p15-c01-s02-effective-access-plan.md#118-o-5-correction-sonnet-2026-11-19) for the grading, the acceptance impact and the correction. §4 and §3 are kept unchanged as the historical record of the first run.
+
+- **Tested commit:** `e8613f93a192e1f450c88811f98bd065668ab0dc` ("P15-C01: keep the Access page mounted across writes that cannot affect the caller (O-5)"); production build of that tree, same stack, database name, Chrome and method as §1, rebuilt and reseeded (the throwaway database was dropped afterwards). Artifacts: `C:\Users\nemes\dnd_ai_evidence_20261119\c01-o5-rerun\` (scripts, logs, result JSON, screenshots).
+- **Scripts changed:** `s02.mjs` expectations for G1 (a non-self write now leaves the page mounted) and new scenarios G8, G9 and G10; the fixture and the S01/structure scripts are unchanged.
+
+| Run | Checks | Passed | Failed |
+|---|---|---|---|
+| S01 personas | 29 | 29 | 0 |
+| Structure, keyboard, viewport, zoom | 18 | 18 | 0 |
+| S02 Access page (incl. G1, G8, G9, G10) | 34 | 34 | 0 |
+
+First attempt of this re-run: S02 33 of 34; G10's check for leftover content matched the signed-in user's name in the portal header (a harness assertion, not product behavior) and was scoped to the page content. The fixtures were rebuilt and S01, the structure run and S02 were run again in full; those are the counts above.
+
+**What changed in the browser.**
+
+- **G1 (non-self write):** the page is not remounted (`Loading portal` never appears; the status line is the same element and reads "Character access removed."); the open explanation and card stay open, are re-read after the list, and show only the surviving sources; the session is re-read once. Request order: revoke, session, list, explanation.
+- **G8 (write on the caller's own membership):** the session is reloaded, the page mounts again and the explanation is closed (fail closed, by design).
+- **G9 (in-place session read fails, injected 500):** the page falls back to a full reload and comes back with the explanation closed.
+- **G10 (lost authority, injected session and list responses):** "Access unavailable" with no member, revelation or explanation content; the write's confirmation stays on the mounted status line.
+- **Focus** after a write is the page body (inherited O-3; the confirm control is replaced by the list reload). Refresh access focus behavior (G2 to G4) is unchanged from §3.
+
+### S02 Access page, re-run results
+
+### S02 Access page (explanation and Refresh access)
+
+| # | Check | Result | Observed |
+|---|---|---|---|
+| 1 | G1 explanation lists a Revelation source per character and the relationship | pass | Hide access explanation \| Why Phase13E Dev Player A can see this \| View Campaign \| Role: Player \| Discover Character \| Character access: Owner (Phase13C Character A) |
+| 2 | G1 Revealed characters section lists both, read-only (no button/link inside) | pass | Revealed charactersPhase13C Character A â€” MemberPhase13C Character B â€” Member |
+| 3 | G1 no id, audience-kind code or revelation id rendered | pass | scanned main text for codes and uuids |
+| 4 | G1 order after the write: the session is re-read, the list is read, then the explanation (after the list) | pass | ["POST POST revoke","GET session","GET overview","GET explain:88bf30"] |
+| 5 | G1 the page was NOT remounted: 'Loading portal' never appeared and the status line is the same element | pass | {"loadingPortalSeen":0,"sameStatusLine":true} |
+| 6 | G1 'Character access removed.' is on the status line | pass | "Character access removed." |
+| 7 | G1 the open explanation and card stayed open (aria-expanded=true) and show the surviving sources only | pass | Hide access explanation \| Why Phase13E Dev Player A can see this \| View Campaign \| Role: Player \| Discover Character \| Revelation: Member (Phase13C Character A) |
+| 8 | G1 Character access now empty; Revealed characters unchanged | pass |  |
+| 9 | G1 focus after the write (inherited O-3: the confirm control was replaced by the list reload) | pass | focus=BODY |
+| 10 | G2 refresh re-reads the list then the explanation | pass | ["GET overview","GET explain:88bf30"] |
+| 11 | G2 the revoked revelation is gone from both list and explanation; survivor remains | pass | Revealed charactersPhase13C Character B â€” Member |
+| 12 | G2 'Access list refreshed.' announced only after the list was read | pass | Access list refreshed. |
+| 13 | G2 success: focus restored to that member's explanation toggle (Refresh control was removed by the reload) | pass | button[explain-toggle:88bf3028]:Hide access explanation |
+| 14 | G2 explanation still open, aria-expanded=true | pass |  |
+| 15 | G4 while pending: the loading page is shown, no explanation or member content is in the DOM | pass |  |
+| 16 | G4 focus stays on the control the manager moved to ("Invitations" tab link) after the refresh completes | pass | moved to a:Invitations; after: a:Invitations |
+| 17 | G4 the refresh still completed (announcement and explanation reloaded, list intact) | pass | Access list refreshed. |
+| 18 | G5a failed list read: the error page shows with a Try again button; no member, source or explanation content remains | pass |  |
+| 19 | G5a no 'refreshed' announcement for the failed read | pass | "" |
+| 20 | G5a Try again: refreshed is announced only now; the open explanation was re-read (list first) | pass | ["GET overview","GET explain:88bf30"] |
+| 21 | G5a focus after the retry | pass | focus=button[explain-toggle:88bf3028]:Hide access explanation |
+| 22 | G5b list refreshed (announced) but the explanation says it could not load, with Retry, and shows no source or Refresh button from before | pass | Hide access explanation \| Why Phase13E Dev Player A can see this \| \| The access explanation could not be loaded. Retry |
+| 23 | G5b Retry re-reads only the explanation (no list request) | pass | ["GET explain:88bf30"] |
+| 24 | G6 explanation shows the revelation sources and the existing denial line, no new wording | pass | Hide access explanation \| Why Phase13E Dev Player A can see this \| View Campaign \| Role: Player \| Discover Character \| Revelation: Member (Phase13C Character B) \| V |
+| 25 | G3 the removed member's card and explanation are gone; no trace of them in the page | pass |  |
+| 26 | G3 fallback focus is the status line (the member's own toggle no longer exists) | pass | p[status-line]:Access list refreshed. |
+| 27 | G3 the other member's open explanation survived and was re-read | pass |  |
+| 28 | G8 own-membership write: the session was reloaded ('Loading portal' appeared) and the page mounted again with the explanation closed | pass | {"net":["POST POST revoke","GET session","GET overview","GET session"],"expanded":"false"} |
+| 29 | G9 session read failed (500): the page fell back to a full reload (a second read) and came back with the explanation closed | pass | session reads=2 |
+| 30 | G10 authority lost: 'Access unavailable' with no member, revelation, explanation or Refresh content | pass | Access unavailable |
+| 31 | G10 the write's own confirmation remains on the (still mounted) status line | pass | "Character access removed." |
+| 32 | G7 setup: GM2's Campaign Owner role revoked by the admin | pass | status 200 |
+| 33 | G7 authority lost: the refresh shows the unavailable page and no member, revelation or explanation content | pass | Access unavailable |
+| 34 | G7 after the 403 only the refresh's list read was made; no explanation request followed | pass | GET overview |
+
+34 of 34 checks passed.
+
+
+### C01 scripted evidence versus the final integrated-head obligations
+
+None of the evidence in this record satisfies an integrated-head obligation. It is C01-scoped, scripted, and taken at `efe5a77` (first run) and `e8613f9` (re-run), neither of which is the integrated P15 head; the register also lists `p15-integration` verified as a prerequisite of `browser` and `ax`.
+
+| Register obligation | Still owed | What this record contributes |
+|---|---|---|
+| [browser](work-register.md#browser) | Run at the final integrated head: the clean GM/player loop, access loss, save recovery, snapshots, DR-1 TC-10/31, DR-3 roster, DR-4/6 cause/explanation, with separate scripted and human fields. | A scripted C01 field only: the persona run and the Access explanation flows, including access loss (G7, G10). No human field. The scripts are kept and can be re-run at the final head. |
+| [ax](work-register.md#ax) | Assistive-technology, keyboard, viewport and zoom evidence at the final head. | Keyboard activation of the C01 controls, heading and region structure, `aria-expanded`, the `role="status"` region, and reflow at 320/360/640 px. No assistive technology. |
+| [b20](work-register.md#b20) keyboard activation | Real keyboard activation, focus and observable result at the final head. | Real key presses on the C01 controls (summary, Explain access, Refresh access): partial, wrong head. |
+| [b16](work-register.md#b16) actual zoom | Actual 200% and 400% browser zoom, including 320 CSS px. | Viewport widths of 640 and 320 px only: **not** actual zoom. Not satisfied. |
+| [b9](work-register.md#b9) Escape and backdrop | Physical Escape and backdrop interaction with focus return. | None (C01 has no dialog). |
+| [b21](work-register.md#b21) | Owner-deferred. | Untouched. |
+
+Still pending and **not performed**: a screen-reader run (so that any announcement is spoken is not established), a human run, actual browser zoom, other browsers (Firefox, Safari), the integrated-head `browser` and `ax` runs, owner acceptance ([actor-a](work-register.md#actor-a)) and the checkpoint merge. D/P15-C02 and A5c were not started.

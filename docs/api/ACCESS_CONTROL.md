@@ -1038,13 +1038,16 @@ Portal (P15-C01-S02): a `revelation` source is labelled "Revelation" (`Revelatio
 field. Each member card on the Access page lists the overview's `revelations` read-only under
 **Revealed characters** (`Mira — Access group`, in server order, duplicates kept, no control and no id
 or audience-kind code; "No revealed characters." when empty). Which member cards and explanations are
-open is held above the overview boundary by membership id, so they survive an overview reload that does
-not reload the session: **Refresh access** beside a loaded explanation, and **Try again** after a failed
-list read. Such a reload unmounts every explanation while the list loads and re-reads each open one only
-after the list answered; nothing from before is shown meanwhile. An Access mutation (for example removing
-character access) also reloads the session, which replaces the whole page with "Loading portal": every open
-card and explanation then starts closed and the page's status-line announcement is lost (inherited
-observation O-5, found in the real-browser run; the behavior predates S02). The two reads are independent observations, not one snapshot, and the portal never matches
+open is held above the overview boundary by membership id, so they survive an overview reload: **Refresh
+access** beside a loaded explanation, **Try again** after a failed list read, and a confirmed Access write the
+caller cannot be affected by (a control in another member's card, **Create group**, or a group the caller is not
+in; the authoritative session is then re-read in place, with a read of its own, and the page stays mounted, so
+its status-line announcement is unbroken). Such a reload unmounts every explanation while the list loads and
+re-reads each open one only after the list answered; nothing from before is shown meanwhile. A write that may
+affect the caller (their own membership, a group they are in or could be added to, or any control outside a
+scope) reloads the session instead and the page mounts again with every card and explanation closed (fail
+closed), as does an in-place session read that fails, is not applied or is overtaken (inherited observation O-5,
+regraded Medium and corrected after the real-browser run). The two reads are independent observations, not one snapshot, and the portal never matches
 an explanation source to an overview row (sources name characters, not ids). A failed list read, or a
 failed explanation read, is not announced as refreshed. A member who is absent from the new list is
 forgotten, so they do not reopen if they return. A caller without `access.manage` receives no source

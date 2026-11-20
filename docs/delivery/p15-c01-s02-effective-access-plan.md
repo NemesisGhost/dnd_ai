@@ -339,6 +339,8 @@ Recorded by Sonnet, 2026-11-19. Real-browser, accessibility, integrated-head CI,
 | E19 | the full existing suite |
 | partial failure (owner instruction) | integration file: explanation fails after a successful list, Retry re-reads only the explanation |
 
+**Annotation added after the real-browser run (O-5).** The E5/E9 row above was verified in jsdom with a session whose `reload()` does nothing; it therefore did not exercise the session reload that remounts the Access page in the real app, and E5's "disclosure still open" and "announced" clauses did not hold there for a mutation. See §11.7 and §11.8. This record is otherwise unchanged.
+
 **Verification (portal/ PowerShell; root for the last two).**
 
 | Run | Result |
@@ -436,6 +438,69 @@ The requested mutation probe replaced the connected-focus early return with an u
 
 Scripted real-browser evidence for this slice's E5/E6/E8 and the focus obligations is recorded in [p15-c01-browser-ax-evidence.md](p15-c01-browser-ax-evidence.md), taken at `efe5a77` on a production build (S02: 30 of 30 checks; structure, keyboard, viewport and zoom: 18 of 18). It confirms Refresh access (list then explanation, success-only announcement, focus restored to the member's toggle, focus left where the manager moved it, status-line fallback when the member disappears, failed-list and failed-explanation behavior, authority loss). It also found one behavior that differs from this plan and from the §11.3 jsdom evidence:
 
-- **O-5 (inherited, Low, score 3).** An Access *mutation* (for example removing character access) calls the session `reload()`, which replaces the whole page with "Loading portal". The open cards and explanations therefore start closed and the status-line announcement is lost. §2.3 and E5 above say an open explanation survives a mutation's reload; that holds for Refresh access and for Try again after a failed list read, not for mutations. The jsdom test used a session whose `reload` does nothing. The hook and boundary files are unchanged since `cdfdf21`, so this predates S02; it is recorded beside O-1 to O-4, not fixed here, and needs an owner decision (see the evidence record, finding C01-B1). The ACCESS_CONTROL §3q and portal-behavior §8.3 paragraphs were corrected accordingly.
+- **O-5 (inherited, Low, score 3).** An Access *mutation* (for example removing character access) calls the session `reload()`, which replaces the whole page with "Loading portal". The open cards and explanations therefore start closed and the status-line announcement is lost. §2.3 and E5 above say an open explanation survives a mutation's reload; that holds for Refresh access and for Try again after a failed list read, not for mutations. The jsdom test used a session whose `reload` does nothing. The hook and boundary files are unchanged since `cdfdf21`, so this predates S02; it is recorded beside O-1 to O-4, not fixed here, and needs an owner decision (see the evidence record, finding C01-B1). **Update:** regraded Medium (5) and corrected; see §11.8. The ACCESS_CONTROL §3q and portal-behavior §8.3 paragraphs were corrected accordingly.
 
 Assistive-technology and human checks remain pending (the evidence record, §6). S02 review status (§11.4 to §11.6) is unchanged.
+
+## 11.8 O-5 correction (Sonnet), 2026-11-19
+
+This section regrades O-5, records what it did to this slice's acceptance, and records the correction and its evidence. §11.3 to §11.7 are unchanged historical records; where they say otherwise, this section controls. It does not accept the slice. **Status: O-5 corrected; Luna re-review pending.**
+
+**Base and heads.** Starting head `72b64a601b01b679e2e02463ecc39cfc09d01809` (draft PR #70, CI green). Correction commit `e8613f93a192e1f450c88811f98bd065668ab0dc` ("P15-C01: keep the Access page mounted across writes that cannot affect the caller (O-5)"); the records commit that follows it is reported in the handoff. PR #70 stays a draft; nothing was merged.
+
+### Regrade (supersedes "Low, score 3" in §11.7 and in the evidence record)
+
+| Factor | Score | Reason |
+|---|---:|---|
+| Supported-path exposure | 2 | An access manager (privileged caller) on the Access page, after any Access mutation: a normal, routine path. The earlier 1 understated it. |
+| Impact magnitude | 1 | Open explanations close and the status-line confirmation is lost; no data is lost. Not raised to 2: whether a screen reader is silent was not established (no AT run). |
+| Triggerability | 2 | Every Access mutation that succeeded. The earlier 1 understated it. |
+| Detection and recovery | 0 | The closed explanations are visible and recoverable by reopening. Would be 1 if an AT run showed the announcement is silent. |
+| Blast radius | 0 | One manager's current page. |
+| **Total** | **5, Medium** | Default: prioritize a bounded correction; acceptance with the issue needs an explicit, evidence-backed risk decision. |
+
+### Acceptance impact (before the correction)
+
+The behavior predates S02 (the hook, session and boundary files are unchanged since `cdfdf21`), so it is not a regression. The rubric still lets a pre-existing issue block a slice that claims to fix it, and S02 did. For mutation-triggered reloads in the real app these requirements were **not met**: your scope choice "preserve expanded explanations across member-list reloads" and plan §2.3 ("whether from a mutation on the page or from Refresh access"); §1.3 point 3 (the explanation the manager is looking at no longer closes on every change); E5 ("the disclosure is still open" and "'Character access removed.' is announced"); and §2.4 (the survivor visible in the explanation, not only the list). They were met for Refresh access and Try again. S02/T01's implementation review pass (§11.4 to §11.6, at `df74749`) rested on jsdom evidence that mocked away the remount; that pass stands as a record of what was reviewed and does not cover this correction.
+
+### Annotation of the earlier E5 evidence
+
+The E5/E9 row of §11.3, the integration test it cites (`CampaignAccessPage.effectiveAccess.integration.test.tsx`), and the seven other `CampaignAccessPage.*.integration.test.tsx` suites (role change/add/revoke, character relationship, resource grant, access group, add/remove member, and the page test) render the page under a session context whose `reload()` does nothing. They never mount `AuthenticatedSessionBoundary` or the real session hook, so the "Loading portal" remount that every confirmed Access write caused in the real app cannot occur in them. Their names and comments ("persistent announcement survives the overview's own loading transition") are true of the overview boundary alone. The hook unit tests assert that `reload` was called, not what the call does to the page. That is the false confidence O-5 exposed; those suites are kept (they test other behavior) and the E5 test now carries a pointer to the real-lifecycle test.
+
+### What `refresh()` does (inspected before choosing the design)
+
+`useSessionBootstrap.refresh()` re-reads the bootstrap without passing through `loading`. It resolves `true` only when its result was **published**. It resolves `false` when the session turned out to be unauthenticated (state becomes `unauthenticated`), or when the read was not its own to publish (a reload, an expiry, or a newer read took ownership: "NOT APPLIED. It is not a verdict"). It rejects when the read failed. A call with no signal **joins a read already in flight**, which may have started before this write committed and would then report an older state. So a resolved call is not proof that fresh state was applied, and the shared form must not be used after a write.
+
+### Correction
+
+- **`hooks/useAccessWriteCompletion.ts`** (new): `useAccessWriteCompletion()` returns the function an Access mutation hook calls when its write is confirmed. With `affectsCaller` true (the default when no scope is provided) it calls `reload()` exactly as before. With it false it calls `refresh()` **with a signal of its own** (never joins an older read; never aborted, so leaving the page does not cancel confirming a committed write), and treats only a resolved `true` as applied. A resolved `false` or `undefined`, a rejection, or a synchronous throw falls back to the full `reload()` (fail closed; this includes an overtaken, superseded or unauthenticated read).
+- **16 Access mutation hooks** call it instead of `reload()` on success (add/change/revoke role, add/change/revoke character relationship, add/revoke resource grant, add group resource grant, create/update/deactivate/reactivate access group, add/remove group member, remove campaign member). Their 401 path still calls `reload()`. `useAddCampaignMember` never reloaded on success and is unchanged. Invitation, account-admin and revoke-all-sessions hooks are not Access-page writes and are unchanged.
+- **`pages/AccessPage.tsx`** supplies the scope: a control in the **caller's own member card** may affect the caller (reload); in another member's card it cannot. In a **group card** the write may affect the caller if the caller is a member of that group, or if the caller is not a listed member at all (unknown: reload); adding a group member may also affect the caller when the caller is among the members offered (active, not already in the group). **Create group** cannot (a new group has no members). Everything else, and any control outside a scope, stays on the reload path.
+- **Preserved:** an authoritative bootstrap after every confirmed write; reload for self-affecting writes, 401, and any refresh that failed or was not applied; the overview retry and its ordering (the explanation is read after the list); idempotency and status snapshots in the hooks; `CampaignLayout`'s handling of a revoked perspective.
+
+### Evidence
+
+- **Regression tests (real session lifecycle).** `CampaignAccessPage.sessionLifecycle.integration.test.tsx` mounts the real `SessionProvider` (real `useSessionBootstrap`, reading `/auth/session`), the real `AuthenticatedSessionBoundary` and the Access page, with only the network mocked: a non-self write keeps the page mounted (same status-line element, text present, explanation open and re-read after the list, "Loading portal" never shown, one session re-read); a write on the caller's own membership reloads the session and remounts; a failed in-place read falls back to a reload; a session that ended leaves for sign-in with no access content; a refreshed session and list reporting lost access show "Access unavailable" with no member or explanation content; and a read overtaken by a newer one is not applied and reloads. `useAccessWriteCompletion.test.tsx` (7 tests) covers the helper (default scope, own signal, applied, not applied, no answer, rejection, throw).
+- **It fails before the correction.** With the helper forced to the old behavior (always reload), 4 of the 6 lifecycle tests failed (non-self mounted, failed-read fallback, authority loss, overtaken read) and the 2 fail-closed tests passed as expected. `useAccessWriteCompletion.ts` SHA-256 before and after the probe: `DCB42CA1DAF42BF6EE7DAB4AC9282800CF6DEA8A64C341E8B03186140D0BA8E2`; restored.
+- **Browser re-run on a production build of `e8613f9`** (same stack and method as the evidence record's §1; see its §7): S02 34 of 34, structure/keyboard/reflow 18 of 18, S01 personas 29 of 29. In the real browser a non-self write (G1) left the page mounted (`Loading portal` never appeared, the status line was the same element and read "Character access removed.", the open explanation stayed open and was re-read after the list, the session was re-read once); a write on the caller's own membership (G8) reloaded the session and remounted with the explanation closed; a failed session read (G9, injected 500) fell back to a full reload; and lost authority (G10, injected session and list responses) showed "Access unavailable" with no member or explanation content while the write's confirmation stayed on the status line. Focus after a write is the page body (O-3, inherited and unchanged: the confirm control is replaced by the list reload).
+- **Not claimed.** No screen reader was run, so that the announcement is **spoken** is not established; the evidence is that the live region is `role="status" aria-live="polite"`, stays mounted, and its text changes. Actual browser zoom, human review and other browsers remain unperformed.
+
+### Verification (portal/ PowerShell; root for the last two)
+
+| Run | Result |
+|---|---|
+| Focused: lifecycle test, helper test | lifecycle first run: 2 of 6 failed (a harness defect: the page's initial "Loading portal" was counted; the counter now starts after first load), rerun 6 of 6; helper 7 of 7 |
+| Pre-correction probe | 4 of 6 failed, restored, bytes verified |
+| `src/pages`, `src/hooks`, `src/components` and the character-record suite | 275 files, 3150 tests passed (existing Access, hook and component tests unchanged and passing) |
+| `npm test` | first run: 430 files, 5284 tests passed |
+| `npm run lint` | passed |
+| `npm run build` | passed (existing chunk-size warning) |
+| Browser re-run | first attempt: 33 of 34 (G10's page-text check matched the signed-in user's name in the portal header, a harness assertion; scoped to the page content); rebuilt fixtures and run again in full: 34 of 34, with S01 and the structure run 29 of 29 and 18 of 18 |
+| `uv run python scripts/check_documentation.py`, `git diff --check` | recorded in the handoff for the final head |
+| CI | draft PR #70 on the final head: recorded in the handoff |
+
+### Remaining limitations
+
+- A self-affecting write still remounts the page (by design, fail closed), and a refresh that is overtaken falls back to a reload even when the newer read had already applied fresh state; both are conservative.
+- O-3 (focus after a reload or write) is unchanged; O-1, O-2, O-4, G-1 and G-2 are unchanged.
+- Screen-reader, actual-zoom, human and other-browser checks remain pending, as do the register's integrated-head `browser` and `ax` obligations, owner acceptance and checkpoint merge. A5c and P15-C02 were not started. Luna's re-review of this correction is pending.
