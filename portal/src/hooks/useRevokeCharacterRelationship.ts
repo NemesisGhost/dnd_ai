@@ -9,6 +9,7 @@ import {
     revokeCharacterRelationship,
 } from "../api/revokeCharacterRelationship"
 import { useSession } from "../context/SessionContext"
+import { useAccessWriteCompletion } from "./useAccessWriteCompletion"
 
 export type RevokeCharacterRelationshipStatus =
     | { kind: "idle" }
@@ -53,6 +54,9 @@ export function useRevokeCharacterRelationship(
     onSuccess: () => void,
 ): UseRevokeCharacterRelationshipResult {
     const { state: sessionState, reload } = useSession()
+    // Confirmed write: reload the session, or re-read it in place when the write cannot affect the caller
+    // (hooks/useAccessWriteCompletion).
+    const completeWrite = useAccessWriteCompletion()
     const controllerRef =
         useRef<AbortController | null>(null)
     const idempotencyRef =
@@ -139,7 +143,7 @@ export function useRevokeCharacterRelationship(
                     // character perspective (self-revoke) — never
                     // manufacture the updated perspective set locally,
                     // always re-derive it from a fresh bootstrap.
-                    reload()
+                    completeWrite()
                 })
                 .catch((cause: unknown) => {
                     if (controller.signal.aborted) {
@@ -189,6 +193,7 @@ export function useRevokeCharacterRelationship(
             campaignId,
             onSuccess,
             reload,
+            completeWrite,
             resolveIdempotencyKey,
         ],
     )

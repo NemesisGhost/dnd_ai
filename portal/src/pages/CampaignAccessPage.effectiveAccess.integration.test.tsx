@@ -229,6 +229,10 @@ afterEach(() => {
 })
 
 describe("Access page: explanation and list refreshed together", () => {
+    // NOTE (O-5): this file supplies a session whose reload() does nothing, so it cannot see the page being
+    // remounted by a session reload. Before the O-5 correction the real app closed the explanation and lost the
+    // announcement after this very mutation. The real session lifecycle is exercised in
+    // CampaignAccessPage.sessionLifecycle.integration.test.tsx.
     it("keeps an open explanation across a mutation, re-reads the list and then the explanation, and shows the surviving source (E5, E9)", async () => {
         const world = makeWorld([member(ARIA, "Aria the GM", { relationship: true, revelations: [{ kind: "Access group", code: "access_group" }] })])
         const { container } = renderAt(world)

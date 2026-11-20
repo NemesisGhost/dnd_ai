@@ -1,4 +1,4 @@
-import { useId } from "react"
+import { useId, useMemo } from "react"
 import { AddAccessGroupMember } from "../components/AddAccessGroupMember"
 import { AddCampaignMember } from "../components/AddCampaignMember"
 import { AddCharacterRelationship } from "../components/AddCharacterRelationship"
@@ -19,6 +19,7 @@ import { RevokeMemberRole } from "../components/RevokeMemberRole"
 import { RevokeResourceGrant } from "../components/RevokeResourceGrant"
 import { useSession } from "../context/SessionContext"
 import { useAccessDisclosure } from "../hooks/useAccessDisclosure"
+import { AccessWriteScopeContext } from "../hooks/useAccessWriteCompletion"
 import type { AccessDisclosure } from "../hooks/useAccessDisclosure"
 import { humanizeCode } from "../utils/humanize"
 import type {
@@ -30,6 +31,9 @@ import type {
     CampaignAccessOverview,
     GrantableResourceCapability,
 } from "../types/accessOverview"
+
+// A scope for controls whose write cannot change the caller's own authority.
+const NOT_THE_CALLER = { affectsCaller: false }
 
 function formatTimestamp(timestamp: string): string {
     return new Intl.DateTimeFormat(undefined, {
@@ -51,6 +55,9 @@ interface MemberAccessCardProps {
     onMutationStart: () => void
     disclosure: AccessDisclosure
     onRefreshAccess: (campaignMembershipId: string) => void
+    // Whether a write made from this card can change the CALLER's own authority: the card is the caller's
+    // own membership. Any other member's card cannot (see hooks/useAccessWriteCompletion).
+    isCallerMember: boolean
 }
 
 function MemberAccessCard({
@@ -66,12 +73,14 @@ function MemberAccessCard({
     onMutationStart,
     disclosure,
     onRefreshAccess,
+    isCallerMember,
 }: MemberAccessCardProps) {
     const rolesHeadingId = useId()
     const relationshipsHeadingId = useId()
     const grantsHeadingId = useId()
     const revelationsHeadingId = useId()
     const membershipId = member.campaign_membership_id
+    const writeScope = useMemo(() => ({ affectsCaller: isCallerMember }), [isCallerMember])
 
     const roleSummary = member.roles
         .map((role) => role.display_name)
@@ -88,6 +97,7 @@ function MemberAccessCard({
     )
 
     return (
+        <AccessWriteScopeContext.Provider value={writeScope}>
         <details
             className="access-member-card"
             open={disclosure.isCardOpen(membershipId)}
@@ -314,6 +324,7 @@ function MemberAccessCard({
                 />
             </div>
         </details>
+        </AccessWriteScopeContext.Provider>
     )
 }
 
@@ -325,6 +336,10 @@ interface AccessGroupCardProps {
     grantableResourceCapabilities: GrantableResourceCapability[]
     onChanged: (message: string) => void
     onMutationStart: () => void
+    // The caller is in this group (or is not known to be a member at all): a write to the group can change
+    // the caller's own capabilities. Adding a member can, too, if the caller is one of the members offered.
+    callerAffectedByGroup: boolean
+    callerOfferedToAdd: boolean
 }
 
 // One card per access group (never nested inside a member card — a group
@@ -338,7 +353,14 @@ function AccessGroupCard({
     grantableResourceCapabilities,
     onChanged,
     onMutationStart,
+    callerAffectedByGroup,
+    callerOfferedToAdd,
 }: AccessGroupCardProps) {
+    const groupScope = useMemo(() => ({ affectsCaller: callerAffectedByGroup }), [callerAffectedByGroup])
+    const addMemberScope = useMemo(
+        () => ({ affectsCaller: callerAffectedByGroup || callerOfferedToAdd }),
+        [callerAffectedByGroup, callerOfferedToAdd],
+    )
     const membersHeadingId = useId()
     const grantsHeadingId = useId()
 
@@ -364,6 +386,7 @@ function AccessGroupCard({
 
 
     return (
+        <AccessWriteScopeContext.Provider value={groupScope}>
         <details className="access-member-card">
             <summary>
                 <strong>{group.name}</strong>
@@ -437,14 +460,16 @@ function AccessGroupCard({
                     )}
 
                     {isActive && (
-                        <AddAccessGroupMember
-                            campaignId={campaignId}
-                            accessGroupId={group.access_group_id}
-                            groupName={group.name}
-                            eligibleMembers={eligibleMembers}
-                            onChanged={onChanged}
-                            onMutationStart={onMutationStart}
-                        />
+                        <AccessWriteScopeContext.Provider value={addMemberScope}>
+                            <AddAccessGroupMember
+                                campaignId={campaignId}
+                                accessGroupId={group.access_group_id}
+                                groupName={group.name}
+                                eligibleMembers={eligibleMembers}
+                                onChanged={onChanged}
+                                onMutationStart={onMutationStart}
+                            />
+                        </AccessWriteScopeContext.Provider>
                     )}
                 </section>
 
@@ -490,6 +515,7 @@ function AccessGroupCard({
                 </section>
             </div>
         </details>
+        </AccessWriteScopeContext.Provider>
     )
 }
 
@@ -521,6 +547,11 @@ export function AccessPage({
     const disclosure = heldDisclosure ?? ownDisclosure
     const refreshAccess = onRefreshAccess ?? (() => onChanged("Access information refreshed."))
     const { state: sessionState } = useSession()
+    // Who the caller is among the members, to tell a write that can change their own authority from one
+    // that cannot. Unknown (not listed) is treated as the caller being affected by every group.
+    const callerUserId = sessionState.status === "authenticated" ? sessionState.bootstrap.user.user_id : null
+    const callerMembership = overview.members.find((member) => member.user_id === callerUserId)
+    const callerMembershipId = callerMembership?.campaign_membership_id ?? null
     const campaignName =
         sessionState.status === "authenticated"
             ? (sessionState.bootstrap.campaigns.find(
@@ -577,6 +608,7 @@ export function AccessPage({
                                 onMutationStart={onMutationStart}
                                 disclosure={disclosure}
                                 onRefreshAccess={refreshAccess}
+                                isCallerMember={member.user_id === callerUserId}
                             />
                         </li>
                     ))}
@@ -598,12 +630,15 @@ export function AccessPage({
                     in-world party or reveal any in-world knowledge.
                 </p>
 
-                <CreateAccessGroup
-                    campaignId={campaignId}
-                    campaignName={campaignName}
-                    onChanged={onChanged}
-                    onMutationStart={onMutationStart}
-                />
+                {/* A new group has no members: creating it cannot change the caller's authority. */}
+                <AccessWriteScopeContext.Provider value={NOT_THE_CALLER}>
+                    <CreateAccessGroup
+                        campaignId={campaignId}
+                        campaignName={campaignName}
+                        onChanged={onChanged}
+                        onMutationStart={onMutationStart}
+                    />
+                </AccessWriteScopeContext.Provider>
 
                 {overview.access_groups.length > 0 ? (
                     <ul className="access-page__member-list">
@@ -621,6 +656,18 @@ export function AccessPage({
                                     }
                                     onChanged={onChanged}
                                     onMutationStart={onMutationStart}
+                                    callerAffectedByGroup={
+                                        callerMembershipId === null ||
+                                        group.members.some(
+                                            (groupMember) =>
+                                                groupMember.campaign_membership_id === callerMembershipId,
+                                        )
+                                    }
+                                    callerOfferedToAdd={
+                                        callerMembership !== undefined &&
+                                        callerMembership.status_code === "active" &&
+                                        callerMembership.account_is_active
+                                    }
                                 />
                             </li>
                         ))}

@@ -4,6 +4,7 @@ import {
     deactivateAccessGroup,
 } from "../api/deactivateAccessGroup"
 import { useSession } from "../context/SessionContext"
+import { useAccessWriteCompletion } from "./useAccessWriteCompletion"
 
 export type DeactivateAccessGroupStatus =
     | { kind: "idle" }
@@ -39,6 +40,9 @@ export function useDeactivateAccessGroup(
     onSuccess: () => void,
 ): UseDeactivateAccessGroupResult {
     const { state: sessionState, reload } = useSession()
+    // Confirmed write: reload the session, or re-read it in place when the write cannot affect the caller
+    // (hooks/useAccessWriteCompletion).
+    const completeWrite = useAccessWriteCompletion()
     const controllerRef = useRef<AbortController | null>(null)
     const idempotencyRef = useRef<IdempotencyReservation | null>(null)
 
@@ -109,7 +113,7 @@ export function useDeactivateAccessGroup(
                     // group-derived access — never manufacture the
                     // updated capability set locally, always re-derive it
                     // from a fresh bootstrap.
-                    reload()
+                    completeWrite()
                 })
                 .catch((cause: unknown) => {
                     if (controller.signal.aborted) {
@@ -147,7 +151,7 @@ export function useDeactivateAccessGroup(
                     })
                 })
         },
-        [status.kind, sessionState, campaignId, onSuccess, reload, resolveIdempotencyKey],
+        [status.kind, sessionState, campaignId, onSuccess, reload, completeWrite, resolveIdempotencyKey],
     )
 
     const reset = useCallback(() => {
