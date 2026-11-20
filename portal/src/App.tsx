@@ -48,6 +48,7 @@ import { ItemDefinitionFormPage, ItemDefinitionsPage } from "./pages/ItemDefinit
 import { CreateItemPage, EditItemPage, ItemsPage } from "./pages/ItemPages"
 import { ItemWorkspacePage } from "./pages/ItemWorkspacePage"
 import { NpcPortrayalPage } from "./pages/NpcPortrayalPage"
+import { CharacterPublicProfilePage } from "./pages/CharacterPublicProfilePage"
 import { QuestSectionRedirect } from "./pages/QuestSectionRedirect"
 import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
 import {
@@ -364,6 +365,11 @@ function App() {
             <Route
               path="characters/:characterId/portrayal"
               element={<NpcPortrayalPage />}
+            />
+
+            <Route
+              path="characters/:characterId/public-profile"
+              element={<CharacterPublicProfilePage />}
             />
 
             <Route path="items" element={<ItemsPage />} />
