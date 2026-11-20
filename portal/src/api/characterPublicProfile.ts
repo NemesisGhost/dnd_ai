@@ -1,4 +1,6 @@
 import type {
+    ReleasePublicProfileBody,
+    ReleasePublicProfileReceipt,
     SavePublicProfileDraftBody,
     SavePublicProfileDraftReceipt,
 } from "../types/characterPublicProfile"
@@ -21,6 +23,19 @@ export function saveCharacterPublicProfileDraft(
     return apiRequest<SavePublicProfileDraftReceipt>(
         "POST",
         `${publicProfilePath(campaignId, characterId)}/draft`,
+        { body, ...ctx },
+    )
+}
+
+export function releaseCharacterPublicProfile(
+    campaignId: string,
+    characterId: string,
+    body: ReleasePublicProfileBody,
+    ctx: MutationContext,
+): Promise<ReleasePublicProfileReceipt> {
+    return apiRequest<ReleasePublicProfileReceipt>(
+        "POST",
+        `${publicProfilePath(campaignId, characterId)}/releases`,
         { body, ...ctx },
     )
 }

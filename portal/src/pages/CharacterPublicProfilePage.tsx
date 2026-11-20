@@ -2,7 +2,11 @@ import { useState } from "react"
 import type { ReactNode } from "react"
 import { AlertTriangle } from "lucide-react"
 import { Link, useParams } from "react-router"
-import { publicProfilePath, saveCharacterPublicProfileDraft } from "../api/characterPublicProfile"
+import {
+    publicProfilePath,
+    releaseCharacterPublicProfile,
+    saveCharacterPublicProfileDraft,
+} from "../api/characterPublicProfile"
 import { useAnnounce } from "../components/authoring/announcer"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { TextAreaField } from "../components/authoring/fields"
@@ -20,9 +24,14 @@ import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import { classifyApiError } from "../types/apiError"
+import type { AuthoringError } from "../types/apiError"
 import type {
     CharacterPublicProfileRead,
     PublicProfileDraft,
+    PublicProfileLatestRelease,
+    PublicProfileRelease,
+    ReleasePublicProfileBody,
+    ReleasePublicProfileReceipt,
     SavePublicProfileDraftBody,
     SavePublicProfileDraftReceipt,
 } from "../types/characterPublicProfile"
@@ -187,7 +196,7 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
                 {stale ? <StaleReadNotice what="public profile" onRetry={() => void refetch()} /> : null}
                 {refusal !== null ? <RefusalNotice refusal={refusal} onDismiss={() => setRefusal(null)} /> : null}
                 <Loaded
-                    key={`${epoch}:${view.draft?.row_version ?? 0}`}
+                    key={`${epoch}:${view.draft?.row_version ?? 0}:${view.latest_release?.version_number ?? 0}`}
                     campaignId={campaignId}
                     characterId={characterId}
                     view={view}
@@ -244,6 +253,37 @@ function RefusalNotice({ refusal, onDismiss }: { refusal: Refusal; onDismiss: ()
     )
 }
 
+const NOTE_MAX = 1000
+
+const RELEASE_REFUSAL: Readonly<Record<string, string>> = {
+    character_reveal_required: "You no longer have authority to release this profile. Nothing was released.",
+    public_profile_field_withheld:
+        "A field of this profile cannot be released by you, so nothing was released.",
+    stale_write: "The draft or character changed since you opened it. Nothing was released; review the latest draft and try again.",
+    public_profile_identity_version_required:
+        "The draft or character changed since you opened it. Nothing was released; review the latest draft and try again.",
+    public_profile_draft_missing: "There is no saved draft to release, so nothing was released.",
+    public_profile_character_not_active: "This character is archived, so its public profile cannot be released.",
+    campaign_archived: "This campaign is archived, so nothing can be released.",
+    public_profile_identity_unavailable:
+        "The character's species and size are not available to release right now, so nothing was released.",
+}
+
+function releaseRefusal(error: AuthoringError): string | null {
+    const code = error.code ?? ""
+    if (error.kind === "stale") return RELEASE_REFUSAL.stale_write!
+    if (error.kind === "denied")
+        return RELEASE_REFUSAL[code] ?? "Releasing this profile is not available to you right now. Nothing was released."
+    // A 422 for the missing character version means the read the person saw is out of date.
+    if (error.kind === "conflict" || (error.kind === "invalid" && code === "public_profile_identity_version_required"))
+        return RELEASE_REFUSAL[code] ?? null
+    return null
+}
+
+const RELEASE_AUTHORITY: Readonly<Record<string, string>> = { owner: "Owner", delegation: "Delegated GM" }
+
+const when = (iso: string): string => new Date(iso).toLocaleString()
+
 const SAVE_REFUSAL: Readonly<Record<string, string>> = {
     stale_write:
         "The draft changed since you opened it. The form now shows the latest saved draft, and nothing you typed was saved.",
@@ -287,6 +327,9 @@ function Loaded({
     const [errors, setErrors] = useState<FieldError[]>([])
     const [attempt, setAttempt] = useState(0)
     const [savedMessage, setSavedMessage] = useState<string | null>(null)
+    const [releasing, setReleasing] = useState(false)
+    const [note, setNote] = useState("")
+    const [releasedMessage, setReleasedMessage] = useState<string | null>(null)
 
     const pending = saveBody(draft, values)
     const dirty = pending !== null
@@ -338,10 +381,68 @@ function Loaded({
         pageStale,
         quietRecovery: true,
     })
-    const writesHeld = held || savedRefresh.held
+    // The release names the draft version (and, for species or size, the character version) that the
+    // person is looking at. It is built only from the saved read, never from the form.
+    const publishesIdentity = draft !== null && (draft.publish_species || draft.publish_size)
+    const releaseBody: ReleasePublicProfileBody | null =
+        draft === null || (publishesIdentity && view.identity_preview === null)
+            ? null
+            : {
+                  expected_draft_row_version: draft.row_version,
+                  ...(note.trim() === "" ? {} : { release_note: note.trim() }),
+                  ...(publishesIdentity && view.identity_preview !== null
+                      ? { expected_character_row_version: view.identity_preview.character_row_version }
+                      : {}),
+              }
+    const releaseMutation = useAuthoringMutation<ReleasePublicProfileBody, ReleasePublicProfileReceipt>({
+        scopeKey: `public-profile-release:${campaignId}:${characterId}`,
+        request: async (body, ctx) => {
+            try {
+                return await releaseCharacterPublicProfile(campaignId, characterId, body, ctx)
+            } catch (cause) {
+                // As for a save: a refusal that means the page is out of date or the person's authority
+                // changed is handled once, here, and the old tokens are never sent again.
+                if (!ctx.signal.aborted) {
+                    const error = classifyApiError(cause)
+                    const carried: RetainedChange[] =
+                        body.release_note === undefined ? [] : [{ label: "Release note", value: body.release_note }]
+                    if (error.kind === "unavailable") onLost(carried)
+                    else {
+                        const message = releaseRefusal(error)
+                        if (message !== null) onRefused({ message, carried })
+                    }
+                }
+                throw cause
+            }
+        },
+        onSuccess: async (result) => {
+            const message = result.created
+                ? `Released as version ${result.version_number}.`
+                : "This version was already released."
+            setReleasedMessage(message)
+            setReleasing(false)
+            setNote("")
+            const outcome = await refetch()
+            if (outcome === "ok") announce(message)
+            else onUnread(message)
+            return outcome
+        },
+    })
+    const releasedRefresh = useConfirmedRefresh({
+        status: releaseMutation.status,
+        reset: releaseMutation.reset,
+        what: "public profile",
+        message: releasedMessage,
+        read: refetch,
+        pageStale,
+        quietRecovery: true,
+    })
+    const writesHeld = held || savedRefresh.held || releasedRefresh.held
     const saving = saveMutation.status.kind === "pending"
-    const busy = saving || writesHeld
+    const releasePending = releaseMutation.status.kind === "pending"
+    const busy = saving || releasePending || writesHeld
     const error = saveMutation.status.kind === "error" ? saveMutation.status.error : null
+    const releaseError = releaseMutation.status.kind === "error" ? releaseMutation.status.error : null
 
     function submit() {
         if (pending === null || busy) return
@@ -373,9 +474,11 @@ function Loaded({
                 />
             ) : null}
             {savedRefresh.notice}
+            {releasedRefresh.notice}
             <p className="authoring-note">
                 The draft of what players may later see about <strong>{view.label.name}</strong>. Saving a draft shows
-                nothing to players.
+                nothing to players. Releasing it makes a numbered snapshot, which also shows nothing to anyone: players
+                see a release only after you reveal the character.
             </p>
             <section aria-label="Draft status">
                 <h2>Draft</h2>
@@ -384,6 +487,9 @@ function Loaded({
                     {view.has_unreleased_changes ? " Unreleased changes." : ""}
                 </p>
                 <p>{latest === null ? "Nothing has been released yet." : `Latest release: version ${latest.version_number}.`}</p>
+                {view.identity_differs_from_latest_release === true ? (
+                    <p>Species or size has changed since the last release.</p>
+                ) : null}
             </section>
             {view.can_edit ? (
                 <form
@@ -491,6 +597,59 @@ function Loaded({
             ) : (
                 <ReadOnlyDraft draft={draft} />
             )}
+            {draft !== null ? (
+                <section aria-label="Release">
+                    <h2>Release</h2>
+                    {view.can_release ? (
+                        <>
+                            <button
+                                type="button"
+                                className="authoring-button authoring-button--primary"
+                                disabled={dirty || busy || releaseBody === null}
+                                onClick={() => setReleasing(true)}
+                            >
+                                Release
+                            </button>
+                            {dirty ? <p>Save your changes before releasing.</p> : null}
+                        </>
+                    ) : (
+                        <p>You can't release this profile.</p>
+                    )}
+                </section>
+            ) : null}
+            {draft !== null && releaseBody !== null ? (
+                <ConfirmDialog
+                    open={releasing}
+                    title={`Release draft version ${draft.row_version}?`}
+                    description="Releasing doesn't show this profile to anyone. Players see it only after you reveal the character."
+                    confirmLabel={`Release as version ${(latest?.version_number ?? 0) + 1}`}
+                    cancelLabel="Cancel"
+                    pending={releasePending}
+                    confirmDisabled={note.trim().length > NOTE_MAX}
+                    reason={{
+                        label: "Release note (optional)",
+                        required: false,
+                        value: note,
+                        onChange: setNote,
+                        error: note.trim().length > NOTE_MAX ? `The note must be ${NOTE_MAX} characters or fewer.` : null,
+                    }}
+                    error={
+                        releaseError !== null ? (
+                            <MutationStatusMessage
+                                error={releaseError}
+                                onRetry={() => releaseMutation.retry()}
+                                onCheckSession={reload}
+                            />
+                        ) : null
+                    }
+                    onConfirm={() => {
+                        if (!busy) releaseMutation.submit(releaseBody)
+                    }}
+                    onCancel={() => setReleasing(false)}
+                />
+            ) : null}
+            {latest !== null ? <LatestRelease release={latest} /> : null}
+            <ReleaseHistory releases={view.releases} />
             <ConfirmDialog
                 open={guard.blocked}
                 title="Discard unsaved changes?"
@@ -537,5 +696,70 @@ function ReadOnlyDraft({ draft }: { draft: PublicProfileDraft | null }) {
                 <dd>{draft.publish_size ? "Yes" : "No"}</dd>
             </div>
         </dl>
+    )
+}
+
+// The latest release exactly as it was snapshotted: its own text and published labels, never merged
+// with the draft. Origins and provenance are not shown.
+function LatestRelease({ release }: { release: PublicProfileLatestRelease }) {
+    const text = (value: string | null) => (trimmed(value) === "" ? "(empty)" : value)
+    return (
+        <section aria-label="Latest release">
+            <h2>Latest release (version {release.version_number})</h2>
+            <p>
+                Released {when(release.released_at)}
+                {release.released_by !== null ? ` by ${release.released_by}` : ""}
+                {" "}({RELEASE_AUTHORITY[release.authority_source] ?? release.authority_source}). This snapshot does not
+                change when the draft does.
+            </p>
+            <dl className="authoring-fact-list">
+                <div>
+                    <dt>Summary</dt>
+                    <dd>{text(release.public_summary)}</dd>
+                </div>
+                <div>
+                    <dt>Appearance</dt>
+                    <dd>{text(release.public_appearance)}</dd>
+                </div>
+                <div>
+                    <dt>Background</dt>
+                    <dd>{text(release.public_background)}</dd>
+                </div>
+                <div>
+                    <dt>Species</dt>
+                    <dd>{release.species === null ? "Not published" : release.species.label}</dd>
+                </div>
+                <div>
+                    <dt>Size</dt>
+                    <dd>{release.size === null ? "Not published" : release.size.label}</dd>
+                </div>
+                {release.release_note !== null && release.release_note !== "" ? (
+                    <div>
+                        <dt>Release note</dt>
+                        <dd>{release.release_note}</dd>
+                    </div>
+                ) : null}
+            </dl>
+        </section>
+    )
+}
+
+// The metadata of every release, newest first. No text, and no link to a version.
+function ReleaseHistory({ releases }: { releases: readonly PublicProfileRelease[] }) {
+    if (releases.length === 0) return null
+    const newestFirst = [...releases].sort((a, b) => b.version_number - a.version_number)
+    return (
+        <section aria-label="Release history">
+            <h2>Release history</h2>
+            <ul className="op-list">
+                {newestFirst.map((release) => (
+                    <li key={release.version_number}>
+                        Version {release.version_number}, {when(release.released_at)}
+                        {release.released_by !== null ? `, released by ${release.released_by}` : ""},{" "}
+                        {RELEASE_AUTHORITY[release.authority_source] ?? release.authority_source}
+                    </li>
+                ))}
+            </ul>
+        </section>
     )
 }
