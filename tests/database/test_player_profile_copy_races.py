@@ -484,7 +484,12 @@ def test_c6_a_keyed_release_first_both_commit_and_the_release_holds_the_pre_copy
     assert code(released) == 201, body(released)
     assert code(copied) == 200, body(copied)
     rows = release_rows(postgres_engine, g, npc)
-    assert [(r["version_number"], r["public_background"]) for r in rows] == [(1, None)]
+    assert [(r["version_number"], r["from_draft_row_version"]) for r in rows] == [(1, 1)]
+    # Exactly draft version n (the authored text, no copied text), not the post-copy draft.
+    assert (rows[0]["public_appearance"], rows[0]["public_background"]) == (
+        "AUTHORED-FACE-9090",
+        None,
+    )
     row = draft(postgres_engine, g, npc)
     assert row is not None and row["row_version"] == 2 and row["b_mark"] == 2
     assert row["public_background"] == source["personality"]  # copied, restricted and uncovered
@@ -496,10 +501,11 @@ def test_c6_a_keyed_release_first_both_commit_and_the_release_holds_the_pre_copy
 def test_c6_a_keyed_copy_first_the_release_of_the_earlier_version_is_stale_and_writes_nothing(
     client_factory: Factory, postgres_engine: Engine, g: Gate, npc: uuid.UUID, source: dict[str, str]
 ) -> None:  # fmt: skip
-    """Deviation from the design's table (it says both commit in either order): once the copy holds
-    the draft and commits, the draft is at version n+1, so a release of version n is a stale write,
-    exactly as for the A2b legacy copy (`test_a_copy_holding_the_draft_makes_a_release_of_the_earlier_
-    version_stale`). The copy's field is restricted and uncovered."""
+    """Approved C6 outcome (owner decision, A5c-R1): once the copy commits first, the draft is at
+    version n+1, so a keyed release that expected version n is `409 stale_write` and creates no release
+    row, receipt or audit row (optimistic concurrency, as for the A2b legacy copy; see
+    `test_a_copy_holding_the_draft_makes_a_release_of_the_earlier_version_stale`). The copy's field is
+    restricted and uncovered. Both operations need not commit in both orders."""
     _a_draft(client_factory, g, npc)
     release_key, copy_key = new_key(), new_key()
     releasing = lambda: release(client_factory, g.o1_user_id, g, npc, 1, key=release_key)  # noqa: E731
@@ -512,6 +518,10 @@ def test_c6_a_keyed_copy_first_the_release_of_the_earlier_version_is_stale_and_w
     assert release_rows(postgres_engine, g, npc) == []
     row = draft(postgres_engine, g, npc)
     assert row is not None and row["row_version"] == 2 and row["b_mark"] == 2
+    assert row["public_appearance"] == "AUTHORED-FACE-9090"
+    assert (
+        row["public_background"] == source["personality"]
+    )  # the copy committed and nothing was released
     assert (completed_receipts_for(postgres_engine, copy_key), receipts_for(postgres_engine, release_key)) == (1, 0)  # fmt: skip
     assert deadlock_count(postgres_engine) == baseline
 
