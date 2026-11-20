@@ -826,10 +826,12 @@ Explanations are themselves filtered; they must not reveal a hidden intermediary
 explanation (`access.manage`, not the GM role), with revelation sources labelled "Revelation" and the member
 list's read-only **Revealed characters** section. A player or observer sees S01's tier wording only, at every
 character tier: no source, kind or count, and the portal sends them no request to the access endpoints. The member
-list and the open explanations are read again together on the next request (any Access change, or **Refresh
-access**), the list first and each open explanation after it, as two independent reads rather than one snapshot;
+list and the open explanations are read again together on the next request (**Refresh access**, or **Try again**
+after a failed list read; an Access mutation reloads the session instead, which closes every open card and
+explanation and drops the status-line announcement, inherited observation O-5), the list first and each open
+explanation after it, as two independent reads rather than one snapshot;
 there are no live updates. A read that failed is not announced as refreshed, an explanation that failed to reload
-says so and shows nothing from before, and Refresh access returns focus to the member's explanation toggle.
+says so and shows nothing from before, and Refresh access returns focus to the member's explanation toggle (to the status line when that member is gone), but only if the manager has not moved focus elsewhere while the read was pending.
 
 ## 9. Search, lists, and non-disclosure
 

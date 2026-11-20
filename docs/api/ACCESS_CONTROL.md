@@ -1038,10 +1038,13 @@ Portal (P15-C01-S02): a `revelation` source is labelled "Revelation" (`Revelatio
 field. Each member card on the Access page lists the overview's `revelations` read-only under
 **Revealed characters** (`Mira — Access group`, in server order, duplicates kept, no control and no id
 or audience-kind code; "No revealed characters." when empty). Which member cards and explanations are
-open is held above the overview boundary by membership id, so they survive an overview reload. A reload
-(after any mutation, or **Refresh access** beside a loaded explanation) unmounts every explanation while
-the list loads and re-reads each open one only after the list answered; nothing from before is shown
-meanwhile. The two reads are independent observations, not one snapshot, and the portal never matches
+open is held above the overview boundary by membership id, so they survive an overview reload that does
+not reload the session: **Refresh access** beside a loaded explanation, and **Try again** after a failed
+list read. Such a reload unmounts every explanation while the list loads and re-reads each open one only
+after the list answered; nothing from before is shown meanwhile. An Access mutation (for example removing
+character access) also reloads the session, which replaces the whole page with "Loading portal": every open
+card and explanation then starts closed and the page's status-line announcement is lost (inherited
+observation O-5, found in the real-browser run; the behavior predates S02). The two reads are independent observations, not one snapshot, and the portal never matches
 an explanation source to an overview row (sources name characters, not ids). A failed list read, or a
 failed explanation read, is not announced as refreshed. A member who is absent from the new list is
 forgotten, so they do not reopen if they return. A caller without `access.manage` receives no source
