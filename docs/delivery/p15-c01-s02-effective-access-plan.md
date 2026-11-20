@@ -361,3 +361,55 @@ After the fix, `npm test` was run again in full: 428 files, 5269 tests, all pass
 - A reload still moves focus to the page body for mutations (O-3), and after a failed list read.
 - No player-side source explanation exists (G-1). O-1 to O-4 are unchanged and stay recorded separately.
 - Browser, accessibility, integrated-head CI, checkpoint merge and owner acceptance remain pending. C02 and A5c were not started.
+
+### 11.4 Luna independent review — focus return correction required (2026-11-19)
+
+**Boundary and repository state.** Reviewed the complete `d6615b93d1aaa0e7fba8b08f84c224df178e6e41..f295c25807f18188acacc73050fd4673faabd305` range on `phase15/completion`. The plan and implementation are in the same head commit; no separate plan commit exists. At review start, `HEAD` was `f295c25807f18188acacc73050fd4673faabd305`, and the worktree was clean (`phase15/completion...origin/phase15/completion [ahead 5]`). No repository `AGENTS.md` exists. No production files were changed. The mutation probe below was restored byte-for-byte. This review record and the two S02 register status edits are the only review changes and remain uncommitted.
+
+**Verdict: CHANGES REQUIRED.** The authorized projection and coordinated list/detail refresh meet the reviewed requirements in this range, but the newly added refresh focus restoration violates the explicit delayed-completion focus requirement. S02/T01 do not pass independent implementation review yet. This is separate from inherited O-3: O-3 concerns existing Access mutation and failed-read reloads; this defect is introduced by the new successful **Refresh access** path, which always reclaims focus.
+
+**Finding S02-R1 — delayed refresh steals focus (Low, score 3/10; blocks this slice's stated acceptance until corrected).** [CampaignAccessPage.tsx](../../portal/src/pages/CampaignAccessPage.tsx#L149) `handleRefreshSettled` unconditionally focuses the requesting member toggle or the status paragraph after the successful overview read. The access tab navigation remains mounted while the overview is loading, so a manager can move focus to another control or route-navigation link during a delayed read; when it settles, focus is pulled back to the old row/status paragraph. The E6 test in `CampaignAccessPage.effectiveAccess.integration.test.tsx` confirms focus returns when the user has not moved, but has no delayed-completion case in which the user moves focus elsewhere. **Expected:** restore focus only when focus remains displaced by the refresh's removed control (or otherwise has no meaningful current destination); do not override a user's subsequent focus move. **Actual:** every successful pending refresh focuses the old member toggle/fallback regardless of current focus. **Exposure:** 1, a constrained manager refresh path with a delayed response and intervening focus move. **Impact:** 1, a bounded keyboard-navigation disruption; no access data or command authority is affected. **Triggerability:** 1, requires that timing and user action. **Detection/recovery:** 0, visible and readily recoverable by moving focus again. **Blast radius:** 0, one manager's current page. Total 3/10, Low under [grading.md](grading.md#severity-and-checkpoint-disposition). The implementation still fails this slice's explicit acceptance despite Low product severity. **Correction:** retain the success-only, campaign/member-scoped focus return, but skip it when a connected, meaningful element has gained focus since the refresh began; add an integration test holding the overview response, moving focus to another persistent control, resolving the response and asserting focus stays there. Keep the existing E6 focus-return case for the no-intervening-move path.
+
+**Other reviewed behavior and acceptance coverage.** The route and `AccessTabNav` use effective `access.manage` capability gates, not a GM role comparison. `EffectiveAccessPanel` renders only the contracted source fields (`kind`, `label`, nullable `target_display_name`) in response order; the revealed-character list renders only display names and audience display labels, preserving duplicates/order and adding no inferred source match. Player character paths neither request manager endpoints nor expose source labels/counts (App E16–E18). The real `AuthenticatedSessionBoundary` replaces protected children while session reload is loading; campaign changes derive empty disclosure state, and overview 403/unavailable clears protected content. Explanation errors have an explanation-only retry; overview failure does not mount stale explanations. Abort/version ownership, close/unmount, authoritative successful-list pruning, campaign scoping, and E10/E11/E14/E15 cover stale answers, removal/reappearance, campaign change and close behavior. The fake server exercises the real page, boundary, panel, hooks and API clients; its independent GETs intentionally do not claim a single database snapshot (G-2). E1–E4 cover labels/projection and the read-only list, E5–E9 cover refresh ordering, loading and partial outcomes, E10–E15 cover stale/removed/authority/session/campaign/close transitions, E16–E18 cover player non-disclosure and tier transitions, and E19 plus the focused/full suites cover existing Access and character routes. The optional `AccessPage` props are supplied by its production caller; standalone tests intentionally exercise the local fallback. Persistent card expansion is documented and its controlled native `<details>` retains button toggling. The explicit Revelation label matching the generic humanizer is only a coverage characteristic. G-1/G-2 and inherited O-1–O-4 remain separately recorded and unchanged.
+
+**Verification (documented PowerShell invocation).** Focused affected tests: `npm test -- src/components/EffectiveAccessPanel.test.tsx src/pages/AccessPage.test.tsx src/pages/CampaignAccessPage.test.tsx src/pages/CampaignAccessPage.effectiveAccess.integration.test.tsx src/App.characterRecord.test.tsx` — 5 files, 158 tests passed. Full `npm test` — 428 files, 5,269 tests passed; three jsdom “navigation to another Document” notices, no failures. `npm run lint` passed. `npm run build` passed with the existing Vite chunk-size warning. `uv run python scripts/check_documentation.py` passed. `git diff --check d6615b93d1aaa0e7fba8b08f84c224df178e6e41 f295c25807f18188acacc73050fd4673faabd305` was clean. These were first review runs; no verification reruns were needed. The intentional mutation probe temporarily replaced the successful overview's `disclosure.prune(...)` call with a no-op and ran E11 alone: it failed as expected because the returning member's explanation remained expanded (`aria-expanded="true"`, expected `false`). Restored `CampaignAccessPage.tsx` SHA-256 is exactly `6F9342B269EE45FFDBE87B1D2B6364B9C602F90C32282EB68C73F1C9A95EA684`, identical before and after.
+
+**Re-review boundary and remaining obligations.** Re-review the corrected S02/T01 range from `f295c25807f18188acacc73050fd4673faabd305` through the correction head, including a delayed-response focus-move regression assertion. Browser, accessibility, integrated-head CI, checkpoint merge and owner acceptance remain pending; a slice pass will not close the checkpoint. S01 remains reviewed as recorded in its own plan. C02 and A5c were not started or reviewed.
+
+## 11.5 Correction of S02-R1 (Sonnet), 2026-11-19
+
+Luna's finding and verdict in §11.4 are unchanged. This section is the correction evidence; it does not accept the slice. **Status: corrected; Luna re-review pending.**
+
+**Base.** `f295c25807f18188acacc73050fd4673faabd305` on `phase15/completion`. Before work the tree held only Luna's uncommitted §11.4 and the two S02 register status cells; both are preserved and committed with the correction. No `AGENTS.md`. The correction commit is titled `P15-C01-S02: respect focus changes during access refresh`; its SHA is reported in the handoff. Nothing was pushed. Only `portal/` and `docs/` changed.
+
+**Change (`pages/CampaignAccessPage.tsx` only).**
+
+- **Restore only displaced focus.** On a successful list read, `handleRefreshSettled` returns focus to the member's explanation toggle (or the status line if the member is gone) only when `document.activeElement` is null, the page body or no longer connected, which is what removing the Refresh control leaves. If a connected control holds focus (for example an Access tab link the manager moved to while the list was loading), focus is left there. The announcement ("Access list refreshed.") and success-only behavior are unchanged.
+- **Bound to its refresh.** The pending intent now carries an `episode` from a per-page counter. A completion acts only if its episode is still the latest and its campaign is still the active one, so an older refresh cannot act after a newer one. Starting or completing an Access mutation clears an unanswered refresh, so a later successful read cannot confirm and refocus for a refresh the manager has since replaced with another operation. The existing campaign scoping of the intent is kept.
+- No new framework, no change to the disclosure, refresh ordering, projections, authorization or O-3.
+
+**Tests (`CampaignAccessPage.effectiveAccess.integration.test.tsx`).**
+
+- New: Refresh access with the overview held; focus moved to an Access tab link; the response released; the test waits for the "Access list refreshed." announcement and the explanation to reload, then asserts the tab link still has focus and the member toggle does not.
+- New: the member disappears in the refreshed list with focus displaced: focus goes to the status line.
+- E6 keeps its no-intervening-move restoration assertion, now inside `waitFor` so it cannot pass before the focus effect has run. No other existing assertion changed.
+
+**Mutation probe.** Replacing the displaced-focus check with an unconditional restore (the former behavior) failed exactly the new move-away test (1 of 14); E6 and the member-gone fallback still passed. Restored; SHA-256 of `CampaignAccessPage.tsx` before and after the probe `1BBB2DFB00F510897C9F16C95BFB939CF1DB92C6F2E5CAD1FCAAC6B57D5AAFC3`.
+
+**Verification (portal/ PowerShell; root for the last two).**
+
+| Run | Result |
+|---|---|
+| Focused integration file, first run after the change | 14 passed (no failure) |
+| Mutation probe | 1 failed as above, then restored |
+| `npm test`, first run | 428 files, 5271 tests passed |
+| `npm run lint`, first run | passed |
+| `npm run build`, first run | passed (existing chunk-size warning) |
+| `uv run python scripts/check_documentation.py` | passed |
+| `git diff --check` | clean (working tree and staged diff) |
+
+There were no first-run failures and no reruns.
+
+**Remaining limitations.** O-3 (mutation reloads and failed list reads leave focus on the body) is unchanged. If focus is on the body for any other reason when the list returns, it is treated as displaced and restored. Browser, accessibility, integrated-head CI, checkpoint merge and owner acceptance remain pending. C02 and A5c were not started.
+
+**Luna re-review boundary.** Base `f295c25807f18188acacc73050fd4673faabd305`; head = the correction commit.

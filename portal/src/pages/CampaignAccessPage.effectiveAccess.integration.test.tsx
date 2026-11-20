@@ -285,7 +285,7 @@ describe("Access page: explanation and list refreshed together", () => {
         expect(world.log.slice(-2)).toEqual(["GET overview", "GET explain:" + ARIA])
         expect(world.log.filter((entry) => entry === "POST revoke")).toHaveLength(0)
         // Focus returned to the member's own toggle, not left on the control the reload removed.
-        expect(explain("Aria the GM")).toHaveFocus()
+        await waitFor(() => expect(explain("Aria the GM")).toHaveFocus())
 
         // The last source gone as well (E7).
         world.members[0]!.relationship = false
@@ -294,6 +294,37 @@ describe("Access page: explanation and list refreshed together", () => {
         expect(within(cardOf("Aria the GM")).getByText("No revealed characters.")).toBeInTheDocument()
     })
 
+    it("leaves focus where the manager moved it while the refresh was pending, then confirms the refresh (S02-R1)", async () => {
+        const world = makeWorld([member(ARIA, "Aria the GM", { revelations: [{ kind: "Member", code: "member" }] })])
+        const { container } = renderAt(world)
+        await screen.findByText("Aria the GM")
+        await open("Aria the GM")
+        world.holdOverview = deferred<void>()
+        const hold = world.holdOverview
+        fireEvent.click(within(cardOf("Aria the GM")).getByRole("button", { name: "Refresh access" }))
+        await screen.findByText("Loading access")
+        // The tab links stay mounted while the list loads: the manager moves to one of them.
+        const elsewhere = within(screen.getByRole("navigation", { name: "Access" })).getAllByRole("link")[0]!
+        elsewhere.focus()
+        expect(elsewhere).toHaveFocus()
+        hold.resolve()
+        // Wait for the refresh to complete (announced), which is when focus would have been taken.
+        await waitFor(() => expect(announcement(container)).toHaveTextContent("Access list refreshed."))
+        await inCard("Aria the GM", "Revelation: Member (Kestrel Vane)")
+        expect(elsewhere).toHaveFocus()
+        expect(explain("Aria the GM")).not.toHaveFocus()
+    })
+
+    it("returns focus to the status line when the member is gone and focus was displaced (S02-R1)", async () => {
+        const world = makeWorld([member(ARIA, "Aria the GM", { revelations: [{ kind: "Member", code: "member" }] }), member(BRAM, "Bram")])
+        const { container } = renderAt(world)
+        await screen.findByText("Bram")
+        await open("Bram")
+        world.members.pop()
+        fireEvent.click(within(cardOf("Bram")).getByRole("button", { name: "Refresh access" }))
+        await waitFor(() => expect(announcement(container)).toHaveTextContent("Access list refreshed."))
+        await waitFor(() => expect(announcement(container)).toHaveFocus())
+    })
     it("shows a revelation beside a whole-character deny without new wording (E8)", async () => {
         const world = makeWorld([member(ARIA, "Aria the GM", { revelations: [{ kind: "Member", code: "member" }], deny: true })])
         renderAt(world)

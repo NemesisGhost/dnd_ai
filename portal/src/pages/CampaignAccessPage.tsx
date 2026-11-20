@@ -27,6 +27,13 @@ interface RoleChangeAnnouncement {
 //   - an open card or explanation whose member is not in this answer is forgotten, so it cannot
 //     reappear if the member does later;
 //   - a pending "Refresh access" is confirmed (announced, focus returned) only now.
+interface RefreshIntent {
+    campaignId: string
+    membershipId: string
+    // Which refresh this intent belongs to (see refreshEpisode).
+    episode: number
+}
+
 function OverviewSettled({
     memberIds,
     disclosure,
@@ -35,8 +42,8 @@ function OverviewSettled({
 }: {
     memberIds: string[]
     disclosure: AccessDisclosure
-    refresh: { membershipId: string } | null
-    onRefreshSettled: (membershipId: string) => void
+    refresh: RefreshIntent | null
+    onRefreshSettled: (refresh: RefreshIntent) => void
 }) {
     const key = memberIds.join("|")
     useEffect(() => {
@@ -44,7 +51,7 @@ function OverviewSettled({
         // eslint-disable-next-line react-hooks/exhaustive-deps -- `disclosure.prune` is stable per campaign.
     }, [key])
     useEffect(() => {
-        if (refresh !== null) onRefreshSettled(refresh.membershipId)
+        if (refresh !== null) onRefreshSettled(refresh)
         // Only on mount: a read that succeeded is what confirms a refresh.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
@@ -80,7 +87,9 @@ export function CampaignAccessPage() {
     // A "Refresh access" asked for and not yet answered by a successful overview read: the member
     // whose control asked, for returning focus once the list is back.
     const [pendingRefresh, setPendingRefresh] =
-        useState<{ campaignId: string; membershipId: string } | null>(null)
+        useState<RefreshIntent | null>(null)
+    // Counts refreshes asked for on this page. A completion acts only if it still belongs to the latest.
+    const refreshEpisode = useRef(0)
 
     if (campaignId === undefined) {
         return (
@@ -116,6 +125,8 @@ export function CampaignAccessPage() {
         // Starting (or completing) another operation always replaces
         // whatever announcement was showing — a fresh call here, whatever
         // its text, is never merged with or appended to a stale one.
+        // A mutation supersedes a refresh that has not been answered: its completion must not act.
+        setPendingRefresh(null)
         setAnnouncement({
             campaignId: activeCampaignId,
             message,
@@ -134,6 +145,7 @@ export function CampaignAccessPage() {
     // different row's own current pending/error state for the operation
     // the user is now watching.
     function handleMutationStart(): void {
+        setPendingRefresh(null)
         setAnnouncement(null)
     }
 
@@ -142,17 +154,24 @@ export function CampaignAccessPage() {
     // once the list has actually been read again (handleRefreshSettled), never for a failed read.
     function handleRefreshAccess(retry: () => void, membershipId: string): void {
         setAnnouncement(null)
-        setPendingRefresh({ campaignId: activeCampaignId, membershipId })
+        refreshEpisode.current += 1
+        setPendingRefresh({ campaignId: activeCampaignId, membershipId, episode: refreshEpisode.current })
         retry()
     }
 
-    function handleRefreshSettled(membershipId: string): void {
+    function handleRefreshSettled(refresh: RefreshIntent): void {
+        // A completion belonging to an older refresh, or to another campaign, does nothing.
+        if (refresh.episode !== refreshEpisode.current || refresh.campaignId !== activeCampaignId) return
         setPendingRefresh(null)
         setAnnouncement({ campaignId: activeCampaignId, message: "Access list refreshed." })
-        // The control that asked was unmounted by the reload: return focus to the same member's
-        // explanation toggle, or to the status line when that member is gone.
+        // The control that asked was unmounted by the reload, which displaces focus to the page body.
+        // Return it only if it is still displaced: a manager who has since moved to another control
+        // (the tab links stay mounted while the list loads) keeps that focus.
+        const active = document.activeElement
+        if (active !== null && active !== document.body && active.isConnected) return
+        // The same member's explanation toggle, or the status line when that member is gone.
         const toggle = Array.from(document.querySelectorAll<HTMLElement>("[data-explain-toggle]")).find(
-            (element) => element.dataset.explainToggle === membershipId,
+            (element) => element.dataset.explainToggle === refresh.membershipId,
         )
         ;(toggle ?? announcementRef.current)?.focus()
     }
