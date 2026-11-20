@@ -297,3 +297,13 @@ First attempt: S02 36 of 37; G11's content check matched the write's own confirm
 | 37 | G7 after the 403 only the refresh's list read was made; no explanation request followed | pass | GET overview |
 
 37 of 37 checks passed.
+
+## 9 Luna re-check of C01 zoom and AT support (2026-11-19)
+
+This is a C01-scoped follow-up, not final integrated-head evidence. It does not change Sections 6-8 as historical evidence or satisfy the register's final-head `browser`, `ax`, `b16`, or human fields.
+
+- The corrected production build for code commit `61da59ed4b6f854b98e920f0eb5f7f3eb9a7a364` was served locally from the review head. In an isolated headed Chrome instance, a controlled public-character profile rendered at the default 100%: `devicePixelRatio=1`, CSS viewport width 1280, document/body scroll widths 1280, and the character heading and released summary were visible. API responses were supplied by a temporary browser test fixture; this was not a live-persona or production-data check.
+- Actual browser zoom was attempted with browser-level Ctrl+Shift+Plus, OS key events directed at the isolated Chrome window, and Ctrl+mouse-wheel. None changed `devicePixelRatio` or CSS viewport width: the recorded 200% and 400% checkpoints still read `1` and `1280`. These attempts did not establish zoom/reflow and are **not a B16 pass**. The available automation could not invoke Chrome's browser-level zoom control. B16 remains pending for 200%/400% actual zoom including 320 CSS px on the final integrated head.
+- Windows Narrator is installed, but this environment provides no way to hear or capture its speech output. No screen-reader run was performed, and no announcement is claimed as spoken. The final-head `ax` obligation remains pending for an actual assistive-technology run.
+
+The existing C01 production-build scripted runs at `61da59e` remain: S01 personas 29/29, structure/keyboard/reflow 18/18, S02 37/37. They do not replace the final integrated-head browser/ax runs or human review.
