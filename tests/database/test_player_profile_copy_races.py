@@ -13,14 +13,16 @@ Each case asserts the status codes, the draft row (version, text, origin, proven
 the release rows, the audit-row and receipt counts, and that a loser wrote nothing.
 
 C-tests (unkeyed or independent keys) are deterministic and must serialise without a deadlock.
-KA-tests run the keyed copy (or release) in the interleaving that realises DEF-019's reservation cycle
-(the competitor holds its membership or role row and has not yet taken the campaign row; the keyed
-request has already reserved its key, which holds the campaign row `FOR KEY SHARE`). They accept either
-valid serialised outcome or the documented deadlock loser (SQLSTATE 40P01, proved through the
-database's deadlock counter, never any other 5xx), record which occurred, and require the same
-invariants whichever happens: a copy never commits after the authority loss committed, every 2xx
-matches committed state, and a non-2xx loser leaves no draft change, audit row or receipt. They never
-require a deadlock.
+KA-tests run the keyed copy (or release) in the interleaving that used to realise DEF-019's reservation
+cycle (the competitor holds its membership or role row and has not yet taken the campaign row; the keyed
+request has already reserved its key). Since R01 O-2 defers the reservation's campaign foreign key for
+these post-write routes, the KA-tests require the `serialized` outcome in every arrival they run: no 5xx
+and the database's deadlock counter unchanged. They no longer accept a deadlock loser (SQLSTATE 40P01).
+The shared `_classify` helper still recognises a 40P01 loser, so a regression is named precisely before
+the `serialized` assertion fails. In each arrival the invariants hold as well: a copy or release never
+commits after the authority loss committed, every 2xx matches committed state, and a non-2xx loser
+leaves no draft change, release, audit row or receipt. The observed deadlocks of the original A5c run
+are kept as dated history in the design's A5c implementation record, not here.
 """
 
 import threading
