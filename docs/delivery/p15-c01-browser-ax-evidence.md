@@ -1,6 +1,6 @@
 # D/P15-C01 browser and accessibility evidence
 
-> **Update (O-5):** §4's grading of finding C01-B1 / O-5 (Low, 3) is superseded. It was regraded Medium (5), corrected at `e8613f9`, and re-run; see §7. Sections 1 to 6 are the first run at `efe5a77` and are kept as the historical record.
+> **Update (O-5):** §4's grading of finding C01-B1 / O-5 (Low, 3) is superseded. It was regraded Medium (5), corrected at `e8613f9`, and re-run; see §7; §7's authority-loss check was too narrow and O-5-R1 (Medium, 6) was found and corrected at `61da59e`, see §8. Sections 1 to 6 are the first run at `efe5a77` and are kept as the historical record.
 
 **Status:** recorded 2026-11-19 by Sonnet. Scripted real-browser and structural accessibility evidence for [D/P15-C01](work-register.md#p15-c01) (S01 public tier, S02 effective access). **Not** a human run, **not** an assistive-technology run, and **not** owner acceptance. The register's [browser](work-register.md#browser), [ax](work-register.md#ax) and [actor-a](work-register.md#actor-a) obligations keep their own scope and status; this record is the C01 slice of them.
 
@@ -234,3 +234,66 @@ None of the evidence in this record satisfies an integrated-head obligation. It 
 | [b21](work-register.md#b21) | Owner-deferred. | Untouched. |
 
 Still pending and **not performed**: a screen-reader run (so that any announcement is spoken is not established), a human run, actual browser zoom, other browsers (Firefox, Safari), the integrated-head `browser` and `ax` runs, owner acceptance ([actor-a](work-register.md#actor-a)) and the checkpoint merge. D/P15-C02 and A5c were not started.
+
+## 8. Re-run after the O-5-R1 correction (tested commit `61da59e`)
+
+Luna's re-review found that an in-place session read applied without `access.manage` left an already-successful overview mounted (O-5-R1, Medium 6/10); see [S02 plan §11.9](p15-c01-s02-effective-access-plan.md#119-luna-independent-re-review-of-o-5-correction-2026-11-20) and the correction in [§11.10](p15-c01-s02-effective-access-plan.md#1110-o-5-r1-correction-sonnet-2026-11-19). §7's G10 paired authority loss with an overview 403 and so could not see it; G11 below is the reported ordering. §1 to §7 are kept as the historical record.
+
+- **Tested commit:** `61da59ed4b6f854b98e920f0eb5f7f3eb9a7a364` ("P15-C01: bind the Access page to the applied access.manage capability (O-5-R1)"); production build of that tree; same stack, method and fixtures as §1, rebuilt and reseeded; the throwaway database was dropped afterwards. Artifacts: `C:\Users\nemes\dnd_ai_evidence_20261119\c01-o5r1-rerun\`.
+- **Script change:** `s02.mjs` gained G11 (and a harness-only delay mode for the session response).
+
+| Run | Checks | Passed | Failed |
+|---|---|---|---|
+| S01 personas | 29 | 29 | 0 |
+| Structure, keyboard, viewport, zoom | 18 | 18 | 0 |
+| S02 Access page (incl. G1, G8 to G11) | 37 | 37 | 0 |
+
+First attempt: S02 36 of 37; G11's content check matched the write's own confirmation ("Character access removed.") on the status line, which is not access data (a harness assertion, narrowed to `Character access:`). The fixtures were rebuilt and everything was run again in full; those are the counts above.
+
+**G11 (the reported ordering).** The write succeeds; the list is answered 200 and shown with the member card; the session response, delayed by the script, then arrives applied without `access.manage`. The page becomes "Access unavailable" with no member, revelation, source or explanation content, no Refresh or Explain control, and no further explanation read; the write's confirmation remains on the status line. Screenshot `g11-late-authority-loss.png`.
+
+### S02 Access page, re-run results
+
+### S02 Access page (explanation and Refresh access)
+
+| # | Check | Result | Observed |
+|---|---|---|---|
+| 1 | G1 explanation lists a Revelation source per character and the relationship | pass | Hide access explanation \| Why Phase13E Dev Player A can see this \| View Campaign \| Role: Player \| Discover Character \| Character access: Owner (Phase13C Character A) |
+| 2 | G1 Revealed characters section lists both, read-only (no button/link inside) | pass | Revealed charactersPhase13C Character A — MemberPhase13C Character B — Member |
+| 3 | G1 no id, audience-kind code or revelation id rendered | pass | scanned main text for codes and uuids |
+| 4 | G1 order after the write: the session is re-read, the list is read, then the explanation (after the list) | pass | ["POST POST revoke","GET session","GET overview","GET explain:701521"] |
+| 5 | G1 the page was NOT remounted: 'Loading portal' never appeared and the status line is the same element | pass | {"loadingPortalSeen":0,"sameStatusLine":true} |
+| 6 | G1 'Character access removed.' is on the status line | pass | "Character access removed." |
+| 7 | G1 the open explanation and card stayed open (aria-expanded=true) and show the surviving sources only | pass | Hide access explanation \| Why Phase13E Dev Player A can see this \| View Campaign \| Role: Player \| Discover Character \| Revelation: Member (Phase13C Character A) |
+| 8 | G1 Character access now empty; Revealed characters unchanged | pass |  |
+| 9 | G1 focus after the write (inherited O-3: the confirm control was replaced by the list reload) | pass | focus=BODY |
+| 10 | G2 refresh re-reads the list then the explanation | pass | ["GET overview","GET explain:701521"] |
+| 11 | G2 the revoked revelation is gone from both list and explanation; survivor remains | pass | Revealed charactersPhase13C Character B — Member |
+| 12 | G2 'Access list refreshed.' announced only after the list was read | pass | Access list refreshed. |
+| 13 | G2 success: focus restored to that member's explanation toggle (Refresh control was removed by the reload) | pass | button[explain-toggle:70152152]:Hide access explanation |
+| 14 | G2 explanation still open, aria-expanded=true | pass |  |
+| 15 | G4 while pending: the loading page is shown, no explanation or member content is in the DOM | pass |  |
+| 16 | G4 focus stays on the control the manager moved to ("Invitations" tab link) after the refresh completes | pass | moved to a:Invitations; after: a:Invitations |
+| 17 | G4 the refresh still completed (announcement and explanation reloaded, list intact) | pass | Access list refreshed. |
+| 18 | G5a failed list read: the error page shows with a Try again button; no member, source or explanation content remains | pass |  |
+| 19 | G5a no 'refreshed' announcement for the failed read | pass | "" |
+| 20 | G5a Try again: refreshed is announced only now; the open explanation was re-read (list first) | pass | ["GET overview","GET explain:701521"] |
+| 21 | G5a focus after the retry | pass | focus=button[explain-toggle:70152152]:Hide access explanation |
+| 22 | G5b list refreshed (announced) but the explanation says it could not load, with Retry, and shows no source or Refresh button from before | pass | Hide access explanation \| Why Phase13E Dev Player A can see this \| \| The access explanation could not be loaded. Retry |
+| 23 | G5b Retry re-reads only the explanation (no list request) | pass | ["GET explain:701521"] |
+| 24 | G6 explanation shows the revelation sources and the existing denial line, no new wording | pass | Hide access explanation \| Why Phase13E Dev Player A can see this \| View Campaign \| Role: Player \| Discover Character \| Revelation: Member (Phase13C Character B) \| V |
+| 25 | G3 the removed member's card and explanation are gone; no trace of them in the page | pass |  |
+| 26 | G3 fallback focus is the status line (the member's own toggle no longer exists) | pass | p[status-line]:Access list refreshed. |
+| 27 | G3 the other member's open explanation survived and was re-read | pass |  |
+| 28 | G8 own-membership write: the session was reloaded ('Loading portal' appeared) and the page mounted again with the explanation closed | pass | {"net":["POST POST revoke","GET session","GET overview","GET session"],"expanded":"false"} |
+| 29 | G9 session read failed (500): the page fell back to a full reload (a second read) and came back with the explanation closed | pass | session reads=2 |
+| 30 | G10 authority lost: 'Access unavailable' with no member, revelation, explanation or Refresh content | pass | Access unavailable |
+| 31 | G10 the write's own confirmation remains on the (still mounted) status line | pass | "Character access removed." |
+| 32 | G11 reported ordering: the overview was answered and shown first, then the applied session lost access.manage and the page became 'Access unavailable' | pass | {"order":["POST POST revoke","GET session","GET overview","GET explain:701521"],"sawListFirst":true} |
+| 33 | G11 no member, revelation, source or explanation content remains and no Refresh/Explain control | pass | Campaign context: Phase13C Dev World › Phase13C Timeline A › Phase13C Campaign A |
+| 34 | G11 no new explanation read after the loss | pass | explain reads at loss=1, after=1 |
+| 35 | G7 setup: GM2's Campaign Owner role revoked by the admin | pass | status 200 |
+| 36 | G7 authority lost: the refresh shows the unavailable page and no member, revelation or explanation content | pass | Access unavailable |
+| 37 | G7 after the 403 only the refresh's list read was made; no explanation request followed | pass | GET overview |
+
+37 of 37 checks passed.

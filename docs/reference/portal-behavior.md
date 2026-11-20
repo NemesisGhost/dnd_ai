@@ -831,7 +831,10 @@ after a failed list read, or a confirmed Access write the caller cannot be affec
 in place and keeps the page and its status-line announcement; a write that may affect the caller, or an in-place read
 that fails or is not applied, reloads the session and the page mounts again with everything closed), the list first and each open
 explanation after it, as two independent reads rather than one snapshot;
-there are no live updates. A read that failed is not announced as refreshed, an explanation that failed to reload
+there are no live updates. The Access page is bound to the applied session's `access.manage` for its campaign: the moment
+an applied session lacks it, the overview, members, sources and explanations are unmounted and the unavailable state
+is shown (no explanation read follows, and nothing in flight can bring content back); a capability that returns starts
+from fresh reads with every card and explanation closed. A read that failed is not announced as refreshed, an explanation that failed to reload
 says so and shows nothing from before, and Refresh access returns focus to the member's explanation toggle (to the status line when that member is gone), but only if the manager has not moved focus elsewhere while the read was pending.
 
 ## 9. Search, lists, and non-disclosure

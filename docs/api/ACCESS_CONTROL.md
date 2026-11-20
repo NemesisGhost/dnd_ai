@@ -1047,7 +1047,12 @@ re-reads each open one only after the list answered; nothing from before is show
 affect the caller (their own membership, a group they are in or could be added to, or any control outside a
 scope) reloads the session instead and the page mounts again with every card and explanation closed (fail
 closed), as does an in-place session read that fails, is not applied or is overtaken (inherited observation O-5,
-regraded Medium and corrected after the real-browser run). The two reads are independent observations, not one snapshot, and the portal never matches
+regraded Medium and corrected after the real-browser run). The mounted Access content is also bound to the
+applied session's `access.manage` for the route's campaign (the existing per-campaign capability resolver): when
+an applied session lacks it, the overview, members, sources and explanations are unmounted at once and the
+unavailable state is shown, no explanation is read, a response still in flight cannot publish, and the held
+card and explanation ids are dropped, so a returning capability starts from fresh reads with everything closed
+(O-5-R1). The two reads are independent observations, not one snapshot, and the portal never matches
 an explanation source to an overview row (sources name characters, not ids). A failed list read, or a
 failed explanation read, is not announced as refreshed. A member who is absent from the new list is
 forgotten, so they do not reopen if they return. A caller without `access.manage` receives no source
