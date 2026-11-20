@@ -6,7 +6,7 @@ here is a `SafeMessageError` with a fixed, type-level `safe_status_code`,
 `safe_error_code`, and `safe_message` — never derived from caller input — so
 `dnd_ai.api.errors` returns it as a stable, client-branchable code without
 any per-route handling. The codes are the closed vocabulary the portal maps
-onto recovery paths (docs/UI_DESIGN.md §5.11): `stale_write` offers "load the
+onto recovery paths (docs/reference/portal-behavior.md §5.11): `stale_write` offers "load the
 latest version", `lifecycle_transition_not_allowed` explains the state
 precondition, and the field-mapped 400s (`ruleset_not_available`,
 `branch_point_invalid`, `supersession_target_invalid`) land on one form field.

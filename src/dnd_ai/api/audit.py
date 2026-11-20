@@ -138,7 +138,7 @@ def record_change_log(
     `ValueError`) and the `core.sources` provenance row a change cites. Both
     are pre-existing `audit.change_log` columns never previously wired
     through this writer. `reason` is stored but never returned by any read
-    surface in Phase 14 (docs/AUDIT_HISTORY_API.md), and must never carry a
+    surface in Phase 14 (docs/reference/audit-history.md), and must never carry a
     secret, token, or idempotency key.
 
     `previous_status`/`new_status` and `changed_fields` (Phase 13B blocker

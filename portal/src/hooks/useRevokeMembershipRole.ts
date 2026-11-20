@@ -9,6 +9,7 @@ import {
     revokeMembershipRole,
 } from "../api/revokeMembershipRole"
 import { useSession } from "../context/SessionContext"
+import { useAccessWriteCompletion } from "./useAccessWriteCompletion"
 
 export type RevokeMembershipRoleStatus =
     | { kind: "idle" }
@@ -53,6 +54,9 @@ export function useRevokeMembershipRole(
     onSuccess: () => void,
 ): UseRevokeMembershipRoleResult {
     const { state: sessionState, reload } = useSession()
+    // Confirmed write: reload the session, or re-read it in place when the write cannot affect the caller
+    // (hooks/useAccessWriteCompletion).
+    const completeWrite = useAccessWriteCompletion()
     const controllerRef =
         useRef<AbortController | null>(null)
     const idempotencyRef =
@@ -135,7 +139,7 @@ export function useRevokeMembershipRole(
                     // access.manage capability — never manufacture the
                     // updated capability set locally, always re-derive it
                     // from a fresh bootstrap.
-                    reload()
+                    completeWrite()
                 })
                 .catch((cause: unknown) => {
                     if (controller.signal.aborted) {
@@ -194,6 +198,7 @@ export function useRevokeMembershipRole(
             campaignId,
             onSuccess,
             reload,
+            completeWrite,
             resolveIdempotencyKey,
         ],
     )

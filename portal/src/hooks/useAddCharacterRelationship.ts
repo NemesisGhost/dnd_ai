@@ -9,6 +9,7 @@ import {
     addCharacterRelationship,
 } from "../api/addCharacterRelationship"
 import { useSession } from "../context/SessionContext"
+import { useAccessWriteCompletion } from "./useAccessWriteCompletion"
 
 export type AddCharacterRelationshipStatus =
     | { kind: "idle" }
@@ -57,6 +58,9 @@ export function useAddCharacterRelationship(
     onSuccess: () => void,
 ): UseAddCharacterRelationshipResult {
     const { state: sessionState, reload } = useSession()
+    // Confirmed write: reload the session, or re-read it in place when the write cannot affect the caller
+    // (hooks/useAccessWriteCompletion).
+    const completeWrite = useAccessWriteCompletion()
     const controllerRef =
         useRef<AbortController | null>(null)
     const idempotencyRef =
@@ -158,7 +162,7 @@ export function useAddCharacterRelationship(
                     // visible character perspectives (self-grant) — never
                     // manufacture the updated perspective set locally,
                     // always re-derive it from a fresh bootstrap.
-                    reload()
+                    completeWrite()
                 })
                 .catch((cause: unknown) => {
                     if (controller.signal.aborted) {
@@ -211,6 +215,7 @@ export function useAddCharacterRelationship(
             campaignId,
             onSuccess,
             reload,
+            completeWrite,
             resolveIdempotencyKey,
         ],
     )

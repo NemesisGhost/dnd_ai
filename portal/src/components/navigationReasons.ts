@@ -7,7 +7,7 @@ export const SELECT_CHARACTER_FIRST = "Select a character first"
 export const NOT_AVAILABLE_FOR_ACCOUNT = "Not available for your account"
 export const NEEDS_WORLD_ROLE = "Needs a world role"
 
-// Reasons the Infobox shows under a level that is disabled, loading or failed (docs/UI_DESIGN.md §4.8.12).
+// Reasons the Infobox shows under a level that is disabled, loading or failed (docs/reference/portal-behavior.md §4.8.12).
 // Like the text above, none carries a name, id, capability or count.
 export const LOADING_WORLDS = "Loading worlds…"
 export const LOADING_TIMELINES = "Loading timelines…"

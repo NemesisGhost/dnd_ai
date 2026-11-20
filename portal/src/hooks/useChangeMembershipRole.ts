@@ -9,6 +9,7 @@ import {
     changeMembershipRole,
 } from "../api/changeMembershipRole"
 import { useSession } from "../context/SessionContext"
+import { useAccessWriteCompletion } from "./useAccessWriteCompletion"
 
 export type ChangeMembershipRoleStatus =
     | { kind: "idle" }
@@ -58,6 +59,9 @@ export function useChangeMembershipRole(
     onSuccess: () => void,
 ): UseChangeMembershipRoleResult {
     const { state: sessionState, reload } = useSession()
+    // Confirmed write: reload the session, or re-read it in place when the write cannot affect the caller
+    // (hooks/useAccessWriteCompletion).
+    const completeWrite = useAccessWriteCompletion()
     const controllerRef =
         useRef<AbortController | null>(null)
     // One reservation for "one logical campaign/assignment/new-role edit"
@@ -171,7 +175,7 @@ export function useChangeMembershipRole(
                     // capabilities/navigation (self-change) — never
                     // manufacture the updated capability set locally,
                     // always re-derive it from a fresh bootstrap.
-                    reload()
+                    completeWrite()
                 })
                 .catch((cause: unknown) => {
                     if (controller.signal.aborted) {
@@ -228,6 +232,7 @@ export function useChangeMembershipRole(
             campaignId,
             onSuccess,
             reload,
+            completeWrite,
             resolveIdempotencyKey,
         ],
     )

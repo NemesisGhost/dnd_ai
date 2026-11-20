@@ -23,8 +23,8 @@ import { WorldLocationDetailPage } from "./WorldLocationDetailPage"
 import { WorldOrganizationDetailPage } from "./WorldOrganizationDetailPage"
 import { WorldReligionDetailPage } from "./WorldReligionDetailPage"
 
-// Route-based World detail dispatcher (UI_DESIGN.md §5.4,
-// UI_STYLE_GUIDE.md §10.2): /app/:campaignId/world/:category/:entityId.
+// Route-based World detail dispatcher (docs/reference/portal-behavior.md §5.4,
+// docs/reference/portal-style.md §10.2): /app/:campaignId/world/:category/:entityId.
 // `category` is validated against the categories with an independently
 // loadable detail contract and fails closed for anything else (including
 // "relationship", which has none until Phase 15.2).
@@ -145,7 +145,7 @@ export function CampaignWorldDetailPage() {
 
     // category === "character": the audience-safe Character Detail
     // response, never the full Character Sheet — a World card is not the
-    // selected player-character perspective (UI_STYLE_GUIDE.md §10.2). The same record navigation
+    // selected player-character perspective (docs/reference/portal-style.md §10.2). The same record navigation
     // as the Characters page offers the sheet, relationships, inventory and parties this caller may
     // open.
     return (

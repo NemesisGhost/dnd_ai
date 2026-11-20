@@ -27,7 +27,7 @@ interface ExpandableNavGroupProps {
   label: string
   // Whether the current route lies anywhere in this group.
   sectionActive: boolean
-  // The task root every child starts (docs/UI_DESIGN.md §4.8); a child may override it.
+  // The task root every child starts (docs/reference/portal-behavior.md §4.8); a child may override it.
   root: NavRoot
   items: ExpandableNavItem[]
   collapsed: boolean

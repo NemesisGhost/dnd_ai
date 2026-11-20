@@ -17,4 +17,4 @@ Subtype creation must create each required ancestor in one transaction. Constrai
 
 ## References
 
-- [PLAN.md §2.2](../README.md) and [DATABASE_CONVENTIONS.md §7](../DATABASE_CONVENTIONS.md#7-table-inheritance-conventions)
+- [PLAN.md §2.2 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#22-use-class-table-inheritance) and [DATABASE_CONVENTIONS.md §7](../DATABASE_CONVENTIONS.md#7-table-inheritance-conventions)

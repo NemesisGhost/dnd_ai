@@ -2213,3 +2213,55 @@ describe("AccessPage — access groups (Phase 13E-B checkpoint 6)", () => {
         ).toBeInTheDocument()
     })
 })
+
+describe("AccessPage: Revealed characters (E3, E4)", () => {
+    const withRevelations = (revelations: unknown): CampaignAccessOverview => ({
+        ...fullOverview,
+        members: fullOverview.members.map((member, index) =>
+            index === 0
+                ? ({ ...member, revelations } as CampaignAccessOverview["members"][number])
+                : member,
+        ),
+    })
+    const entry = (name: string, kind: string, code = "access_group", extra: object = {}) => ({
+        character_id: "c-secret-id",
+        character_display_name: name,
+        audience_kind_code: code,
+        audience_kind_display_name: kind,
+        ...extra,
+    })
+    const section = () => {
+        const heading = screen.getAllByRole("heading", { name: "Revealed characters" })[0]!
+        return heading.closest("section")!
+    }
+
+    it("lists each revelation in server order, duplicates kept, with no control", () => {
+        renderPage(
+            withRevelations([entry("Mira", "Access group"), entry("Mira", "Member", "member"), entry("Mira", "Access group")]),
+        )
+        const items = within(section()).getAllByRole("listitem").map((item) => item.textContent)
+        expect(items).toEqual(["Mira — Access group", "Mira — Member", "Mira — Access group"])
+        expect(within(section()).queryAllByRole("button")).toHaveLength(0)
+        expect(within(section()).queryAllByRole("link")).toHaveLength(0)
+    })
+
+    it.each([["an empty list", []], ["an absent key", undefined]])("says so for %s", (_label, value) => {
+        renderPage(withRevelations(value))
+        expect(within(section()).getByText("No revealed characters.")).toBeInTheDocument()
+    })
+
+    it("renders no id, code or key outside the two display names", () => {
+        renderPage(
+            withRevelations([
+                entry("Mira", "Member", "member", {
+                    character_revelation_id: "MARKER-REVELATION-ID",
+                    reason: "MARKER-REASON",
+                    created_by: "MARKER-CREATOR",
+                    group_name: "MARKER-GROUP",
+                }),
+            ]),
+        )
+        expect(document.body.textContent).not.toMatch(/MARKER|c-secret-id/)
+        expect(within(section()).queryByText(/access_group|\bmember\b/)).not.toBeInTheDocument()
+    })
+})

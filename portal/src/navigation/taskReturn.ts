@@ -8,7 +8,7 @@ import { parseTask, validateCarriedTask, validateTask } from "./taskOrigin"
 import type { TaskOriginV1 } from "./taskOrigin"
 
 // The task an entry carries, read for the pages that only pass an origin through or ask it where a list
-// was left (docs/UI_DESIGN.md §4.8). Unlike `resolveTask` it is NOT judged against this page's allowed
+// was left (docs/reference/portal-behavior.md §4.8). Unlike `resolveTask` it is NOT judged against this page's allowed
 // roots: an edit page that does not accept a Review task still has to hand it back to the record it
 // came from, which does. Nothing here grants anything. The task is parsed structurally (unknown keys
 // dropped, the trail bounded), must name this page's own campaign, and every list state read from it is

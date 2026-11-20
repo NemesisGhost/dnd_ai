@@ -2,8 +2,8 @@ import { matchRoutes } from "react-router"
 import type { ExecutionScope, ViewedRecord } from "./contexts"
 import { isIdShaped } from "./contexts"
 
-// One entry per production route pattern in App.tsx (docs/UI_DESIGN.md §4.8, and the route inventory in
-// docs/UI_DESIGN.md). `routeMeta.test.ts` builds the pattern list
+// One entry per production route pattern in App.tsx (docs/reference/portal-behavior.md §4.8, and the route inventory in
+// docs/reference/portal-behavior.md). `routeMeta.test.ts` builds the pattern list
 // from the real route tree and fails when a pattern has no entry, or an entry matches no pattern, so
 // this table cannot drift from App.tsx silently. Matching itself is react-router's, over these same
 // patterns, so route ranking and permissions are untouched: this table only describes routes.

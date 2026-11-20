@@ -271,7 +271,7 @@ def _world_role_row(
 
 
 def test_downgrade_with_new_model_data_loses_exactly_what_it_documents() -> None:
-    """The supported downgrade is lossy by design (docs/LOCAL_DEPLOYMENT.md): Editor, Reviewer and
+    """The supported downgrade is lossy by design (docs/operations/deployment.md): Editor, Reviewer and
     Reader assignments and world-use grants are discarded, a Viewer that sits beside an Owner of the
     same user is closed (kept as history, never deleted), and non-admin system roles are dropped.
     It must also *complete* on a database that holds that data: the discarding and closing leave

@@ -4,6 +4,7 @@ import {
     addGroupResourceGrant,
 } from "../api/addGroupResourceGrant"
 import { useSession } from "../context/SessionContext"
+import { useAccessWriteCompletion } from "./useAccessWriteCompletion"
 import type { ResourceGrantEffect, ResourceGrantTarget } from "../types/resourceGrantTarget"
 
 export type AddGroupResourceGrantStatus =
@@ -48,6 +49,9 @@ export function useAddGroupResourceGrant(
     onSuccess: () => void,
 ): UseAddGroupResourceGrantResult {
     const { state: sessionState, reload } = useSession()
+    // Confirmed write: reload the session, or re-read it in place when the write cannot affect the caller
+    // (hooks/useAccessWriteCompletion).
+    const completeWrite = useAccessWriteCompletion()
     const controllerRef = useRef<AbortController | null>(null)
     const idempotencyRef = useRef<IdempotencyReservation | null>(null)
 
@@ -140,7 +144,7 @@ export function useAddGroupResourceGrant(
                     // the group — never manufacture the updated capability
                     // set locally, always re-derive it from a fresh
                     // bootstrap.
-                    reload()
+                    completeWrite()
                 })
                 .catch((cause: unknown) => {
                     if (controller.signal.aborted) {
@@ -169,7 +173,7 @@ export function useAddGroupResourceGrant(
                     setSnapshot({ campaignId: requestCampaignId, status: { kind: "error" } })
                 })
         },
-        [status.kind, sessionState, campaignId, onSuccess, reload, resolveIdempotencyKey],
+        [status.kind, sessionState, campaignId, onSuccess, reload, completeWrite, resolveIdempotencyKey],
     )
 
     const reset = useCallback(() => {

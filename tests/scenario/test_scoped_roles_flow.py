@@ -1,4 +1,4 @@
-"""Scoped-role end-to-end scenario (docs/SCOPED_ROLE_IMPLEMENTATION_PLAN.md, SR-8;
+"""Scoped-role end-to-end scenario (docs/api/ACCESS_CONTROL.md, SR-8;
 docs/adr/0020-scoped-system-world-and-campaign-roles.md).
 
 Everything runs through the HTTP API with a real cookie session, CSRF token and Origin

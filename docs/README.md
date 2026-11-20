@@ -1,46 +1,41 @@
-# Documentation
+# D&D AI documentation
 
-Start with the topic you need. Current behavior belongs in the topic references;
-the roadmap describes intended delivery, and dated evidence describes only the run recorded.
+Use the portal to author shared world content, operate a campaign and show each player the material their audience can read. Start with the tutorial if this is your first campaign.
 
-| Question | Maintained reference |
+## Tutorials
+
+[Run your first session](tutorials/first-campaign.md) walks from a bootstrapped account to a completed session in a new world.
+
+## How-to guides
+
+| To do this | Open |
 |---|---|
-| What is the product? | [Project README](../README.md) |
-| What is implemented and what blocks delivery? | [Project status](PROJECT_STATUS.md) |
-| What comes next? | [Roadmap](PLANv2.md), [outstanding work](BACKLOG.md) |
-| How do I develop and verify a change? | [Development](DEVELOPMENT.md) |
-| What does a domain term mean? | [Domain model](DOMAIN_MODEL.md) |
-| Which tables and invariants apply? | [Database model](architecture/DATABASE_MODEL.md), [database conventions](DATABASE_CONVENTIONS.md) |
-| How do records change? | [Entity lifecycle](ENTITY_LIFECYCLE.md) |
-| Where does code belong? | [System architecture](architecture/SYSTEM_ARCHITECTURE.md) |
-| How do read APIs work? | [Read API](api/READ_API.md), [character sheet](api/CHARACTER_SHEET.md) |
-| Who may access or change something? | [Access control](api/ACCESS_CONTROL.md), [audit history](AUDIT_HISTORY_API.md) |
-| How should the portal behave and look? | [UI design](UI_DESIGN.md), [style guide](UI_STYLE_GUIDE.md) |
-| How is production intended to run? | [Local deployment](LOCAL_DEPLOYMENT.md) |
-| How do I recover data or administrator access? | [Database recovery](operations/DATABASE_RECOVERY.md), [administrator recovery](operations/PLATFORM_ADMINISTRATOR_RECOVERY.md) |
-| What about optional AWS infrastructure? | [AWS RDS reference](INFRASTRUCTURE.md) |
-| How do we review findings? | [Issue grading](ISSUE_GRADING_RUBRIC.md) |
-| Why was an architectural choice made? | [ADRs](adr/) |
-| What was verified historically? | [Delivery history and retired-source map](DELIVERY_HISTORY.md) |
+| Install the API and portal, activate the first account | [Start locally](operations/start-locally.md) |
+| Work on the backend, write migrations or run checks | [Development](DEVELOPMENT.md) · [Seed data](../database/seeds/README.md) |
+| Run or build a client | [Portal](../portal/README.md) · [Package and pair Foundry](../foundry-module/README.md) |
+| Operate a deployment or plan production ingress | [Deployment](operations/deployment.md) · [Optional AWS infrastructure](operations/optional-aws.md) |
+| Restore a database or regain administrative access | [Database recovery](operations/DATABASE_RECOVERY.md) · [Administrator recovery](operations/PLATFORM_ADMINISTRATOR_RECOVERY.md) |
 
-## Active implementation and acceptance
+## Reference
 
-- [Outstanding work](BACKLOG.md) consolidates the five retired local plans, R01–R18, current package status, unresolved defects, scope decisions and acceptance gates (reviewed at `d51e38a`, 2026-11-11).
-- [Context-navigation correction plan](PHASE15_CONTEXT_NAVIGATION_CORRECTION_PLAN_2026-11-11.md) scopes the Infobox timeline read gates, campaign-only timeline navigation (CN-1), the meaningful-choice rule (CN-2) and stale World option reconciliation; the contract is [UI_DESIGN §4.8.12](UI_DESIGN.md#4812-context-navigation-correction-read-gates-destinations-and-meaningful-choice-approved-2026-11-11-implemented). Implemented through `6cdc68b`, with independent review recorded as PASS WITH NONBLOCKING VERIFICATION LIMITATION; real-browser checks and retained follow-ups remain.
-- [P03-A](PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md) and its [A1 design](PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md) remain active handoff inputs. Read the latest dated implementation/review entry as well as the opening summary.
-- [P03-A A5 design](PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md) specifies the OD-18 campaign-scoped player profile: storage, GM reads and GM-selected copying of an eligible field through A2 provenance (slices A5a–A5c, migrations 147–148). Finalized with owner-approved D13–D18 (2026-11-11). It is infrastructure: no production profile writer until P03-B. A5a (storage and GM reads), A5b (provenance and restriction) and A5c (the GM-selected copy route) are implemented; their records are in design §17.
-- [R19 foundation plan](R19_FOUNDATION_IMPLEMENTATION_PLAN.md) retains pending implementation and coordination gates. Accepted ADRs do not prove implementation.
-- Phase 14/15: [journey](PHASE14_15_HOWTO_FIRST_CAMPAIGN.md), [companion scenarios](PHASE14_15_COMPANION_SCENARIOS.md), [coverage](PHASE14_15_COVERAGE_MATRIX.md), [results and decisions](PHASE14_15_ACCEPTANCE_LEDGER.md), [defects](PHASE14_15_DEFECT_REGISTER.md), [environment](PHASE14_15_ACCEPTANCE_ENVIRONMENT.md), and [Phase 15 verification](PHASE15_VERIFICATION.md).
+| Subject | Contract |
+|---|---|
+| HTTP requests, responses, authority and transaction handling | [API operation catalog](api/operations.md) · [Read projections](api/READ_API.md) · [Character sheet](api/CHARACTER_SHEET.md) |
+| Authentication, access management, profiles and final authorization | [Access control](api/ACCESS_CONTROL.md) · [Audit history](reference/audit-history.md) |
+| PostgreSQL schema, naming and commands | [Table inventory](reference/tables.md) · [Logical model](architecture/DATABASE_MODEL.md) · [Database conventions](DATABASE_CONVENTIONS.md) · [Entity lifecycle](ENTITY_LIFECYCLE.md) |
+| Environment, AI settings and integrations | [Runtime configuration](reference/runtime.md) · [Environment template](../.env.example) |
+| Portal navigation, interaction and visual rules | [Screen behavior](reference/portal-behavior.md) · [Navigation](reference/portal-navigation.md) · [Style guide](reference/portal-style.md) |
+| Documentation ownership and editorial rules | [Documentation standard](standard.md) |
 
-## Maintenance rules
+## Explanation
 
-Keep one current description of each contract. Link to it from plans instead of copying it.
-Record outstanding work by stable ID in the backlog or defect register. Record tests with
-their SHA, environment and method; code review, automated tests, browser checks, assistive
-technology and owner acceptance are separate evidence. A historical pass never becomes a
-fresh pass through documentation editing.
+- [Worlds, people and play](explanation/worlds-and-play.md) explains scope, control, publication and discovery.
+- [Domain model](DOMAIN_MODEL.md) defines the vocabulary. [System architecture](architecture/SYSTEM_ARCHITECTURE.md) describes layering and transactions. The [dungeon scenario](architecture/DUNGEON_FLOW.md) ties the domains together.
+- [Architecture decisions](adr/) preserve rationale, superseded choices and accepted future requirements.
 
-Closed execution diaries live in Git history, indexed by DELIVERY_HISTORY. Short legacy
-filename pointers remain only where active handoffs or numerous source citations still
-depend on them; they do not create a second authority. Delete a pointer when its callers
-have been migrated. New documentation should use the maintained topic paths above.
+## Delivery and evidence
+
+- [Work register](delivery/work-register.md) for the single maintained register, current obligations and ID migration crosswalk. [Roadmap](delivery/roadmap.md) for phase order and dependencies.
+- [Character work](delivery/shared-characters.md), [ownership design](delivery/ownership-design.md), [player profiles](delivery/player-profile-design.md), [context navigation](delivery/context-navigation.md) and [rules foundations](delivery/rules-foundations.md) for detailed scope and decisions.
+- [First-campaign acceptance script](delivery/first-campaign-acceptance.md), [companion scenarios](delivery/companion-scenarios.md), [coverage matrix](delivery/coverage.md) and [environment](delivery/acceptance-environment.md) for rehearsals. [Ledger](delivery/acceptance-ledger.md) for recorded outcomes.
+- [Defects](delivery/defects.md), [grading rubric](delivery/grading.md), [Phase 15 verification](delivery/phase-15-verification.md), [delivery history](delivery/history.md) and [migration record](delivery/migration.md) for traceability.

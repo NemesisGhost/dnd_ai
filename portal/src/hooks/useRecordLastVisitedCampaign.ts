@@ -3,7 +3,7 @@ import { recordLastVisitedCampaign } from "../api/userPreferences"
 import type { SessionBootstrap } from "../types/bootstrap"
 
 // Records the campaign the user has just entered as their durable
-// "last visited" campaign (docs/UI_DESIGN.md §4.7).
+// "last visited" campaign (docs/reference/portal-behavior.md §4.7).
 //
 // `campaignId` must be a campaign that has already passed the portal's
 // authorization boundary (it is in the *current* scope's bootstrap) --

@@ -7,7 +7,7 @@ import type { TaskOriginV1, TrailEntry } from "./taskOrigin"
 import { executionScopeOf, matchRouteMeta } from "./routeMeta"
 import type { RouteMatch } from "./routeMeta"
 
-// Resolution steps 2 and 3 for a history entry with no valid `state.task` (docs/UI_DESIGN.md §4.8).
+// Resolution steps 2 and 3 for a history entry with no valid `state.task` (docs/reference/portal-behavior.md §4.8).
 //
 // No link writes the older router-state keys any more (every family has migrated to the task). This
 // adapter remains for one reason: a history entry written before the migration, still in a tab's

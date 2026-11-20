@@ -1,7 +1,7 @@
 # ruff: noqa: F811 - the imported fixtures are used by parameter name
 """R01 S5-E2 combined role/membership lock-order correction C1-C4: unconditional application-path regressions.
 
-Design: docs/R01_S5E2_LOCK_ORDER_CORRECTION_DESIGN_2026-11-15.md (cases A-I, section 5). Every case drives real
+Historical local design: docs/R01_S5E2_LOCK_ORDER_CORRECTION_DESIGN_2026-11-15.md (cases A-I, section 5). Every case drives real
 routes over real connections. One request is parked at a named statement (before it executes, holding what it took
 earlier); the competitor is started and observed queued behind the parked backend's pid; then the parked request is
 released. Each case asserts, unconditionally and in this order:

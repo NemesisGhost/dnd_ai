@@ -202,7 +202,7 @@ unambiguous "this is what changed" audit story the way `change_character_
 relationship()`'s single-field swap does. Revoking the old grant and
 creating a new one (two already-hardened, already-audited, already-
 idempotent mutations) is the deliberate replacement for a generic edit
-form here — see `docs/PHASE13E_ACCESS_CONTRACT.md` §3k for the full
+form here — see `docs/api/ACCESS_CONTROL.md` §3k for the full
 rationale.
 
 Checkpoint-6 correction: `create_resource_grant()`'s `grantee_access_

@@ -4,7 +4,7 @@ import { NavigationType, useLocation, useNavigationType } from "react-router"
 import { readAnnounceMessage, useAnnounce } from "../components/authoring/announcer"
 import { entryRoot, stampRoot } from "../navigation/entryStamp"
 
-// Focus and announcement on arrival (docs/UI_DESIGN.md §5.11). Once a page's
+// Focus and announcement on arrival (docs/reference/portal-behavior.md §5.11). Once a page's
 // authoritative data has loaded (`ready`), focus moves to its <h1> and, if the
 // navigation carried a success message, it is announced — after the fetch that
 // proves the write, so the message survives the refetch. Runs once per

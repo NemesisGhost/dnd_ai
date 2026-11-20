@@ -1,6 +1,6 @@
 """Tests for `dnd_ai.api.knowledge`'s new Phase 13D list endpoint
 (`GET /campaigns/{id}/knowledge`) — the audience-filtered discovery/list
-side of the Knowledge screen (docs/UI_DESIGN.md §5.6).
+side of the Knowledge screen (docs/reference/portal-behavior.md §5.6).
 
 Covers, per docs/api/READ_API.md §9: known fact; false party
 belief (interpretation, not canonical truth); recently-discovered ordering

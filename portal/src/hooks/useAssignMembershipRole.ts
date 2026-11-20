@@ -9,6 +9,7 @@ import {
     assignMembershipRole,
 } from "../api/assignMembershipRole"
 import { useSession } from "../context/SessionContext"
+import { useAccessWriteCompletion } from "./useAccessWriteCompletion"
 
 export type AssignMembershipRoleStatus =
     | { kind: "idle" }
@@ -54,6 +55,9 @@ export function useAssignMembershipRole(
     onSuccess: () => void,
 ): UseAssignMembershipRoleResult {
     const { state: sessionState, reload } = useSession()
+    // Confirmed write: reload the session, or re-read it in place when the write cannot affect the caller
+    // (hooks/useAccessWriteCompletion).
+    const completeWrite = useAccessWriteCompletion()
     const controllerRef =
         useRef<AbortController | null>(null)
     const idempotencyRef =
@@ -143,7 +147,7 @@ export function useAssignMembershipRole(
                     // capabilities/navigation (self-assign) — never
                     // manufacture the updated capability set locally,
                     // always re-derive it from a fresh bootstrap.
-                    reload()
+                    completeWrite()
                 })
                 .catch((cause: unknown) => {
                     if (controller.signal.aborted) {
@@ -193,6 +197,7 @@ export function useAssignMembershipRole(
             campaignId,
             onSuccess,
             reload,
+            completeWrite,
             resolveIdempotencyKey,
         ],
     )

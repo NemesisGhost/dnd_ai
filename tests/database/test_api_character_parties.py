@@ -1,5 +1,5 @@
 """Tests for `GET /campaigns/{id}/characters/{character_id}/parties` — the informational party
-affiliations list in the campaign Info Box (docs/UI_DESIGN.md §4).
+affiliations list in the campaign Info Box (docs/reference/portal-behavior.md §4).
 
 Covers: the complete, stably ordered current membership; the temporal rule (an ended membership
 and a membership on another timeline do not count); campaign attachment (a party of another

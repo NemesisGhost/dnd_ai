@@ -13,7 +13,7 @@ import {
 import { useSession } from "../context/SessionContext"
 import { BreadcrumbLabelContext } from "../navigation/BreadcrumbLabelContext"
 import type { LabelRegistry } from "../navigation/labelRegistry"
-import type { CharacterDetail } from "../types/character"
+import type { CharacterRead } from "../types/character"
 
 export type CharacterState =
     | {
@@ -21,7 +21,7 @@ export type CharacterState =
     }
     | {
         status: "success"
-        character: CharacterDetail
+        character: CharacterRead
     }
     | {
         status: "unavailable"

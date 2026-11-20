@@ -1,4 +1,4 @@
-"""The D3 ownership gate (P03-A A1, docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md).
+"""The D3 ownership gate (P03-A A1, docs/delivery/ownership-design.md).
 
 Assigning the built-in `campaign_owner` role, changing a role to it, adding a member with it and
 transferring ownership all require the caller to hold a live built-in owner assignment in the same

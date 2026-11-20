@@ -13,7 +13,7 @@ import {
     vi,
 } from "vitest"
 import { SessionContext } from "../context/SessionContext"
-import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
+import { bootstrapWithAccessManage } from "../test/accessBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
@@ -64,7 +64,7 @@ function renderPage(
             value={{
                 state: {
                     status: "authenticated",
-                    bootstrap: sessionBootstrapFixture,
+                    bootstrap: bootstrapWithAccessManage("campaign-one"),
                 },
                 reload: vi.fn(), refresh: vi.fn(),
             }}

@@ -1,11 +1,11 @@
 """R01 S0 probes: what the fresh-authorization plan assumes about PostgreSQL 18 and the request path.
 
-docs/R01_FRESH_AUTHORIZATION_PLAN_2026-11-12.md section 12.1 lists assumptions ([A]) that must be
+The historical local plan section 12.1 lists assumptions ([A]) that must be
 verified before S1. Each test here states, in its docstring, **what it establishes and what it does not**.
 Nothing here changes production behavior: the tests read the catalog, the source and the live app, and
 create and drop only their own scratch objects in the ephemeral test database.
 
-Evidence summary and the design consequence of each result: docs/R01_S0_VERIFICATION_2026-11-12.md.
+Evidence summary and the design consequence of each result, historical local record: docs/R01_S0_VERIFICATION_2026-11-12.md.
 """
 
 import ast

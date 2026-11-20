@@ -6,7 +6,7 @@
 // deliberately never sends one) plus the correlation id for support.
 //
 // Existing access-management requests keep their own per-verb modules; only
-// the authoring surface uses this helper (docs/UI_DESIGN.md §5.11).
+// the authoring surface uses this helper (docs/reference/portal-behavior.md §5.11).
 
 export class ApiRequestError extends Error {
     readonly status: number

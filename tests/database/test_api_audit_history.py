@@ -455,7 +455,7 @@ class Fixture:
         # falls back to a fixed placeholder because the actor account was
         # deleted" is therefore not merely unlikely but provably
         # unreachable while any referencing audit.change_log row survives
-        # — see docs/AUDIT_HISTORY_API.md §6 and
+        # — see docs/reference/audit-history.md §6 and
         # tests/unit/test_audit_history_query.py (which exercises
         # `_resolve_actor`'s "unknown"/placeholder branches directly, as
         # pure defensive code with no live database path to reach them).

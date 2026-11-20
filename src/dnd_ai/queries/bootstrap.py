@@ -41,7 +41,7 @@ itself already performs per campaign:
   (resolved from `AccessContext.timeline_id`, never caller-supplied) and
   that timeline's `core.worlds` row — `world_id`/`world_name`/`timeline_id`/
   `timeline_name`, the minimum the portal needs to build the World ->
-  Timeline -> Campaign hierarchy (docs/UI_DESIGN.md §4.1/§5.2). Only worlds
+  Timeline -> Campaign hierarchy (docs/reference/portal-behavior.md §4.1/§5.2). Only worlds
   and timelines reachable through an active membership above ever appear;
   an unrelated world or a branch timeline the campaign is not played on is
   never returned;
@@ -66,7 +66,7 @@ itself already performs per campaign:
   will accept (it requires the same `character.view_knowledge`), so the portal
   is never handed a `(character_id, party_id)` pair the resolver would reject.
 
-Campaign startup (docs/UI_DESIGN.md §4.2, §4.7):
+Campaign startup (docs/reference/portal-behavior.md §4.2, §4.7):
 
 - `campaign_preferences` carries the user's stored `security.user_portal_
   preferences` values, but only while each stored campaign ID is still in
@@ -279,7 +279,7 @@ def resolve_startup_campaign_id(
     preferred: uuid.UUID | None,
     last_visited: uuid.UUID | None,
 ) -> uuid.UUID | None:
-    """Pure landing-campaign precedence (docs/UI_DESIGN.md §4.2 steps 2-6).
+    """Pure landing-campaign precedence (docs/reference/portal-behavior.md §4.2 steps 2-6).
     `preferred`/`last_visited` are assumed unfiltered; membership in
     `campaign_ids` is checked here."""
     if not campaign_ids:
@@ -325,7 +325,7 @@ def get_session_bootstrap(connection: Connection, *, user_id: uuid.UUID) -> Sess
             continue
 
         # World and timeline for the World -> Timeline -> Campaign hierarchy
-        # the portal renders (docs/UI_DESIGN.md §4.1's CampaignContextPanel,
+        # the portal renders (docs/reference/portal-behavior.md §4.1's CampaignContextPanel,
         # §5.2's "world name when permitted"). Resolved from
         # `access.timeline_id` — the campaign's own pinned timeline, already
         # authorized by `resolve_access_context` — never from anything the

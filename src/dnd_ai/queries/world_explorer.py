@@ -1,5 +1,5 @@
 """Audience-filtered browse/search/detail reads for the Phase 13D World
-Explorer screen (docs/UI_DESIGN.md §5.4, docs/api/READ_API.md
+Explorer screen (docs/reference/portal-behavior.md §5.4, docs/api/READ_API.md
 §3/§9).
 
 Every existing world read in this codebase is a single-resource "get by
@@ -68,7 +68,7 @@ Entity-rooted browse results are ordered `(lower(canonical_name),
 entity_id)` — deterministic, stable across inserts/deletes, and the exact
 keyset the opaque `dnd_ai.api.pagination` cursor carries. Relationships
 (not entity-rooted, no name) order by `relationship_id` alone. No total
-count is computed for any browse result (docs/UI_DESIGN.md §9).
+count is computed for any browse result (docs/reference/portal-behavior.md §9).
 
 `world.relationships` (list and detail) is returned only when *every*
 participant is independently discoverable by the caller under the rules

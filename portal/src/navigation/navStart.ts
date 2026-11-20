@@ -3,7 +3,7 @@ import type { NavRoot } from "./routeMeta"
 import { startTask, validateTask } from "./taskOrigin"
 import type { TaskOriginV1 } from "./taskOrigin"
 
-// A Navbar destination starts a task (docs/UI_DESIGN.md §4.8): root = the Navbar item, scope = the
+// A Navbar destination starts a task (docs/reference/portal-behavior.md §4.8): root = the Navbar item, scope = the
 // destination's own execution scope, no trail and no list state. The state rides on the link, so it
 // is applied by the router only when the navigation is accepted. A navigation the departure guard
 // holds and the person answers Stay to never commits it: the existing entry, its task and its drafts

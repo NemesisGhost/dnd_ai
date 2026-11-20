@@ -22,7 +22,7 @@ locals {
 # replacement while attached to a live instance (the old group can't be
 # destroyed while in use, and the new one can't reuse the name). This gives
 # the correct order — create the new group, point the instance at it, then
-# destroy the old one. See docs/POSTGRES18_UPGRADE_PLAN.md §B1.
+# destroy the old one. See historical 53416d5:docs/POSTGRES18_UPGRADE_PLAN.md §B1.
 resource "aws_db_parameter_group" "main" {
   family      = local.parameter_group_family
   name_prefix = "${var.project_name}-${var.environment}-db-params-"

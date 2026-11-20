@@ -4,7 +4,7 @@
 
 This document defines the first full vertical slice for the D&D AI World Platform: a party navigates a dungeon, discovers hidden information, changes persistent timeline state, advances a quest, influences NPC knowledge and goals, and leaves consequences visible to other campaigns sharing the same timeline.
 
-This flow is both a gameplay model and an architectural acceptance test.
+Use this journey as a cross-domain acceptance scenario. Individual steps have different delivery status. The [work register](../delivery/work-register.md) owns outstanding checks, including branch-state inheritance. NPC goal simulation and the general rules engine are future scope.
 
 ## 2. Scenario
 

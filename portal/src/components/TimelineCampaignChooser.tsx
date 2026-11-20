@@ -23,7 +23,7 @@ interface TimelineCampaignChooserProps {
   onClosedWithFocus: () => void
 }
 
-// The inline, non-modal campaign chooser (docs/UI_DESIGN.md §4.8.12, CN-1): a timeline the caller reaches
+// The inline, non-modal campaign chooser (docs/reference/portal-behavior.md §4.8.12, CN-1): a timeline the caller reaches
 // through several of their campaigns opens none of them until the person picks one. It is not a dialog,
 // it changes nothing by being open, and each link is the same departure the Campaign select makes (a new
 // campaign task and the campaign selection note), so the departure guard, the arrival announcement and the

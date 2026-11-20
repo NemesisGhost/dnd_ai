@@ -26,6 +26,7 @@ export const NO_RECORD_AUTHORING: RecordAuthoring = {
     can_review: false,
 }
 
-export function authoringOf(detail: { authoring?: RecordAuthoring } | null | undefined): RecordAuthoring {
-    return detail?.authoring ?? NO_RECORD_AUTHORING
+// Any record read: a body without `authoring` (the public character tier carries none) has no rights.
+export function authoringOf(detail: object | null | undefined): RecordAuthoring {
+    return (detail as { authoring?: RecordAuthoring } | null | undefined)?.authoring ?? NO_RECORD_AUTHORING
 }

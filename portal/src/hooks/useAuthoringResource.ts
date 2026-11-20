@@ -35,7 +35,7 @@ export interface UseAuthoringResourceResult<T> {
     authority: LabelRegistry | null
     // When the read behind `state` STARTED, as a position in one module-wide monotonic order shared by every
     // authoring read (a first load or a refetch), or null while loading. Sources are compared by when they
-    // started, never when they answered (docs/UI_DESIGN.md §4.8.12). It belongs to the data on screen: a
+    // started, never when they answered (docs/reference/portal-behavior.md §4.8.12). It belongs to the data on screen: a
     // refetch in flight keeps the earlier value until its own answer is applied. Callers that ignore it are
     // unaffected.
     startedSeq: number | null

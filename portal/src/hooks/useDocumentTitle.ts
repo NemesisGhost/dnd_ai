@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 
-// Titles belong to terminal states only (docs/UI_DESIGN.md, "Unavailable and unauthorized destinations").
+// Titles belong to terminal states only (docs/reference/portal-behavior.md, "Unavailable and unauthorized destinations").
 const TITLE_SUFFIX = "portal"
 
 // Sets the document title for as long as the calling component is mounted and puts the previous

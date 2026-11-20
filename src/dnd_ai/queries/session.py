@@ -2,7 +2,7 @@
 
 Phase 13D backend-readiness gap: `dnd_ai.api.sessions` previously exposed
 only `end_session` (a GM write) — there was no read side at all, so the
-portal's Session detail screen (docs/UI_DESIGN.md §5.8) had no endpoint to
+portal's Session detail screen (docs/reference/portal-behavior.md §5.8) had no endpoint to
 call. `dnd_ai.domain.access._TARGET_COLUMNS` already names `session_id` as
 a resource-grant target column (alongside `quest_id`/`event_id`/etc.), so
 the authorization machinery for a per-session grant already existed; only

@@ -1,8 +1,8 @@
 # D&D AI Portal
 
 React/TypeScript/Vite client for the application API. Backend authorization is authoritative.
-[Project status](../docs/PROJECT_STATUS.md) owns delivery state; [UI design](../docs/UI_DESIGN.md)
-owns routes/navigation/behavior; [style guide](../docs/UI_STYLE_GUIDE.md) owns presentation.
+[Project status](../docs/delivery/work-register.md) owns delivery state; [UI design](../docs/reference/portal-behavior.md)
+owns routes/navigation/behavior; [style guide](../docs/reference/portal-style.md) owns presentation.
 [Access control](../docs/api/ACCESS_CONTROL.md) and the read API references own API contracts.
 
 ## Prerequisites
@@ -35,7 +35,7 @@ npm ci
 
 ## Run locally
 
-From `C:\Users\nemes\dnd_ai\portal`:
+From the `portal/` directory:
 
 ```powershell
 npm run dev
@@ -85,7 +85,7 @@ Frontend API requests use same-origin relative URLs. Session bootstrap uses
 
 During local development, Vite forwards:
 
-- `/api/*` to `http://localhost:8000/api/*`
+- `/api/*` to `http://localhost:8000/*` (Vite strips the prefix)
 - `/auth/*` to `http://localhost:8000/auth/*`
 
 FastAPI must be running separately. Its database configuration must point
@@ -109,4 +109,4 @@ Do not commit local database credentials or authentication secrets.
 API requests use same-origin credentials and supported CSRF/session handling. Never put
 tokens, private drafts or authorization grants in navigation persistence. Route selection
 is not permission. Check UI_DESIGN and current route metadata before adding navigation.
-Historical implementation/learning checkpoints are indexed in [delivery history](../docs/DELIVERY_HISTORY.md).
+Historical implementation/learning checkpoints are indexed in [delivery history](../docs/delivery/history.md).

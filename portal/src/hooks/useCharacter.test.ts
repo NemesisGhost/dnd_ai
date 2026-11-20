@@ -11,7 +11,8 @@ import {
     vi,
 } from "vitest"
 import type { CharacterDetail } from "../types/character"
-import { CharacterRequestError } from "../api/character"
+import { CharacterContractError, CharacterRequestError, normalizeCharacterRead } from "../api/character"
+import { liveBody, publicBody } from "../fixtures/publicCharacter"
 import { useCharacter } from "./useCharacter"
 
 const {
@@ -260,5 +261,73 @@ describe("useCharacter", () => {
         unmount()
 
         expect(signal.aborted).toBe(true)
+    })
+})
+describe("useCharacter tiers", () => {
+    const publicRead = normalizeCharacterRead(publicBody())
+    const fullRead = normalizeCharacterRead(liveBody("full"))
+    const summaryRead = normalizeCharacterRead(liveBody("summary"))
+
+    it("reports a contract error as the retryable error state, never as success (A15)", async () => {
+        const refused = new CharacterContractError("unknown tier")
+        fetchCharacterMock.mockRejectedValue(refused)
+        const { result } = renderHook(() => useCharacter("campaign-a", "character-a"))
+        await waitFor(() => {
+            expect(result.current.state).toEqual({ status: "error", error: refused })
+        })
+    })
+
+    it.each([
+        ["full", "public", fullRead, publicRead],
+        ["public", "summary", publicRead, summaryRead],
+        ["summary", "public", summaryRead, publicRead],
+    ])("replaces a %s answer with the %s answer wholesale on retry (A10, A12)", async (_from, _to, first, second) => {
+        fetchCharacterMock.mockResolvedValueOnce(first).mockResolvedValueOnce(second)
+        const { result } = renderHook(() => useCharacter("campaign-a", "character-a"))
+        await waitFor(() => {
+            expect(result.current.state).toEqual({ status: "success", character: first })
+        })
+        act(() => {
+            result.current.retry()
+        })
+        expect(result.current.state).toEqual({ status: "loading" })
+        await waitFor(() => {
+            expect(result.current.state).toEqual({ status: "success", character: second })
+        })
+    })
+
+    it.each([403, 404])("drops a public answer for HTTP %s (A11)", async (status) => {
+        fetchCharacterMock
+            .mockResolvedValueOnce(publicRead)
+            .mockRejectedValueOnce(new CharacterRequestError(status))
+        const { result } = renderHook(() => useCharacter("campaign-a", "character-a"))
+        await waitFor(() => {
+            expect(result.current.state.status).toBe("success")
+        })
+        act(() => {
+            result.current.retry()
+        })
+        await waitFor(() => {
+            expect(result.current.state).toEqual({ status: "unavailable" })
+        })
+    })
+
+    it("never shows an earlier character's answer under a new one (A13)", async () => {
+        let resolveFirst: ((read: unknown) => void) | undefined
+        fetchCharacterMock
+            .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+            .mockResolvedValueOnce(summaryRead)
+        const { result, rerender } = renderHook(({ id }) => useCharacter("campaign-a", id), {
+            initialProps: { id: "character-x" },
+        })
+        rerender({ id: "character-y" })
+        await waitFor(() => {
+            expect(result.current.state).toEqual({ status: "success", character: summaryRead })
+        })
+        act(() => {
+            resolveFirst?.(publicRead)
+        })
+        await Promise.resolve()
+        expect(result.current.state).toEqual({ status: "success", character: summaryRead })
     })
 })

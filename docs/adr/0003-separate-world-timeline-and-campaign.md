@@ -17,4 +17,4 @@ World, timeline and campaign remain separate identities. Branch inheritance stop
 
 ## References
 
-- [PLAN.md §2.3](../README.md) and [DOMAIN_MODEL.md](../DOMAIN_MODEL.md)
+- [PLAN.md §2.3 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#23-worlds-timelines-campaigns-and-sessions-are-separate-concepts) and [DOMAIN_MODEL.md](../DOMAIN_MODEL.md)

@@ -50,7 +50,7 @@ seeded dnd5e/2024 content (migration 022) — this fixture creates no
 `rules.*` rows of its own.
 
 Also supports the Phase 13D Sessions list/detail live-verification
-checkpoint (docs/UI_DESIGN.md §5.7-§5.8, read back through the real
+checkpoint (docs/reference/portal-behavior.md §5.7-§5.8, read back through the real
 `GET /campaigns/{id}/sessions` and `.../sessions/{id}` endpoints). Campaign
 A gets three fixture-owned `campaign.sessions` rows — see
 `_CAMPAIGN_A_SESSIONS`:
@@ -155,7 +155,7 @@ Also supports the Phase 13D World Explorer and Knowledge screen
 live-verification checkpoints (the portal's read-only
 `GET /campaigns/{id}/world/search`, `.../world/{locations,religions,items,
 events}/{id}`, `.../world/relationships`, `GET /campaigns/{id}/knowledge`
-and `.../knowledge/{id}` screens — docs/UI_DESIGN.md §5.4/§5.6,
+and `.../knowledge/{id}` screens — docs/reference/portal-behavior.md §5.4/§5.6,
 docs/api/READ_API.md §10 — read back through
 `dnd_ai.queries.world_explorer` and `dnd_ai.queries.knowledge_browse`).
 See `_ensure_world_and_knowledge_fixtures` and the long block comment
@@ -220,7 +220,7 @@ that environment variable is unset or fails the local password policy):
   "Phase13E Dev GM2" (`phase13e.gm2`): a second Campaign A member holding
   the `campaign_owner` role — the only system-template role carrying
   `access.manage` (confirmed against `security.role_capabilities`; see
-  `docs/PHASE13E_ACCESS_CONTRACT.md` §4) — so a non-`--user-id` account can
+  `docs/api/ACCESS_CONTROL.md` §4) — so a non-`--user-id` account can
   exercise the authorized Access-page path. No membership in Campaign B.
 
   "Phase13E Dev Player A" (`phase13e.player_a`): a Campaign A member
@@ -265,7 +265,7 @@ that environment variable is unset or fails the local password policy):
   the Access overview with an ordinary "Active" *membership* status,
   because `dnd_ai.queries.access_overview` deliberately never consults
   `security.users.lifecycle_status_id` (see that module's own docstring
-  and `docs/PHASE13E_ACCESS_CONTRACT.md` §3) — this fixture does not invent
+  and `docs/api/ACCESS_CONTROL.md` §3) — this fixture does not invent
   a "disabled" label the implemented contract does not provide.
 
 Two explicit `security.resource_grants` rows demonstrate the overview's own
@@ -336,7 +336,7 @@ guessing.
 
 `--user-id` is required and never defaulted or guessed — the caller
 confirms the exact `security.users.user_id` to authorize (see
-docs/PLAN.md's own "do not use UUID secrecy as authorization" posture,
+docs/api/ACCESS_CONTROL.md’s "do not use UUID secrecy as authorization" posture,
 which applies here just as much to picking the *right* account as to
 external authorization). The account must already exist, be active, and
 carry a local (`security.external_identities(issuer='local')`) identity
@@ -525,7 +525,7 @@ _PHASE13E_DISABLED_LOGIN_NAME = "phase13e.disabled"
 _PHASE13E_DISABLED_DISPLAY_NAME = "Phase13E Dev Disabled Player"
 
 # The only system-template role carrying access.manage (confirmed by
-# inspecting security.role_capabilities — see docs/PHASE13E_ACCESS_CONTRACT.md
+# inspecting security.role_capabilities — see docs/api/ACCESS_CONTROL.md
 # §4) — assigning it is "the actual existing role... that gives access to
 # the Phase 13E-A Access page," not an invented role.
 _PHASE13E_ACCESS_MANAGE_ROLE_CODE = "campaign_owner"
@@ -650,7 +650,7 @@ _CHARACTER_A_PREPARED_SPELL_CODES = ("magic_missile", "cure_wounds")
 # Phase 13D Sessions list/detail live-verification fixtures
 # --------------------------------------------------------------------------
 # Deterministic sessions and linked narrative events for the portal's
-# Sessions list (docs/UI_DESIGN.md §5.7) and Session detail (§5.8) screens,
+# Sessions list (docs/reference/portal-behavior.md §5.7) and Session detail (§5.8) screens,
 # read back by the owner through the real `GET /campaigns/{id}/sessions`
 # and `GET /campaigns/{id}/sessions/{id}` endpoints (dnd_ai.queries.session).
 #

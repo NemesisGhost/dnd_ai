@@ -1,4 +1,4 @@
-"""World Explorer read endpoints (docs/UI_DESIGN.md §5.4,
+"""World Explorer read endpoints (docs/reference/portal-behavior.md §5.4,
 docs/api/READ_API.md §3).
 
 One unified, cursor-paginated entity search/browse

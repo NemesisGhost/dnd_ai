@@ -17,4 +17,4 @@ Rules content stays ruleset/version aware. World instances refer to definitions 
 
 ## References
 
-- [PLAN.md §6.1](../README.md) and [PLAN.md §12.1](../README.md)
+- [PLAN.md §6.1 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#61-ruleset-separation) and [PLAN.md §12.1 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#121-definitions-and-instances)

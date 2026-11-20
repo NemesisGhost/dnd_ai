@@ -1,4 +1,4 @@
-"""Application configuration (docs/LOCAL_DEPLOYMENT.md, ADR 0012).
+"""Application configuration (docs/operations/deployment.md, ADR 0012).
 
 Settings source precedence, by environment
 --------------------------------------------
@@ -115,7 +115,7 @@ single shared source of truth both modules validate against).
 
 `foundry_allowed_origins` (`DND_AI_FOUNDRY_ALLOWED_ORIGINS`) is the explicit
 CORS allowlist for the FoundryVTT module's browser-origin requests
-(`docs/LOCAL_DEPLOYMENT.md`'s documented separate-origin deployment — the
+(`docs/operations/deployment.md`'s documented separate-origin deployment — the
 Foundry client and this API sit behind different public hostnames). A
 comma-separated list of exact origins (`scheme://host[:port]`, never a
 path/query/fragment/credentials, never a wildcard `*` or a wildcarded
@@ -185,7 +185,7 @@ a connection pooler/`SET ROLE` that silently changes the effective
 identity after authentication) can never again start this service and
 pass health checks the way it once did.
 
-Host-mounted secret files (docs/LOCAL_DEPLOYMENT.md "Compose
+Host-mounted secret files (docs/operations/deployment.md "Compose
 responsibilities and network policy" — "credentials in host-readable
 environment/secret files or mounted secrets outside the repository") are
 read from `DND_AI_SECRETS_DIR` (default `/run/secrets`, the conventional

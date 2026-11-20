@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { StaleReadNotice } from "../StaleReadNotice"
 import { ReadFailedNotice } from "./ReadState"
 
-// Focus recovery for a retry control that is replaced (docs/UI_DESIGN.md §5.11): bounded to a
+// Focus recovery for a retry control that is replaced (docs/reference/portal-behavior.md §5.11): bounded to a
 // person who used it and still held focus; a background removal or a rerender never moves focus.
 
 function Page({ onRetry, stale = false }: { onRetry: () => Promise<unknown>; stale?: boolean }) {

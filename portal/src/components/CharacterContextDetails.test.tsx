@@ -7,6 +7,8 @@ import {
   vi,
 } from "vitest"
 import type { CharacterDetail } from "../types/character"
+import { normalizeCharacterRead } from "../api/character"
+import { liveBody, NULL_PROFILE, publicBody } from "../fixtures/publicCharacter"
 import { CharacterContextDetails } from "./CharacterContextDetails"
 
 const { useCharacterMock } = vi.hoisted(() => ({
@@ -144,5 +146,38 @@ describe("CharacterContextDetails", () => {
     expect(
       screen.queryByText("character-secret-id"),
     ).not.toBeInTheDocument()
+  })
+})
+
+describe("CharacterContextDetails public tier", () => {
+  const show = (profile: object) => {
+    useCharacterMock.mockReturnValue({
+      state: { status: "success", character: normalizeCharacterRead(publicBody({ public_profile: profile })) },
+      retry: vi.fn(),
+    })
+    return renderDetails()
+  }
+
+  it("shows only the released species and size labels (A16)", () => {
+    const { container } = show({ ...NULL_PROFILE, species: { code: "elf", label: "Released Elf" }, size: { code: "m", label: "Released Medium" } })
+    expect(screen.getByText("Released Elf")).toBeInTheDocument()
+    expect(screen.getByText("Released Medium")).toBeInTheDocument()
+    expect(screen.queryByText("Hit points")).not.toBeInTheDocument()
+    expect(container.textContent).not.toMatch(/NaN|0 \/ 0|not recorded|—/i)
+  })
+
+  it("omits a null species or size and renders nothing else", () => {
+    const { container } = show(NULL_PROFILE)
+    expect(screen.queryByText("Species")).not.toBeInTheDocument()
+    expect(screen.queryByText("Size")).not.toBeInTheDocument()
+    expect(container.textContent).toBe("")
+  })
+
+  it("does not read a missing conditions key as live state at summary or full", () => {
+    const body = liveBody("summary") as Record<string, unknown>
+    delete body.resources
+    useCharacterMock.mockReturnValue({ state: { status: "success", character: body }, retry: vi.fn() })
+    renderDetails()
+    expect(screen.queryByText("Hit points")).not.toBeInTheDocument()
   })
 })

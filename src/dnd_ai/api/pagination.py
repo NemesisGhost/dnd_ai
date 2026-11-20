@@ -30,7 +30,7 @@ mis-interpreted.
 
 No total count is returned by any endpoint built on this module — a count
 that included inaccessible rows would violate the non-disclosure rules
-(docs/UI_DESIGN.md §9: "Counts describe only accessible records";
+(docs/reference/portal-behavior.md §9: "Counts describe only accessible records";
 "Pagination totals exclude inaccessible records"), and an
 audience-filtered count is both unnecessary for the World/Knowledge MVP
 screens and an extra full scan per request. A page simply reports whether

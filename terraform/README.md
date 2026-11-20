@@ -1,7 +1,7 @@
 # Terraform — optional AWS RDS
 
 Self-hosted Compose is the supported topology. This retained optional RDS configuration
-is not required by development or CI. See [INFRASTRUCTURE](../docs/INFRASTRUCTURE.md)
+is not required by development or CI. See [INFRASTRUCTURE](../docs/operations/optional-aws.md)
 for prerequisites, configuration, deploy/verify/teardown and the legacy OIDC state decision.
 Removing old documentation does not decommission cloud resources.
 

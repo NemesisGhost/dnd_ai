@@ -82,7 +82,7 @@ module "database" {
   # dev is disposable per docs/PLAN.md §29.3 and §26.2: fast teardown, no
   # final snapshot. The module defaults (deletion_protection = true,
   # skip_final_snapshot = false) are meant for staging/prod, not dev — see
-  # INFRASTRUCTURE.md §11 gap 1 and docs/POSTGRES18_UPGRADE_PLAN.md §B1.
+  # docs/operations/optional-aws.md §11 gap 1 and historical 53416d5:docs/POSTGRES18_UPGRADE_PLAN.md §B1.
   deletion_protection = false
   skip_final_snapshot = true
 

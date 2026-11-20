@@ -1,258 +1,166 @@
-# Documentation routing for legacy PLAN references
+# Historical PLAN section locator
 
-The implementation encyclopedia formerly at this path has been retired. This file is a
-compatibility index for existing source citations, not a second plan. New work starts at
-[the documentation index](README.md), [current status](PROJECT_STATUS.md), and the
-[authoring-first roadmap](PLANv2.md). The active Phase 15/P03-A acceptance gates remain.
+Migrations, schema comments and tests cite numbered sections of earlier plans. Use this locator to find both their original words and the current subject owner. The [roadmap](delivery/roadmap.md) owns delivery order. [Work register](delivery/work-register.md)
 
-The original text is available at [commit 53416d5](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md).
-Original phase numbering in source comments may predate later renumbering; use the topic
-name as well as its number. Remove this pointer only after those citations are migrated.
-
-## Current authority by topic
-
-| Topic | Reference |
+| Historical section | Current subject |
 |---|---|
-| Domain/schema/commands | DOMAIN_MODEL, architecture/DATABASE_MODEL, ENTITY_LIFECYCLE |
-| Service and transaction boundaries | architecture/SYSTEM_ARCHITECTURE |
-| Identity and access | api/ACCESS_CONTROL |
-| Verification, phase exit and testing | DEVELOPMENT §6, §10–11 |
-| Phase 15 original checkpoint sequence | PHASE15_VERIFICATION |
-| Dungeon vertical slice | architecture/DUNGEON_FLOW |
-| Deployment and recovery | LOCAL_DEPLOYMENT, operations/DATABASE_RECOVERY |
-| Optional AWS | INFRASTRUCTURE |
+| <a id="1-purpose"></a>[1. Purpose](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#1-purpose) | [DOMAIN MODEL](DOMAIN_MODEL.md#1-purpose) |
+| <a id="2-architectural-decisions"></a>[2. Architectural decisions](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#2-architectural-decisions) | [DOMAIN MODEL](DOMAIN_MODEL.md#2-core-modeling-principles) |
+| <a id="21-postgresql-is-the-source-of-truth"></a>[2.1 PostgreSQL is the source of truth](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#21-postgresql-is-the-source-of-truth) | [0001 use postgresql](adr/0001-use-postgresql.md) |
+| <a id="22-use-class-table-inheritance"></a>[2.2 Use class-table inheritance](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#22-use-class-table-inheritance) | [0002 use class table inheritance](adr/0002-use-class-table-inheritance.md) |
+| <a id="23-worlds-timelines-campaigns-and-sessions-are-separate-concepts"></a>[2.3 Worlds, timelines, campaigns, and sessions are separate concepts](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#23-worlds-timelines-campaigns-and-sessions-are-separate-concepts) | [0003 separate world timeline and campaign](adr/0003-separate-world-timeline-and-campaign.md) |
+| <a id="24-definition-and-state-are-separate"></a>[2.4 Definition and state are separate](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#24-definition-and-state-are-separate) | [DOMAIN MODEL](DOMAIN_MODEL.md#24-definitions-state-knowledge-and-history-are-separate) |
+| <a id="25-event-assisted-state-model"></a>[2.5 Event-assisted state model](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#25-event-assisted-state-model) | [0004 use event assisted state](adr/0004-use-event-assisted-state.md) |
+| <a id="26-structured-data-is-authoritative-generated-text-is-derived"></a>[2.6 Structured data is authoritative; generated text is derived](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#26-structured-data-is-authoritative-generated-text-is-derived) | [DOMAIN MODEL](DOMAIN_MODEL.md#2-core-modeling-principles) |
+| <a id="27-reference-corpus-ingestion-and-campaign-import-are-separate-systems"></a>[2.7 Reference-corpus ingestion and campaign import are separate systems](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#27-reference-corpus-ingestion-and-campaign-import-are-separate-systems) | [DOMAIN MODEL](DOMAIN_MODEL.md#2-core-modeling-principles) |
+| <a id="28-browser-authentication-is-local-and-uses-a-server-side-session-boundary"></a>[2.8 Browser authentication is local and uses a server-side session boundary](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#28-browser-authentication-is-local-and-uses-a-server-side-session-boundary) | [DOMAIN MODEL](DOMAIN_MODEL.md#2-core-modeling-principles) |
+| <a id="29-phase-13-ui-authorship"></a>[2.9 Phase 13 UI authorship](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#29-phase-13-ui-authorship) | [DOMAIN MODEL](DOMAIN_MODEL.md#2-core-modeling-principles) |
+| <a id="3-postgresql-schema-organization"></a>[3. PostgreSQL schema organization](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#3-postgresql-schema-organization) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#3-postgresql-schema-map) |
+| <a id="31-schema-responsibilities"></a>[3.1 Schema responsibilities](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#31-schema-responsibilities) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#3-postgresql-schema-map) |
+| <a id="4-foundation-implementation"></a>[4. Foundation implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#4-foundation-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#5-core-identity-and-provenance) |
+| <a id="41-postgresql-extensions"></a>[4.1 PostgreSQL extensions](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#41-postgresql-extensions) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#5-core-identity-and-provenance) |
+| <a id="42-shared-domains"></a>[4.2 Shared domains](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#42-shared-domains) | [DATABASE CONVENTIONS](DATABASE_CONVENTIONS.md#5-data-types) |
+| <a id="43-foundation-tables"></a>[4.3 Foundation tables](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#43-foundation-tables) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#5-core-identity-and-provenance) |
+| <a id="44-canon-lifecycle"></a>[4.4 Canon lifecycle](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#44-canon-lifecycle) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#5-core-identity-and-provenance) |
+| <a id="45-provenance"></a>[4.5 Provenance](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#45-provenance) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#5-core-identity-and-provenance) |
+| <a id="5-world-timeline-campaign-party-and-session-implementation"></a>[5. World, timeline, campaign, party, and session implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#5-world-timeline-campaign-party-and-session-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#6-world-timeline-campaign-and-session) |
+| <a id="51-worlds"></a>[5.1 Worlds](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#51-worlds) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#6-world-timeline-campaign-and-session) |
+| <a id="52-timelines"></a>[5.2 Timelines](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#52-timelines) | [DOMAIN MODEL](DOMAIN_MODEL.md#51-timeline) |
+| <a id="53-campaigns"></a>[5.3 Campaigns](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#53-campaigns) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#6-world-timeline-campaign-and-session) |
+| <a id="54-parties"></a>[5.4 Parties](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#54-parties) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#6-world-timeline-campaign-and-session) |
+| <a id="55-sessions"></a>[5.5 Sessions](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#55-sessions) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#6-world-timeline-campaign-and-session) |
+| <a id="6-ruleset-implementation"></a>[6. Ruleset implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#6-ruleset-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#8-rules-model) |
+| <a id="61-ruleset-separation"></a>[6.1 Ruleset separation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#61-ruleset-separation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#8-rules-model) |
+| <a id="62-homebrew-support"></a>[6.2 Homebrew support](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#62-homebrew-support) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#8-rules-model) |
+| <a id="63-derived-calculations"></a>[6.3 Derived calculations](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#63-derived-calculations) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#8-rules-model) |
+| <a id="7-shared-character-implementation"></a>[7. Shared character implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#7-shared-character-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#7-character-model) |
+| <a id="71-character-hierarchy"></a>[7.1 Character hierarchy](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#71-character-hierarchy) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#7-character-model) |
+| <a id="72-shared-character-data"></a>[7.2 Shared character data](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#72-shared-character-data) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#7-character-model) |
+| <a id="73-timeline-state"></a>[7.3 Timeline state](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#73-timeline-state) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#7-character-model) |
+| <a id="74-character-control"></a>[7.4 Character control](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#74-character-control) | [0021 shared actor identity control and authoring responsibility](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) |
+| <a id="8-npc-world-management-implementation"></a>[8. NPC world-management implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#8-npc-world-management-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#7-character-model) |
+| <a id="81-simulation-levels"></a>[8.1 Simulation levels](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#81-simulation-levels) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#7-character-model) |
+| <a id="82-portrayal-profiles"></a>[8.2 Portrayal profiles](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#82-portrayal-profiles) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#7-character-model) |
+| <a id="83-goals"></a>[8.3 Goals](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#83-goals) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#7-character-model) |
+| <a id="9-geography-and-dungeon-implementation"></a>[9. Geography and dungeon implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#9-geography-and-dungeon-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#9-location-and-dungeon-model) |
+| <a id="91-location-hierarchy"></a>[9.1 Location hierarchy](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#91-location-hierarchy) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#9-location-and-dungeon-model) |
+| <a id="92-dungeon-structures"></a>[9.2 Dungeon structures](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#92-dungeon-structures) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#9-location-and-dungeon-model) |
+| <a id="93-dungeon-timeline-state"></a>[9.3 Dungeon timeline state](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#93-dungeon-timeline-state) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#9-location-and-dungeon-model) |
+| <a id="94-discovery-versus-existence"></a>[9.4 Discovery versus existence](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#94-discovery-versus-existence) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#9-location-and-dungeon-model) |
+| <a id="10-universal-relationship-implementation"></a>[10. Universal relationship implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#10-universal-relationship-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#10-organizations-and-relationships) |
+| <a id="101-objective-versus-subjective-data"></a>[10.1 Objective versus subjective data](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#101-objective-versus-subjective-data) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#10-organizations-and-relationships) |
+| <a id="102-specialized-relationship-subtypes"></a>[10.2 Specialized relationship subtypes](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#102-specialized-relationship-subtypes) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#10-organizations-and-relationships) |
+| <a id="11-organization-government-business-and-religion-implementation"></a>[11. Organization, government, business, and religion implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#11-organization-government-business-and-religion-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#10-organizations-and-relationships) |
+| <a id="111-organization-hierarchy"></a>[11.1 Organization hierarchy](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#111-organization-hierarchy) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#10-organizations-and-relationships) |
+| <a id="112-organizations"></a>[11.2 Organizations](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#112-organizations) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#10-organizations-and-relationships) |
+| <a id="113-religion-distinction"></a>[11.3 Religion distinction](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#113-religion-distinction) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#10-organizations-and-relationships) |
+| <a id="12-items-inventory-ownership-and-treasure-implementation"></a>[12. Items, inventory, ownership, and treasure implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#12-items-inventory-ownership-and-treasure-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#11-item-model) |
+| <a id="121-definitions-and-instances"></a>[12.1 Definitions and instances](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#121-definitions-and-instances) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#11-item-model) |
+| <a id="122-item-state"></a>[12.2 Item state](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#122-item-state) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#11-item-model) |
+| <a id="13-event-implementation"></a>[13. Event implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#13-event-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#12-events-and-effects) |
+| <a id="131-events-as-first-class-entities"></a>[13.1 Events as first-class entities](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#131-events-as-first-class-entities) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#12-events-and-effects) |
+| <a id="132-event-effects"></a>[13.2 Event effects](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#132-event-effects) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#12-events-and-effects) |
+| <a id="133-event-granularity"></a>[13.3 Event granularity](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#133-event-granularity) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#12-events-and-effects) |
+| <a id="14-quest-and-narrative-implementation"></a>[14. Quest and narrative implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#14-quest-and-narrative-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#14-quest-and-story-model) |
+| <a id="141-quest-definitions-and-progress"></a>[14.1 Quest definitions and progress](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#141-quest-definitions-and-progress) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#14-quest-and-story-model) |
+| <a id="142-event-driven-advancement"></a>[14.2 Event-driven advancement](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#142-event-driven-advancement) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#14-quest-and-story-model) |
+| <a id="15-knowledge-belief-rumor-and-discovery-implementation"></a>[15. Knowledge, belief, rumor, and discovery implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#15-knowledge-belief-rumor-and-discovery-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#15-knowledge-model) |
+| <a id="151-knowledge-types"></a>[15.1 Knowledge types](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#151-knowledge-types) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#15-knowledge-model) |
+| <a id="152-truth-and-belief"></a>[15.2 Truth and belief](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#152-truth-and-belief) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#15-knowledge-model) |
+| <a id="153-discovery-model"></a>[15.3 Discovery model](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#153-discovery-model) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#15-knowledge-model) |
+| <a id="154-information-propagation"></a>[15.4 Information propagation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#154-information-propagation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#15-knowledge-model) |
+| <a id="16-interaction-and-resolution-implementation"></a>[16. Interaction and resolution implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#16-interaction-and-resolution-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#16-interaction-and-resolution-model) |
+| <a id="161-resolution-flow"></a>[16.1 Resolution flow](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#161-resolution-flow) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#16-interaction-and-resolution-model) |
+| <a id="162-external-integration"></a>[16.2 External integration](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#162-external-integration) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#16-interaction-and-resolution-model) |
+| <a id="17-encounter-and-combat-implementation"></a>[17. Encounter and combat implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#17-encounter-and-combat-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="18-ai-agent-implementation"></a>[18. AI-agent implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#18-ai-agent-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#18-ai-and-approval-model) |
+| <a id="181-agent-roles"></a>[18.1 Agent roles](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#181-agent-roles) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#18-ai-and-approval-model) |
+| <a id="182-controlled-mutation"></a>[18.2 Controlled mutation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#182-controlled-mutation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#18-ai-and-approval-model) |
+| <a id="183-rulesreference-corpus-ingestion-and-retrieval"></a>[18.3 Rules/reference-corpus ingestion and retrieval](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#183-rulesreference-corpus-ingestion-and-retrieval) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#18-ai-and-approval-model) |
+| <a id="19-effective-state-resolution"></a>[19. Effective-state resolution](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#19-effective-state-resolution) | [ENTITY LIFECYCLE](ENTITY_LIFECYCLE.md#9-branching-timelines) |
+| <a id="191-resolution-order"></a>[19.1 Resolution order](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#191-resolution-order) | [ENTITY LIFECYCLE](ENTITY_LIFECYCLE.md#9-branching-timelines) |
+| <a id="192-typed-state-first"></a>[19.2 Typed state first](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#192-typed-state-first) | [ENTITY LIFECYCLE](ENTITY_LIFECYCLE.md#9-branching-timelines) |
+| <a id="193-query-services"></a>[19.3 Query services](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#193-query-services) | [ENTITY LIFECYCLE](ENTITY_LIFECYCLE.md#9-branching-timelines) |
+| <a id="20-transaction-and-command-model"></a>[20. Transaction and command model](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#20-transaction-and-command-model) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#7-transaction-boundary) |
+| <a id="21-audit-and-validation-implementation"></a>[21. Audit and validation implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#21-audit-and-validation-implementation) | [audit history](reference/audit-history.md) |
+| <a id="22-worldcampaign-data-import-implementation"></a>[22. World/campaign-data import implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#22-worldcampaign-data-import-implementation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#20-import-staging) |
+| <a id="23-identity-authorization-and-web-portal-implementation"></a>[23. Identity, authorization, and web-portal implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#23-identity-authorization-and-web-portal-implementation) | [ACCESS CONTROL](api/ACCESS_CONTROL.md) |
+| <a id="231-identity-and-campaign-membership"></a>[23.1 Identity and campaign membership](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#231-identity-and-campaign-membership) | [ACCESS CONTROL](api/ACCESS_CONTROL.md) |
+| <a id="232-many-to-many-user-and-resource-relationships"></a>[23.2 Many-to-many user and resource relationships](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#232-many-to-many-user-and-resource-relationships) | [ACCESS CONTROL](api/ACCESS_CONTROL.md) |
+| <a id="233-authorization-and-non-disclosure"></a>[23.3 Authorization and non-disclosure](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#233-authorization-and-non-disclosure) | [ACCESS CONTROL](api/ACCESS_CONTROL.md) |
+| <a id="234-browser-session-boundary"></a>[23.4 Browser-session boundary](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#234-browser-session-boundary) | [ACCESS CONTROL](api/ACCESS_CONTROL.md) |
+| <a id="235-foundry-hybrid-pairing-and-device-authentication"></a>[23.5 Foundry hybrid pairing and device authentication](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#235-foundry-hybrid-pairing-and-device-authentication) | [ACCESS CONTROL](api/ACCESS_CONTROL.md#235-foundry-hybrid-pairing-and-device-authentication) |
+| <a id="236-web-portal-experience"></a>[23.6 Web-portal experience](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#236-web-portal-experience) | [portal behavior](reference/portal-behavior.md#4-information-architecture) |
+| <a id="237-audience-aware-summaries-questions-and-feature-boundaries"></a>[23.7 Audience-aware summaries, questions, and feature boundaries](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#237-audience-aware-summaries-questions-and-feature-boundaries) | [runtime](reference/runtime.md) |
+| <a id="24-delivery-phases"></a>[24. Delivery phases](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#24-delivery-phases) | [roadmap](delivery/roadmap.md) |
+| <a id="240-verification-policy"></a>[24.0 Verification policy](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#240-verification-policy) | [DEVELOPMENT](DEVELOPMENT.md#6-testing) |
+| <a id="241-phase-exit-review"></a>[24.1 Phase exit review](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#241-phase-exit-review) | [DEVELOPMENT](DEVELOPMENT.md#11-delivery-verification-and-phase-exit-review) |
+| <a id="141-domain-command-foundation"></a>[14.1 Domain command foundation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#141-domain-command-foundation) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#14-quest-and-story-model) |
+| <a id="142-initial-command-catalog"></a>[14.2 Initial command catalog](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#142-initial-command-catalog) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#14-quest-and-story-model) |
+| <a id="143-campaign-setup-workflow"></a>[14.3 Campaign setup workflow](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#143-campaign-setup-workflow) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#14-quest-and-story-model) |
+| <a id="144-reusable-portal-authoring-patterns"></a>[14.4 Reusable portal authoring patterns](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#144-reusable-portal-authoring-patterns) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#14-quest-and-story-model) |
+| <a id="145-development-data-conversion"></a>[14.5 Development-data conversion](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#145-development-data-conversion) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#14-quest-and-story-model) |
+| <a id="146-phase-14-exit-criteria"></a>[14.6 Phase 14 exit criteria](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#146-phase-14-exit-criteria) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#14-quest-and-story-model) |
+| <a id="158-gm-authoring-exit-scenario"></a>[15.8 GM authoring exit scenario](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#158-gm-authoring-exit-scenario) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#15-knowledge-model) |
+| <a id="159-phase-15-exit-criteria"></a>[15.9 Phase 15 exit criteria](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#159-phase-15-exit-criteria) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#15-knowledge-model) |
+| <a id="166-phase-16-exit-scenario"></a>[16.6 Phase 16 exit scenario](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#166-phase-16-exit-scenario) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#16-interaction-and-resolution-model) |
+| <a id="167-phase-16-exit-criteria"></a>[16.7 Phase 16 exit criteria](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#167-phase-16-exit-criteria) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#16-interaction-and-resolution-model) |
+| <a id="171-browser-acceptance"></a>[17.1 Browser acceptance](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#171-browser-acceptance) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="172-accessibility-and-responsive-acceptance"></a>[17.2 Accessibility and responsive acceptance](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#172-accessibility-and-responsive-acceptance) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="173-production-packaging"></a>[17.3 Production packaging](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#173-production-packaging) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="174-standalone-completion-gate"></a>[17.4 Standalone completion gate](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#174-standalone-completion-gate) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="186-exit-criteria"></a>[18.6 Exit criteria](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#186-exit-criteria) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#18-ai-and-approval-model) |
+| <a id="191-rules-content-and-policy"></a>[19.1 Rules content and policy](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#191-rules-content-and-policy) | [ENTITY LIFECYCLE](ENTITY_LIFECYCLE.md#9-branching-timelines) |
+| <a id="192-character-advancement"></a>[19.2 Character advancement](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#192-character-advancement) | [ENTITY LIFECYCLE](ENTITY_LIFECYCLE.md#9-branching-timelines) |
+| <a id="193-creature-model-decision-and-implementation"></a>[19.3 Creature model decision and implementation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#193-creature-model-decision-and-implementation) | [ENTITY LIFECYCLE](ENTITY_LIFECYCLE.md#9-branching-timelines) |
+| <a id="194-encounter-analysis"></a>[19.4 Encounter analysis](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#194-encounter-analysis) | [ENTITY LIFECYCLE](ENTITY_LIFECYCLE.md#9-branching-timelines) |
+| <a id="201-close-the-existing-phase-12-foundation"></a>[20.1 Close the existing Phase 12 foundation](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#201-close-the-existing-phase-12-foundation) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#7-transaction-boundary) |
+| <a id="202-grounded-user-surfaces"></a>[20.2 Grounded user surfaces](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#202-grounded-user-surfaces) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#7-transaction-boundary) |
+| <a id="203-structured-live-scenes"></a>[20.3 Structured live scenes](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#203-structured-live-scenes) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#7-transaction-boundary) |
+| <a id="16-authoring-ownership-and-approval-matrix"></a>[16. Authoring ownership and approval matrix](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#16-authoring-ownership-and-approval-matrix) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#16-interaction-and-resolution-model) |
+| <a id="17-cross-cutting-delivery-requirements"></a>[17. Cross-cutting delivery requirements](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#17-cross-cutting-delivery-requirements) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="171-security-and-authorization"></a>[17.1 Security and authorization](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#171-security-and-authorization) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="172-data-integrity-and-history"></a>[17.2 Data integrity and history](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#172-data-integrity-and-history) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="173-idempotency-and-concurrency"></a>[17.3 Idempotency and concurrency](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#173-idempotency-and-concurrency) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="174-audit-and-provenance"></a>[17.4 Audit and provenance](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#174-audit-and-provenance) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="175-ux-and-accessibility"></a>[17.5 UX and accessibility](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#175-ux-and-accessibility) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="176-testing-and-evidence"></a>[17.6 Testing and evidence](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#176-testing-and-evidence) | [DATABASE MODEL](architecture/DATABASE_MODEL.md#13-encounters-and-combat) |
+| <a id="25-vertical-slice-acceptance-scenario"></a>[25. Vertical-slice acceptance scenario](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#25-vertical-slice-acceptance-scenario) | [DUNGEON FLOW](architecture/DUNGEON_FLOW.md) |
+| <a id="26-testing-strategy"></a>[26. Testing strategy](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#26-testing-strategy) | [DEVELOPMENT](DEVELOPMENT.md#6-testing) |
+| <a id="261-database-tests"></a>[26.1 Database tests](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#261-database-tests) | [DEVELOPMENT](DEVELOPMENT.md#6-testing) |
+| <a id="262-application-service-and-api-tests"></a>[26.2 Application-service and API tests](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#262-application-service-and-api-tests) | [DEVELOPMENT](DEVELOPMENT.md#6-testing) |
+| <a id="263-scenario-tests"></a>[26.3 Scenario tests](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#263-scenario-tests) | [DEVELOPMENT](DEVELOPMENT.md#6-testing) |
+| <a id="264-property-based-tests"></a>[26.4 Property-based tests](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#264-property-based-tests) | [DEVELOPMENT](DEVELOPMENT.md#6-testing) |
+| <a id="265-performance-tests"></a>[26.5 Performance tests](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#265-performance-tests) | [DEVELOPMENT](DEVELOPMENT.md#6-testing) |
+| <a id="266-proportional-test-infrastructure-policy"></a>[26.6 Proportional test-infrastructure policy](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#266-proportional-test-infrastructure-policy) | [DEVELOPMENT](DEVELOPMENT.md#6-testing) |
+| <a id="267-portal-testing"></a>[26.7 Portal testing](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#267-portal-testing) | [DEVELOPMENT](DEVELOPMENT.md#6-testing) |
+| <a id="27-operational-strategy"></a>[27. Operational strategy](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#27-operational-strategy) | [deployment](operations/deployment.md) |
+| <a id="271-migrations"></a>[27.1 Migrations](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#271-migrations) | [deployment](operations/deployment.md) |
+| <a id="272-environments"></a>[27.2 Environments](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#272-environments) | [deployment](operations/deployment.md) |
+| <a id="273-backups"></a>[27.3 Backups](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#273-backups) | [deployment](operations/deployment.md) |
+| <a id="274-observability"></a>[27.4 Observability](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#274-observability) | [deployment](operations/deployment.md) |
+| <a id="28-deferred-decisions"></a>[28. Deferred decisions](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#28-deferred-decisions) | [work register](delivery/work-register.md) |
+| <a id="29-definition-of-implementation-success"></a>[29. Definition of implementation success](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#29-definition-of-implementation-success) | [DEVELOPMENT](DEVELOPMENT.md#4-database-and-migrations) |
+| <a id="30-aws-terraform-deployment-plan-for-postgresql"></a>[30. AWS Terraform deployment plan for PostgreSQL](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#30-aws-terraform-deployment-plan-for-postgresql) | [optional aws](operations/optional-aws.md) |
+| <a id="301-scope-and-current-state"></a>[30.1 Scope and current state](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#301-scope-and-current-state) | [optional aws](operations/optional-aws.md) |
+| <a id="302-remote-terraform-state"></a>[30.2 Remote Terraform state](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#302-remote-terraform-state) | [optional aws](operations/optional-aws.md) |
+| <a id="303-environments-dev-staging-prod"></a>[30.3 Environments: dev, staging, prod](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#303-environments-dev-staging-prod) | [optional aws](operations/optional-aws.md) |
+| <a id="304-provisioning-order"></a>[30.4 Provisioning order](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#304-provisioning-order) | [optional aws](operations/optional-aws.md) |
+| <a id="305-database-role-schema-and-extension-bootstrap"></a>[30.5 Database role, schema, and extension bootstrap](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#305-database-role-schema-and-extension-bootstrap) | [optional aws](operations/optional-aws.md) |
+| <a id="306-migration-execution-mechanism"></a>[30.6 Migration execution mechanism](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#306-migration-execution-mechanism) | [optional aws](operations/optional-aws.md) |
+| <a id="307-deployment-runbook"></a>[30.7 Deployment runbook](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#307-deployment-runbook) | [optional aws](operations/optional-aws.md) |
+| <a id="308-open-items"></a>[30.8 Open items](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#308-open-items) | [optional aws](operations/optional-aws.md) |
+| <a id="309-shared-dev-verification-mechanism-historical-superseded-as-cis-mechanism-by-adr-0012"></a>[30.9 Shared-dev verification mechanism (historical; superseded as CI's mechanism by ADR 0012)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#309-shared-dev-verification-mechanism-historical-superseded-as-cis-mechanism-by-adr-0012) | [DEVELOPMENT](DEVELOPMENT.md#35-connecting-to-aws-dev-optional-no-longer-required) |
+| <a id="31-aws-deployment-plan-for-application-services"></a>[31. AWS deployment plan for application services](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#31-aws-deployment-plan-for-application-services) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) |
+| <a id="311-scope-and-initial-target"></a>[31.1 Scope and initial target](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#311-scope-and-initial-target) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) |
+| <a id="312-compute-principles"></a>[31.2 Compute principles](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#312-compute-principles) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) |
+| <a id="313-packaging-and-release"></a>[31.3 Packaging and release](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#313-packaging-and-release) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) |
+| <a id="314-networking-decisions-for-phase-10"></a>[31.4 Networking decisions for Phase 10](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#314-networking-decisions-for-phase-10) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) |
+| <a id="315-identity-portal-hosting-and-secrets"></a>[31.5 Identity, portal hosting, and secrets](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#315-identity-portal-hosting-and-secrets) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) |
+| <a id="316-deployment-flow"></a>[31.6 Deployment flow](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#316-deployment-flow) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) |
+| <a id="317-observability"></a>[31.7 Observability](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#317-observability) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) |
+| <a id="318-per-phase-deployment-expectations"></a>[31.8 Per-phase deployment expectations](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#318-per-phase-deployment-expectations) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) |
+| <a id="319-open-items"></a>[31.9 Open items](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#319-open-items) | [SYSTEM ARCHITECTURE](architecture/SYSTEM_ARCHITECTURE.md#17-deployment-topology) |
+| <a id="32-local-production-deployment-plan"></a>[32. Local production deployment plan](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#32-local-production-deployment-plan) | [deployment](operations/deployment.md) |
 
-## Legacy section anchors
-
-Anchors are grouped by maintained destination. Their original numbered text remains in
-the historical document linked above; these entries do not revive superseded policies.
-
-<a id="table-of-contents"></a>
-<a id="1-purpose"></a>
-<a id="2-architectural-decisions"></a>
-<a id="21-postgresql-is-the-source-of-truth"></a>
-<a id="22-use-class-table-inheritance"></a>
-<a id="23-worlds-timelines-campaigns-and-sessions-are-separate-concepts"></a>
-<a id="24-definition-and-state-are-separate"></a>
-<a id="25-event-assisted-state-model"></a>
-<a id="26-structured-data-is-authoritative-generated-text-is-derived"></a>
-<a id="27-reference-corpus-ingestion-and-campaign-import-are-separate-systems"></a>
-<a id="28-browser-authentication-is-local-and-uses-a-server-side-session-boundary"></a>
-<a id="3-postgresql-schema-organization"></a>
-<a id="31-schema-responsibilities"></a>
-<a id="4-foundation-implementation"></a>
-<a id="41-postgresql-extensions"></a>
-<a id="42-shared-domains"></a>
-<a id="43-foundation-tables"></a>
-<a id="44-canon-lifecycle"></a>
-<a id="45-provenance"></a>
-<a id="5-world-timeline-campaign-party-and-session-implementation"></a>
-<a id="51-worlds"></a>
-<a id="52-timelines"></a>
-<a id="53-campaigns"></a>
-<a id="54-parties"></a>
-<a id="55-sessions"></a>
-<a id="6-ruleset-implementation"></a>
-<a id="61-ruleset-separation"></a>
-<a id="62-homebrew-support"></a>
-<a id="63-derived-calculations"></a>
-<a id="7-shared-character-implementation"></a>
-<a id="71-character-hierarchy"></a>
-<a id="72-shared-character-data"></a>
-<a id="73-timeline-state"></a>
-<a id="74-character-control"></a>
-<a id="8-npc-world-management-implementation"></a>
-<a id="81-simulation-levels"></a>
-<a id="82-portrayal-profiles"></a>
-<a id="83-goals"></a>
-<a id="9-geography-and-dungeon-implementation"></a>
-<a id="91-location-hierarchy"></a>
-<a id="92-dungeon-structures"></a>
-<a id="93-dungeon-timeline-state"></a>
-<a id="94-discovery-versus-existence"></a>
-<a id="10-universal-relationship-implementation"></a>
-<a id="101-objective-versus-subjective-data"></a>
-<a id="102-specialized-relationship-subtypes"></a>
-<a id="11-organization-government-business-and-religion-implementation"></a>
-<a id="111-organization-hierarchy"></a>
-<a id="112-organizations"></a>
-<a id="113-religion-distinction"></a>
-<a id="12-items-inventory-ownership-and-treasure-implementation"></a>
-<a id="121-definitions-and-instances"></a>
-<a id="122-item-state"></a>
-<a id="13-event-implementation"></a>
-<a id="131-events-as-first-class-entities"></a>
-<a id="132-event-effects"></a>
-<a id="133-event-granularity"></a>
-<a id="14-quest-and-narrative-implementation"></a>
-<a id="141-quest-definitions-and-progress"></a>
-<a id="142-event-driven-advancement"></a>
-<a id="15-knowledge-belief-rumor-and-discovery-implementation"></a>
-<a id="151-knowledge-types"></a>
-<a id="152-truth-and-belief"></a>
-<a id="153-discovery-model"></a>
-<a id="154-information-propagation"></a>
-<a id="16-interaction-and-resolution-implementation"></a>
-<a id="161-resolution-flow"></a>
-<a id="162-external-integration"></a>
-<a id="17-encounter-and-combat-implementation"></a>
-<a id="18-ai-agent-implementation"></a>
-<a id="181-agent-roles"></a>
-<a id="182-controlled-mutation"></a>
-<a id="183-rulesreference-corpus-ingestion-and-retrieval"></a>
-<a id="19-effective-state-resolution"></a>
-<a id="191-resolution-order"></a>
-<a id="192-typed-state-first"></a>
-<a id="193-query-services"></a>
-<a id="20-transaction-and-command-model"></a>
-<a id="21-audit-and-validation-implementation"></a>
-<a id="22-worldcampaign-data-import-implementation"></a>
-<a id="progress-at-a-glance"></a>
-<a id="deliverables"></a>
-<a id="exit-criteria"></a>
-<a id="141-domain-command-foundation"></a>
-<a id="142-initial-command-catalog"></a>
-<a id="143-campaign-setup-workflow"></a>
-<a id="144-reusable-portal-authoring-patterns"></a>
-<a id="145-development-data-conversion"></a>
-<a id="15a-world-structure-and-places"></a>
-<a id="15b-organizations-factions-religions-governments-and-businesses"></a>
-<a id="15c-characters-and-npcs"></a>
-<a id="15d-quests-and-narrative-planning"></a>
-<a id="15e-sessions-events-knowledge-and-corrections"></a>
-<a id="15f-items-inventory-treasure-and-encounters"></a>
-<a id="15g-canon-review-and-history"></a>
-<a id="16a-character-owned-authoring"></a>
-<a id="16b-notes-bookmarks-and-theories"></a>
-<a id="16c-player-private-collaboration"></a>
-<a id="16d-player-session-contributions"></a>
-<a id="16e-player-campaign-experience"></a>
-<a id="171-browser-acceptance"></a>
-<a id="172-accessibility-and-responsive-acceptance"></a>
-<a id="173-production-packaging"></a>
-<a id="174-standalone-completion-gate"></a>
-<a id="18a-source-intake-and-staging"></a>
-<a id="18b-session-note-intelligence"></a>
-<a id="18c-reviewable-change-sets"></a>
-<a id="18d-promotion-through-authoring-commands"></a>
-<a id="18e-broader-worldcampaign-import"></a>
-<a id="186-exit-criteria"></a>
-<a id="191-rules-content-and-policy"></a>
-<a id="192-character-advancement"></a>
-<a id="193-creature-model-decision-and-implementation"></a>
-<a id="194-encounter-analysis"></a>
-<a id="202-grounded-user-surfaces"></a>
-<a id="203-structured-live-scenes"></a>
-<a id="21a-foundryvtt"></a>
-<a id="21b-other-vtt-and-importexport-adapters"></a>
-<a id="21c-bots-messaging-mcp-and-transcription-providers"></a>
-<a id="16-authoring-ownership-and-approval-matrix"></a>
-<a id="17-cross-cutting-delivery-requirements"></a>
-<a id="171-security-and-authorization"></a>
-<a id="172-data-integrity-and-history"></a>
-<a id="173-idempotency-and-concurrency"></a>
-<a id="174-audit-and-provenance"></a>
-<a id="175-ux-and-accessibility"></a>
-<a id="176-testing-and-evidence"></a>
-<a id="later-phases-demonstrated-need-expansion"></a>
-
-Current topic: [README.md](README.md).
-
-<a id="29-phase-13-ui-authorship"></a>
-<a id="phase-0-documentation-and-decision-records"></a>
-<a id="phase-1-database-bootstrap"></a>
-<a id="phase-2-core-world-platform"></a>
-<a id="phase-3-timelines-and-campaigns"></a>
-<a id="phase-4-rules-and-shared-characters"></a>
-<a id="phase-5-locations-and-dungeon-play"></a>
-<a id="phase-6-events-and-interactions"></a>
-<a id="phase-7-quests-and-knowledge"></a>
-<a id="phase-8-relationships-and-organizations"></a>
-<a id="phase-9-items-inventory-encounters-and-foundry-integration-contracts"></a>
-<a id="phase-10-core-api-and-playable-vertical-slice"></a>
-<a id="phase-11-foundry-mvp"></a>
-<a id="phase-12-narrow-ainpc-mvp"></a>
-<a id="phase-13-web-portal-mvp-and-same-origin-packaging"></a>
-<a id="phase-14-shared-authoring-kernel-and-campaign-setup"></a>
-<a id="146-phase-14-exit-criteria"></a>
-<a id="phase-16-player-authoring-contribution-and-collaboration"></a>
-<a id="166-phase-16-exit-scenario"></a>
-<a id="167-phase-16-exit-criteria"></a>
-<a id="phase-17-standalone-product-acceptance-and-self-hosted-packaging"></a>
-<a id="phase-18-session-intelligence-and-controlled-import"></a>
-<a id="phase-19-rules-aware-character-creature-and-encounter-expansion"></a>
-<a id="phase-20-grounded-assistance-and-structured-npc-scenes"></a>
-<a id="201-close-the-existing-phase-12-foundation"></a>
-<a id="phase-21-integrations-and-adapters"></a>
-<a id="phase-22-hosted-offering-and-demonstrated-need-expansion"></a>
-<a id="314-networking-decisions-for-phase-10"></a>
-
-Current topic: [PLANv2.md](PLANv2.md).
-
-<a id="23-identity-authorization-and-web-portal-implementation"></a>
-<a id="231-identity-and-campaign-membership"></a>
-<a id="232-many-to-many-user-and-resource-relationships"></a>
-<a id="233-authorization-and-non-disclosure"></a>
-<a id="234-browser-session-boundary"></a>
-<a id="235-foundry-hybrid-pairing-and-device-authentication"></a>
-<a id="236-web-portal-experience"></a>
-<a id="237-audience-aware-summaries-questions-and-feature-boundaries"></a>
-
-Current topic: [api/ACCESS_CONTROL.md](api/ACCESS_CONTROL.md).
-
-<a id="24-delivery-phases"></a>
-<a id="240-verification-policy"></a>
-<a id="241-phase-exit-review"></a>
-<a id="25-vertical-slice-acceptance-scenario"></a>
-<a id="26-testing-strategy"></a>
-<a id="261-database-tests"></a>
-<a id="262-application-service-and-api-tests"></a>
-<a id="263-scenario-tests"></a>
-<a id="264-property-based-tests"></a>
-<a id="265-performance-tests"></a>
-<a id="266-proportional-test-infrastructure-policy"></a>
-<a id="267-portal-testing"></a>
-
-Current topic: [DEVELOPMENT.md#11-delivery-verification-and-phase-exit-review](DEVELOPMENT.md#11-delivery-verification-and-phase-exit-review).
-
-<a id="phase-15-game-master-authoring-and-campaign-operations"></a>
-<a id="158-gm-authoring-exit-scenario"></a>
-<a id="159-phase-15-exit-criteria"></a>
-
-Current topic: [PHASE15_VERIFICATION.md#original-authoring-checkpoint-sequence-and-exit-obligation](PHASE15_VERIFICATION.md#original-authoring-checkpoint-sequence-and-exit-obligation).
-
-<a id="27-operational-strategy"></a>
-<a id="271-migrations"></a>
-<a id="272-environments"></a>
-<a id="273-backups"></a>
-<a id="274-observability"></a>
-<a id="32-local-production-deployment-plan"></a>
-
-Current topic: [LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md).
-
-<a id="28-deferred-decisions"></a>
-<a id="29-definition-of-implementation-success"></a>
-
-Current topic: [BACKLOG.md](BACKLOG.md).
-
-<a id="30-aws-terraform-deployment-plan-for-postgresql"></a>
-<a id="301-scope-and-current-state"></a>
-<a id="302-remote-terraform-state"></a>
-<a id="303-environments-dev-staging-prod"></a>
-<a id="304-provisioning-order"></a>
-<a id="305-database-role-schema-and-extension-bootstrap"></a>
-<a id="306-migration-execution-mechanism"></a>
-<a id="307-deployment-runbook"></a>
-<a id="308-open-items"></a>
-<a id="309-shared-dev-verification-mechanism-historical-superseded-as-cis-mechanism-by-adr-0012"></a>
-<a id="31-aws-deployment-plan-for-application-services"></a>
-<a id="311-scope-and-initial-target"></a>
-<a id="312-compute-principles"></a>
-<a id="313-packaging-and-release"></a>
-<a id="315-identity-portal-hosting-and-secrets"></a>
-<a id="316-deployment-flow"></a>
-<a id="317-observability"></a>
-<a id="318-per-phase-deployment-expectations"></a>
-<a id="319-open-items"></a>
-
-Current topic: [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
+The earlier AWS-era numbering, including §§29.5, 29.6 and 29.9, predates the later plan. [Earlier AWS plan](https://github.com/NemesisGhost/dnd_ai/blob/dedeae2/docs/PLAN.md#29-aws-terraform-deployment-plan-for-postgresql) · [Optional AWS operations](operations/optional-aws.md)

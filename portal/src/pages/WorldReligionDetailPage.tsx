@@ -14,7 +14,7 @@ interface WorldReligionDetailPageProps {
 // The reading panels of a religion. serving_organization_ids carries no authorized display
 // label in the current contract — deliberately never rendered as a raw
 // UUID; the section is omitted rather than shown empty or with an id
-// (UI_STYLE_GUIDE.md §10.2, §15 — see the Phase 13D backend contract
+// (docs/reference/portal-style.md §10.2, §15 — see the Phase 13D backend contract
 // limitation noted in this workstream's report). Shared by the reader and the editors' workspace.
 export function ReligionPanels({ religion }: { religion: ReligionDetail }) {
     return (

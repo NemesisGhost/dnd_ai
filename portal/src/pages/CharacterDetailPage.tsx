@@ -1,10 +1,12 @@
 import { DetailPanel } from "../components/DetailPanel"
 import { FactGrid } from "../components/FactGrid"
 import { HitPointsMeter } from "../components/HitPointsMeter"
-import type { CharacterDetail } from "../types/character"
+import { CharacterPublicProfilePanel } from "../components/characters/CharacterPublicProfilePanel"
+import { isPublicTier } from "../types/character"
+import type { CharacterRead } from "../types/character"
 
 interface CharacterDetailPageProps {
-    character: CharacterDetail
+    character: CharacterRead
 }
 
 // The reading panels of the restricted World character read model: only the fields the
@@ -13,12 +15,25 @@ interface CharacterDetailPageProps {
 export function CharacterPanels({
     character,
 }: CharacterDetailPageProps) {
+    // The public tier has no live definition, state or mechanics to read: only the released profile.
+    if (isPublicTier(character)) {
+        return (
+            <div className="world-detail__panel-grid">
+                <CharacterPublicProfilePanel profile={character.public_profile} />
+            </div>
+        )
+    }
+
     const conditions = character.conditions
     const resources = character.resources
 
-    const hasFullDetails =
-        conditions !== null &&
-        resources !== null
+    const hasFullDetails = Array.isArray(conditions) && Array.isArray(resources)
+    // The released profile, apart from the live Overview and never merged with it. Shown only when
+    // the answer carries one: a withheld or unreleased profile leaves no trace.
+    const releasedProfile =
+        character.sections?.public_profile === true && character.public_profile != null
+            ? character.public_profile
+            : null
 
     return (
         <>
@@ -31,6 +46,7 @@ export function CharacterPanels({
                         ]}
                     />
                 </DetailPanel>
+                {releasedProfile !== null ? <CharacterPublicProfilePanel profile={releasedProfile} /> : null}
                 {hasFullDetails ? (
                     <>
                         <DetailPanel title="Current state" headingId="character-current-state-heading">
@@ -119,6 +135,9 @@ export function CharacterDetailPage({
         <section aria-labelledby="character-heading">
             <p className="world-detail__eyebrow">Character</p>
             <h1 id="character-heading">{character.name}</h1>
+            {isPublicTier(character) ? (
+                <p className="authoring-note">Only this character&apos;s public profile is available to you.</p>
+            ) : null}
 
             <CharacterPanels character={character} />
         </section>

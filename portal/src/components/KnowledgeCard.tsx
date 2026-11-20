@@ -9,11 +9,11 @@ interface KnowledgeCardProps {
     item: KnowledgeListItem
     /** The currently selected character perspective, carried into the
      * detail link's URL so a direct refresh/bookmark reproduces the same
-     * authorized character-dependent view (UI_STYLE_GUIDE.md §11.2). */
+     * authorized character-dependent view (docs/reference/portal-style.md §11.2). */
     characterId: string | null
     /** The currently selected party filter, carried into the detail link's
      * URL so a direct refresh/bookmark reproduces the same authorized
-     * party-filtered view (UI_STYLE_GUIDE.md §11.2). */
+     * party-filtered view (docs/reference/portal-style.md §11.2). */
     partyId: string | null
     /** Opens the claim somewhere else (the Member preview keeps its own context in the address).
      * The subject link is then left out, because it would leave that context. */
@@ -69,7 +69,7 @@ function historyStatusLabel(item: KnowledgeListItem): string | null {
 // one link; the claim kind is a quiet secondary label. Scope and canonical
 // truth are not repeated here: they live on the claim page, and truth is
 // never inferred from scope, sensitivity, confidence, or a null value
-// (UI_DESIGN.md §5.6). The labelled "About" area sits below the card's own
+// (docs/reference/portal-behavior.md §5.6). The labelled "About" area sits below the card's own
 // link and appears only for the server's authorized subject summary, so
 // opening the claim and opening its subject are separate actions.
 export function KnowledgeCard({

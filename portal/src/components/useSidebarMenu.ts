@@ -12,7 +12,7 @@ import type { AttemptView } from "../navigation/navigationAttempt"
 import { bindActivation } from "../navigation/activationOwner"
 import { canTakeFocus } from "../utils/focusEligibility"
 
-// The one open / close / focus lifecycle of every sidebar menu and of the drawer (docs/UI_DESIGN.md §4,
+// The one open / close / focus lifecycle of every sidebar menu and of the drawer (docs/reference/portal-behavior.md §4,
 // plan §6.4). Pointer and keyboard follow the same rules; nothing here navigates, disposes input or
 // changes the selection by itself.
 

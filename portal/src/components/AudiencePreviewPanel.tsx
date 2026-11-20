@@ -119,7 +119,7 @@ interface AudiencePreviewPanelProps {
 }
 
 // The spoiler-checking half of D-1's "preview as a selected member" answer
-// (docs/UI_DESIGN.md §16 / PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md §8.4b,
+// (docs/reference/portal-behavior.md §16 / PHASE13E_REMAINING_IMPLEMENTATION_PLAN.md §8.4b,
 // checkpoint 15) — never a global mode, never reachable from the player-
 // facing screens, no route/URL change. Pick a member, pick a quest or
 // knowledge item (reusing checkpoint 12's ResourceTargetSelector), see the

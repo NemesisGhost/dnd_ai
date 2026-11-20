@@ -9,6 +9,7 @@ import { MemoryRouter, Route, Routes } from "react-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { SessionContext } from "../context/SessionContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
+import { bootstrapWithAccessManage } from "../test/accessBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
@@ -117,7 +118,7 @@ function renderAtCampaign(
             value={{
                 state: {
                     status: "authenticated",
-                    bootstrap: sessionBootstrapFixture,
+                    bootstrap: bootstrapWithAccessManage(CAMPAIGN_ID),
                 },
                 reload,
                 refresh: vi.fn(),

@@ -20,7 +20,8 @@ import { CharacterPanels } from "../../pages/CharacterDetailPage"
 import { LocationPanels } from "../../pages/WorldLocationDetailPage"
 import { OrganizationPanels } from "../../pages/WorldOrganizationDetailPage"
 import { ReligionPanels } from "../../pages/WorldReligionDetailPage"
-import type { CharacterDetail } from "../../types/character"
+import { isPublicTier } from "../../types/character"
+import { editorCharacterRead } from "../../api/character"
 import type { EntityLifecycleView } from "../../types/entityLifecycle"
 import type { Provenance } from "../../types/provenance"
 import type { RevisionHistory } from "../../types/review"
@@ -137,11 +138,18 @@ function Loaded({ campaignId, category, entityId }: Props) {
     const detail = useAuthoringResource<WorkspaceDetail>(worldDetailPath(campaignId, category, entityId))
     // A character's name, from this page's own authorized read, for the breadcrumbs of its Characters
     // pages (builds, portrayal, edit). Other categories register nothing.
+    // A character's label comes only from the recognized read. A ready answer the workspace rejects
+    // publishes no name and drops any label an earlier answer registered (the registry's `denied`
+    // convention), exactly as an unavailable record does.
+    const recognizedCharacter =
+        category === "character" && detail.state.kind === "ready" ? editorCharacterRead(detail.state.data) : null
+    const characterRejected = category === "character" && detail.state.kind === "ready" && recognizedCharacter === null
+    const characterGone = category === "character" && (detail.state.kind === "denied" || detail.state.kind === "unavailable")
     useBreadcrumbLabel({
         route: "characters.detail",
         params: { campaignId, characterId: entityId },
-        name: category === "character" && detail.state.kind === "ready" ? (detail.state.data as CharacterDetail).name : undefined,
-        denied: category === "character" && (detail.state.kind === "denied" || detail.state.kind === "unavailable"),
+        name: recognizedCharacter?.name,
+        denied: characterGone || characterRejected,
         authority: category === "character" ? detail.authority : null,
     })
     // The last read that succeeded for this record. A refresh that fails recoverably (a network or
@@ -153,8 +161,13 @@ function Loaded({ campaignId, category, entityId }: Props) {
     useBreadcrumbLabel({
         route: "world.record",
         params: { campaignId, category, entityId },
-        name: detail.state.kind === "ready" ? (detail.state.data as { name: string }).name : undefined,
-        denied: detail.state.kind === "denied" || detail.state.kind === "unavailable",
+        name:
+            category === "character"
+                ? recognizedCharacter?.name
+                : detail.state.kind === "ready"
+                  ? (detail.state.data as { name: string }).name
+                  : undefined,
+        denied: detail.state.kind === "denied" || detail.state.kind === "unavailable" || characterRejected,
         authority: detail.authority,
     })
     const [kept, setKept] = useState<WorkspaceDetail | null>(null)
@@ -308,7 +321,8 @@ function typeCodeOf(category: WorkspaceCategory, data: WorkspaceDetail): string 
         case "location":
             return (data as LocationDetail).location_type_code
         case "character":
-            return (data as CharacterDetail).character_kind
+            // Only a recognized answer names a kind; an unrecognized one offers no kind's sections.
+            return editorCharacterRead(data)?.character_kind ?? null
         default:
             return null
     }
@@ -339,9 +353,10 @@ function describe(category: WorkspaceCategory, kind: WorldKind, data: WorkspaceD
             return { name: d.name, eyebrow: "Religion", summary: d.summary }
         }
         case "character": {
-            const d = data as CharacterDetail
+            // An unrecognized answer lends no name either.
+            const d = editorCharacterRead(data)
             return {
-                name: d.name,
+                name: d?.name ?? "Character",
                 eyebrow: kind === "npc" ? "NPC" : kind === "pc" ? "Player character" : "Character",
                 summary: null,
             }
@@ -911,7 +926,11 @@ function DetailsSection({
             )
         }
         case "character": {
-            const character = data as CharacterDetail
+            // The raw read, recognized before anything is shown: an answer that is not a known shape
+            // shows no character content, and the public tier shows only the released profile.
+            const character = editorCharacterRead(data)
+            if (character === null) return <p role="alert">Character information is unavailable.</p>
+            if (isPublicTier(character)) return <CharacterPanels character={character} />
             const id = character.character_id
             const editPath = `${root}/characters/${encodeURIComponent(id)}/edit`
             // Exactly one edit link, by the character's kind (and the portrayal link only for an

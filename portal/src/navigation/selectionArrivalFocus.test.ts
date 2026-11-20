@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { activationFor, bindActivation, releaseActivation } from "./activationOwner"
 import { SelectionArrival } from "./selectionArrival"
 
-// Which focus a settled destination may take its heading from (docs/UI_DESIGN.md §4.8.4): nowhere, the
+// Which focus a settled destination may take its heading from (docs/reference/portal-behavior.md §4.8.4): nowhere, the
 // Infobox, or the very control the navigation was requested with; never some other control.
 
 afterEach(() => {

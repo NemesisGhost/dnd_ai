@@ -1,5 +1,6 @@
 import { HitPointsMeter } from "./HitPointsMeter"
 import { useCharacter } from "../hooks/useCharacter"
+import { isPublicTier } from "../types/character"
 
 interface CharacterContextDetailsProps {
   campaignId: string
@@ -34,8 +35,30 @@ export function CharacterContextDetails({
 
   const character = state.character
 
+  // The public tier names only what was released: its species and size labels, when there are any.
+  // No live definition or state exists to read, and nothing stands in for what was not released.
+  if (isPublicTier(character)) {
+    const { species, size } = character.public_profile
+    return (
+      <dl className="campaign-context-panel__detail">
+        {species !== null && (
+          <div className="campaign-context-panel__detail-row">
+            <dt>Species</dt>
+            <dd>{species.label}</dd>
+          </div>
+        )}
+        {size !== null && (
+          <div className="campaign-context-panel__detail-row">
+            <dt>Size</dt>
+            <dd>{size.label}</dd>
+          </div>
+        )}
+      </dl>
+    )
+  }
+
   const hasLiveState =
-    character.conditions !== null && character.resources !== null
+    Array.isArray(character.conditions) && Array.isArray(character.resources)
 
   return (
     <dl className="campaign-context-panel__detail">

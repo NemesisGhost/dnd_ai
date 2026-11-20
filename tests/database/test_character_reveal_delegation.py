@@ -1,6 +1,6 @@
 # ruff: noqa: F811 - the imported `g` and `client_factory` are pytest fixtures used by parameter name
 """`character.reveal` and its delegation (P03-A A1,
-docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md).
+docs/delivery/ownership-design.md).
 
 A live built-in campaign owner has reveal authority directly and is the only actor who can grant
 or revoke it for a member holding the built-in `gm` role. A delegation is bound to that member's

@@ -4,7 +4,7 @@
 
 This document defines the conceptual domain model for the persistent world platform. It describes the major domain objects, their responsibilities, their boundaries, and the relationships between them.
 
-This is not a complete physical database schema. Exact columns, indexes, and migration details are defined elsewhere. The goal here is to establish a stable language and structure before implementation expands.
+For a first encounter with the domain, read [worlds, people and play](explanation/worlds-and-play.md). This model defines vocabulary across implemented and future scope. The [table inventory](reference/tables.md) identifies declared schema objects, and [ADRs](adr/) own accepted decisions.
 
 The model is designed for:
 
@@ -485,49 +485,15 @@ Examples:
 
 ### 8.4 Character controller
 
-A **Character Controller** identifies who currently controls a character.
-
-Controller types include:
-
-- player
-- GM
-- AI agent
-- shared party control
-- temporary controller
-
-Control can vary by campaign, session, or time period.
+In the implemented access model, a campaign membership can have a relationship to a character. Read and action permissions depend on the relationship, current roles, explicit grants or denies and the requested operation. The accepted control model adds explicit campaign-scoped assignments and bounded player operations. A controller can contribute under those rules without becoming the author of a shared definition. [Actor decision](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md)
 
 ### 8.5 Player character
 
-A **Player Character** is a character with player-ownership and campaign participation metadata.
-
-The PC subtype adds:
-
-- owning user or users
-- permissions
-- player-facing notes
-- campaign preferences
-
-It does not duplicate shared mechanics.
-
-Implementation note (Phase 15.2B-1): a PC's **identity** (name, species, size, origin, background, appearance, GM notes) is authored by the GM as a draft and published like any definition; the `player_character` type is lifecycle-eligible. The owning user is **not** stored on the character (`player_user_id` stays unset); ownership and control are `membership_character_relationships`, which confer a perspective only while the character is published and active.
+The current PC authoring command creates a typed draft. The owning user is not stored on the character. Publication and character relationships control the available perspective. Shared identity and narrative include canonical location and ownership. The accepted design separates campaign-specific mechanical possession, builds and other mechanical state. It requires reviewed migration and scoped player contributions. [Delivery boundaries](delivery/work-register.md#maintained-work-register)
 
 ### 8.6 NPC
 
-An **NPC** is a character with additional world-management and portrayal information.
-
-The NPC subtype adds:
-
-- simulation level
-- importance
-- portrayal profile
-- goals
-- routines
-- preferences
-- boundaries
-- emotional state
-- AI-agent assignments
-- private knowledge and disclosure policy
+The current NPC subtype supports identity, a detail level and versioned GM-private portrayal. Goals, routines, preferences and agent assignments are design subjects with separate implementation gates. Under ADR 0021 the same shared actor can have different controllers in different campaigns. Portrayal and canonical authorship remain separate from campaign control.
 
 ### 8.7 NPC portrayal profile
 

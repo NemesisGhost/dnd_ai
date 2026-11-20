@@ -3,7 +3,7 @@ import { useAuthenticatedSession } from "../layouts/useAuthenticatedSession"
 import { resolveLandingPath } from "../utils/landingDestination"
 
 // The /home route: an authenticated landing resolver with no content of its
-// own (docs/UI_DESIGN.md §4.2). /home stays a stable URL for bookmarks, the
+// own (docs/reference/portal-behavior.md §4.2). /home stays a stable URL for bookmarks, the
 // portal brand link, and the post-login default. It always replaces itself
 // in history, so Back from the landing page leaves the app rather than
 // bouncing through /home, and it can never loop: the targets are

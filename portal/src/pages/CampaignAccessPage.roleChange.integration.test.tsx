@@ -20,6 +20,7 @@ import {
 } from "vitest"
 import { SessionContext } from "../context/SessionContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
+import { bootstrapWithAccessManage } from "../test/accessBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
@@ -182,7 +183,7 @@ function renderAtCampaignA(reload: () => Promise<void>) {
             value={{
                 state: {
                     status: "authenticated",
-                    bootstrap: sessionBootstrapFixture,
+                    bootstrap: bootstrapWithAccessManage(CAMPAIGN_A_ID, CAMPAIGN_B_ID),
                 },
                 reload,
                 refresh: vi.fn(),

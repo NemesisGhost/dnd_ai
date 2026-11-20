@@ -1,15 +1,5 @@
-# D&D AI coding instructions
+# Working in dnd_ai
 
-Start with [CLAUDE.md](../CLAUDE.md), then use the [documentation index](../docs/README.md)
-to retrieve only the affected domain, schema, lifecycle, architecture and development sections.
-Use [PROJECT_STATUS](../docs/PROJECT_STATUS.md) for recorded current delivery state and
-[PLANv2](../docs/PLANv2.md) for future order. Active plans are linked from the index.
+Follow the [repository guidance](../CLAUDE.md) and [documentation standard](../docs/standard.md). Use the [documentation hub](../docs/README.md) to find the contract for the affected layer. The [work register](../docs/delivery/work-register.md) owns current delivery status.
 
-PostgreSQL is canonical; clients use the API; AI proposes changes through authorized
-commands. Follow the full rules and linked authorities in CLAUDE.md rather than a
-duplicated summary here. Existing working data is not disposable because an old
-architecture restart occurred. Follow current preservation, migration and recovery policy.
-
-The API and React portal are implemented. Self-hosted Compose and containerized PostgreSQL
-CI are the supported path. Optional AWS operations are documented separately. Keep changes
-scoped to the task; preserve unrelated working changes and commit only your own files/hunks.
+Preserve unrelated edits and existing campaign data. Use the disposable PostgreSQL 18 workflow for database verification. Keep private tokens, credentials and local evidence out of shared examples.

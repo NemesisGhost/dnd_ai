@@ -1489,7 +1489,7 @@ def write_change_role(
 #   6. the campaign: FOR UPDATE when the request relinquishes or its candidate-bound expired-owner lock returned a
 #      row (a role-row UPDATE is owed), FOR KEY SHARE otherwise (TA-E10-2); 7. the owner template FOR UPDATE.
 #
-# E10 (docs/R01_S5E2_E10_CORRECTION_DESIGN_2026-11-15.md, plan 6.29): a request that owes no role-row UPDATE must
+# E10 (historical local record: docs/R01_S5E2_E10_CORRECTION_DESIGN_2026-11-15.md, plan 6.29): a request that owes no role-row UPDATE must
 # not conflict with a keyed authoring request's `FOR SHARE` on the actor's role rows, nor take the campaign row
 # stronger than the KEY SHARE the authoring reservation's foreign key already holds. Hence the two weaker modes
 # above; both depend on the request, and the campaign mode on held lock evidence. A KEY SHARE campaign admits no

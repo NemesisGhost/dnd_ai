@@ -11,6 +11,8 @@
 - **Extends**: [ADR 0005](0005-separate-rules-definitions-from-world-instances.md) and the identity-immutability policy of `DATABASE_MODEL.md` §8 (revisions 033/036). It does not replace the `rules` schema.
 - **Related**: [ADR 0006](0006-ai-proposes-but-does-not-own-canon.md), [ADR 0016](0016-data-classification-and-private-data-handling.md), [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md), [ADR 0022](0022-creature-templates-combatants-and-promotion.md).
 
+**Current delivery mapping:** implementation is split across the adopted [P19 execution sequence](../delivery/work-register.md#p19-c01), from source provenance through calculation, GM reads, configuration, build review, audience projection and contract freeze. The former R19-P and P19 checkpoint labels remain historical technical references in the [register crosswalk](../delivery/work-register.md#id-migration-crosswalk).
+
 ## Context (verified at `10a1a4e`)
 
 - **Rulesets.**
@@ -428,7 +430,7 @@ The same `InputBundle`, `Contribution`, `DerivedValue` and `Finding` types are u
 
 ## References
 
-- [PLANv2.md](../PLANv2.md) §6.1, 19.0–19.8; [PLAN.md](../README.md) §6.1–6.3, §18.3
+- [roadmap](../delivery/roadmap.md) §6.1, 19.0–19.8; [PLAN.md (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md) §6.1–6.3, §18.3
 - Code: `src/dnd_ai/domain/character_calculations.py`, `src/dnd_ai/queries/{character_sheet,character_build_resolution}.py`, `src/dnd_ai/commands/{character_builds,character_state,encounters,item_operations,event_corrections}.py`, `src/dnd_ai/persistence/tables/{rules,characters,campaign,items,core,ai}.py`, `src/dnd_ai/api/reference_corpus.py`, `database/migrations/versions/{022,033,036}_*.py`
 - [DATABASE_CONVENTIONS.md](../DATABASE_CONVENTIONS.md) §5.7, §18, §34
-- [R19_FOUNDATION_IMPLEMENTATION_PLAN.md](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md)
+- [rules foundations](../delivery/rules-foundations.md)

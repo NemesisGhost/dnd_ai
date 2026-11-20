@@ -1,6 +1,6 @@
 """Tests for dnd_ai.config.Settings — namespacing, fail-closed production
 startup, and the documented settings-source precedence
-(docs/LOCAL_DEPLOYMENT.md, ADR 0012).
+(docs/operations/deployment.md, ADR 0012).
 
 Two testing styles are used deliberately:
 
@@ -8,7 +8,7 @@ Two testing styles are used deliberately:
   with `monkeypatch` controlling `os.environ` and (where relevant) an
   explicit temporary `env_file` path — fast, and sufficient for anything
   that isn't fixed at class-definition time.
-- `secrets_dir` (docs/LOCAL_DEPLOYMENT.md's host-mounted secret files) is
+- `secrets_dir` (docs/operations/deployment.md's host-mounted secret files) is
   baked into `Settings.model_config` once, at module-import time, from
   whatever `DND_AI_SECRETS_DIR` happened to be set to then — monkeypatching
   it inside an already-running test process cannot change that. Those
@@ -560,7 +560,7 @@ def test_load_settings_ignores_explicit_env_file_in_production(
 
 def test_unrelated_shared_env_vars_are_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     # AWS_REGION/AWS_PROFILE live in the same .env for the AWS CLI/Terraform,
-    # not this model — see docs/LOCAL_DEPLOYMENT.md and the module docstring.
+    # not this model — see docs/operations/deployment.md and the module docstring.
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setenv("AWS_PROFILE", "dnd-ai-dev")
     Settings()  # must not raise

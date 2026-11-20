@@ -15,7 +15,7 @@ interface WorldCardProps {
 // Domain-specific wrapper mapping one authorized WorldEntityCard list item
 // into the shared EntityCard primitive. Becomes a navigable card only for
 // categories with an independently loadable detail contract
-// (UI_STYLE_GUIDE.md §10.2); "organization" (no display name in the detail
+// (docs/reference/portal-style.md §10.2); "organization" (no display name in the detail
 // response yet — see this workstream's report) stays a non-interactive,
 // visually consistent card.
 export function WorldCard({ campaignId, entity, taskState }: WorldCardProps) {

@@ -1,5 +1,5 @@
 // Turns an underscore_separated database code into a human-readable label
-// at the presentation boundary (UI_STYLE_GUIDE.md §15).
+// at the presentation boundary (docs/reference/portal-style.md §15).
 export function humanizeCode(code: string): string {
     return code
         .split("_")

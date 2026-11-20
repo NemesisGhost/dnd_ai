@@ -59,7 +59,7 @@
 # `db`, `api` publishes no host port in this base file by design
 # (compose.override.yaml adds a 127.0.0.1-only one for local development);
 # a real self-hosted deployment reaches it only through a reverse proxy —
-# not yet built here, see PLAN.md §32 (Phase 14). No background
+# not yet built here, see docs/operations/deployment.md. No background
 # worker/Discord-adapter service exists yet either; add one the same way
 # once that role has committed source to run.
 

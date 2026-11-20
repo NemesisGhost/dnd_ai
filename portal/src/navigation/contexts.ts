@@ -1,4 +1,4 @@
-// The four navigation layers P02 keeps apart (docs/UI_DESIGN.md §4.8). Each is a different question,
+// The four navigation layers P02 keeps apart (docs/reference/portal-behavior.md §4.8). Each is a different question,
 // answered from a different source, and none of them grants authority: every read and command is
 // authorized by the server, and a descriptor or history entry that names something only ever asks for
 // it. Nothing here holds a label, a free-text value, a URL, a capability or an authorization outcome.

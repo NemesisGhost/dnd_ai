@@ -3,7 +3,8 @@ import type { ReactNode } from "react"
 import { useLocation } from "react-router"
 import { useCampaignCapability } from "../../hooks/useCampaignCapability"
 import { retainedState } from "../../navigation/breadcrumbModel"
-import type { CharacterDetail } from "../../types/character"
+import { isPublicTier } from "../../types/character"
+import type { CharacterRead } from "../../types/character"
 import { characterKindLabel } from "../../utils/characterKind"
 import { sectionsOf } from "../../utils/characterSections"
 import { CharacterInventoryPanel } from "../InventoryPanels"
@@ -43,7 +44,7 @@ export function CharacterRecordSections({
 }: {
     campaignId: string
     characterId: string
-    character: CharacterDetail
+    character: CharacterRead
     route: CharacterRoute
     main: ReactNode
 }) {
@@ -69,7 +70,7 @@ export function CharacterRecordSections({
 
     const labels: Record<SectionKey, string> = {
         details: "Details",
-        sheet: route === "sheet" && !sections.sheet ? "Summary" : "Sheet",
+        sheet: route === "sheet" && !sections.sheet ? (isPublicTier(character) ? "Profile" : "Summary") : "Sheet",
         relationships: "Relationships",
         inventory: "Inventory",
         parties: "Parties",

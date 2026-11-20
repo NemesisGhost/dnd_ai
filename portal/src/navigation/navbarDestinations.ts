@@ -3,7 +3,7 @@ import type { SelectedContextState } from "./selectedContextStore"
 import { matchRouteMeta } from "./routeMeta"
 import type { NavRoot } from "./routeMeta"
 
-// What the Campaign, World and Characters Navbar controls do when activated (docs/UI_DESIGN.md §4.8.3,
+// What the Campaign, World and Characters Navbar controls do when activated (docs/reference/portal-behavior.md §4.8.3,
 // plan §4.1). Pure functions of already-validated inputs: nothing here reads the router, the store or
 // the network, and nothing infers a selection. A destination is built only from the person's explicit
 // selection (or, on a campaign route, the route's own scope), never from the record being viewed and

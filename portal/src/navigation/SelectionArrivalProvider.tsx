@@ -14,7 +14,7 @@ import { contextEligible } from "./selectionEligibility"
 import { selectionFor, selectionOwner, useSelectedContextSnapshot, useSelectedContextStore } from "./selectedContextStore"
 import type { SelectedContextState } from "./selectedContextStore"
 
-// The one owner of what follows an accepted Infobox selection (docs/UI_DESIGN.md §4.8.4): the polite
+// The one owner of what follows an accepted Infobox selection (docs/reference/portal-behavior.md §4.8.4): the polite
 // announcement here, the heading focus in the destination (navigation/ArrivalHeadingFocus.tsx), both
 // from the same arrival, each at most once. What counts as an arrival (and what ends one) is decided from
 // the router's committed locations (navigation/selectionArrivalTracker.ts).

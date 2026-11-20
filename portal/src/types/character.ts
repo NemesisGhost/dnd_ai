@@ -22,9 +22,33 @@ export interface CharacterSections {
     relationships: boolean
     inventory: boolean
     parties: boolean
+    // The released public profile may be read (public tier, or a summary/full reader with a release).
+    // Optional: an answer from before the public tier carries no such flag, which reads as false.
+    public_profile?: boolean
 }
 
+// A species or size as the released profile names it. The label is what a reader sees.
+export interface CharacterIdentityValue {
+    code: string
+    label: string
+}
+
+// The released public profile, exactly the server's CharacterPublicProfileResponse. No release
+// metadata is ever carried. A null field was not released and is omitted from the page.
+export interface CharacterPublicProfile {
+    summary: string | null
+    appearance: string | null
+    background: string | null
+    species: CharacterIdentityValue | null
+    size: CharacterIdentityValue | null
+}
+
+// The summary and full tiers (the existing character read). `view_tier` is absent only in a
+// recognized answer from a server that predates the tiers (see api/character).
 export interface CharacterDetail {
+    view_tier?: "summary" | "full"
+    // The latest release, or null (no release, or the section is withheld: the two are not told apart).
+    public_profile?: CharacterPublicProfile | null
     // Absent only in an answer from a server that predates it (see utils/characterSections).
     sections?: CharacterSections
     authoring?: RecordAuthoring
@@ -51,4 +75,22 @@ export interface CharacterDetail {
 
     conditions: CharacterCondition[] | null
     resources: CharacterResource[] | null
+}
+
+// The public tier: only these keys exist. The live definition, status, mechanics and authoring are
+// not merely null but absent, and nothing here may be reconstructed from anywhere else.
+export interface PublicCharacterDetail {
+    view_tier: "public_profile"
+    sections: CharacterSections
+    character_id: string
+    name: string
+    character_kind: CharacterKind
+    public_profile: CharacterPublicProfile
+}
+
+// What one character read answers: the public tier, or the summary/full shape.
+export type CharacterRead = CharacterDetail | PublicCharacterDetail
+
+export function isPublicTier(character: CharacterRead): character is PublicCharacterDetail {
+    return character.view_tier === "public_profile"
 }

@@ -1,6 +1,6 @@
 """Provisioning CLI for the FoundryVTT adapter (Phase 11 workstream 7,
 `foundry-module/`; converted to per-device pairing by Phase 11R workstream
-I, docs/PLAN.md §23.5/Workstream 11R item 6).
+I, docs/api/ACCESS_CONTROL.md §23.5).
 
 There is no portal UI yet (Phase 13 is not started) to drive the
 authenticated management endpoints an operator needs before a Foundry world
@@ -67,7 +67,7 @@ warning.
 ## Legacy transition
 
 This docstring originally described a four-step, deploy-then-pair-then-
-revoke-then-remove rollout plan (docs/PLAN.md Workstream 11R item 7),
+revoke-then-remove rollout plan (foundry-module/README.md, historical Workstream 11R item 7),
 under the assumption that some deployment might still depend on the
 `FoundrySystem` scheme during a compatibility window. A subsequent review
 found no evidence of any real deployed client still depending on it — the

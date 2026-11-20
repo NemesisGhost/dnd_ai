@@ -11,7 +11,7 @@ import { installMockServer } from "../test/authoringHarness"
 import type { MockServer } from "../test/authoringHarness"
 import type { CampaignContext, SessionBootstrap } from "../types/bootstrap"
 
-// Meaningful choice, reasons, retry and stale World options for the Infobox (docs/UI_DESIGN.md §4.8.12).
+// Meaningful choice, reasons, retry and stale World options for the Infobox (docs/reference/portal-behavior.md §4.8.12).
 // The pure rules are in navigation/contextOptions.test.ts; this file proves what the person can perceive.
 
 const { useCharacterMock } = vi.hoisted(() => ({ useCharacterMock: vi.fn() }))

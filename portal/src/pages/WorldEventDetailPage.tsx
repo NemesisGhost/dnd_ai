@@ -14,7 +14,7 @@ interface WorldEventDetailPageProps {
 // Event detail. participants[]/locations[] carry only ids and an optional
 // role code with no authorized display label for the referenced entity —
 // the contract does not let this page invent a name, so those sections are
-// omitted entirely rather than shown with a raw UUID (UI_STYLE_GUIDE.md
+// omitted entirely rather than shown with a raw UUID (docs/reference/portal-style.md
 // §10.2, §15). What happened, to whom and when comes from the server's
 // audience-safe `explanation`; world_time_id and session_id are identifiers
 // with no display label and are never rendered.

@@ -1,6 +1,6 @@
 # ruff: noqa: F811 - the imported `g` and `client_factory` are pytest fixtures used by parameter name
 """Lock order of the D3 ownership gate and the membership commands it shares rows with
-(docs/PHASE14_15_P03A_A1_OWNERSHIP_AUTHORITY_DESIGN_2026-11-06.md §3).
+(docs/delivery/ownership-design.md §3).
 
 Every scenario is made deterministic with real PostgreSQL locks, not sleeps: a test holds a row
 lock (or an uncommitted command) to park one request exactly where the interleaving needs it, waits

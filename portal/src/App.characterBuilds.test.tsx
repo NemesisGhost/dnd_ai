@@ -277,6 +277,7 @@ describe("character build pages", () => {
       body: {
         character_id: "c1",
         name: "Aldric",
+        character_kind: "player_character",
         species_code: "human",
         size_category: "medium",
         current_hit_points: null,

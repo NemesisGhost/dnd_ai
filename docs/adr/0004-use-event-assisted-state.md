@@ -17,4 +17,4 @@ Significant state changes and their causal events commit atomically. Historical 
 
 ## References
 
-- [PLAN.md §2.5](../README.md) and [DATABASE_CONVENTIONS.md §13-§14](../DATABASE_CONVENTIONS.md#13-timeline-state-conventions)
+- [PLAN.md §2.5 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#25-event-assisted-state-model) and [DATABASE_CONVENTIONS.md §13-§14](../DATABASE_CONVENTIONS.md#13-timeline-state-conventions)

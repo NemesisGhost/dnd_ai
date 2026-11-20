@@ -4,6 +4,7 @@ import {
     reactivateAccessGroup,
 } from "../api/reactivateAccessGroup"
 import { useSession } from "../context/SessionContext"
+import { useAccessWriteCompletion } from "./useAccessWriteCompletion"
 
 export type ReactivateAccessGroupStatus =
     | { kind: "idle" }
@@ -38,6 +39,9 @@ export function useReactivateAccessGroup(
     onSuccess: () => void,
 ): UseReactivateAccessGroupResult {
     const { state: sessionState, reload } = useSession()
+    // Confirmed write: reload the session, or re-read it in place when the write cannot affect the caller
+    // (hooks/useAccessWriteCompletion).
+    const completeWrite = useAccessWriteCompletion()
     const controllerRef = useRef<AbortController | null>(null)
     const idempotencyRef = useRef<IdempotencyReservation | null>(null)
 
@@ -104,7 +108,7 @@ export function useReactivateAccessGroup(
                         status: { kind: "success" },
                     })
                     onSuccess()
-                    reload()
+                    completeWrite()
                 })
                 .catch((cause: unknown) => {
                     if (controller.signal.aborted) {
@@ -142,7 +146,7 @@ export function useReactivateAccessGroup(
                     })
                 })
         },
-        [status.kind, sessionState, campaignId, onSuccess, reload, resolveIdempotencyKey],
+        [status.kind, sessionState, campaignId, onSuccess, reload, completeWrite, resolveIdempotencyKey],
     )
 
     const reset = useCallback(() => {

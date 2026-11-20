@@ -1,5 +1,5 @@
 """Read-only per-member effective-access explanation (Phase 13E-B checkpoint
-13, docs/UI_DESIGN.md §6.4 "Effective-access explanation" / §8.3).
+13, docs/reference/portal-behavior.md §6.4 "Effective-access explanation" / §8.3).
 
 `resolve_member_effective_access` answers "why can this person see what they
 can see" for one campaign member: every capability the member currently

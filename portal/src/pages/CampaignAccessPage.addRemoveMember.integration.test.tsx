@@ -15,6 +15,7 @@ import {
 } from "vitest"
 import { SessionContext } from "../context/SessionContext"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
+import { bootstrapWithAccessManage } from "../test/accessBootstrap"
 import type { CampaignAccessOverview } from "../types/accessOverview"
 import { CampaignAccessPage } from "./CampaignAccessPage"
 
@@ -107,7 +108,7 @@ function renderAtCampaign() {
             value={{
                 state: {
                     status: "authenticated",
-                    bootstrap: sessionBootstrapFixture,
+                    bootstrap: bootstrapWithAccessManage(CAMPAIGN_ID),
                 },
                 reload: vi.fn(), refresh: vi.fn().mockResolvedValue(undefined),
             }}
@@ -612,7 +613,7 @@ describe("CampaignAccessPage remove-member flow", () => {
                 value={{
                     state: {
                         status: "authenticated",
-                        bootstrap: sessionBootstrapFixture,
+                        bootstrap: bootstrapWithAccessManage(CAMPAIGN_ID),
                     },
                     reload: reloadMock,
                     refresh: vi.fn(),

@@ -45,7 +45,7 @@ import { WorldsNavGroup } from "./WorldsNavGroup"
 interface NavigationItem {
   path: string
   label: string
-  // The task root this Navbar item starts (docs/UI_DESIGN.md §4.8).
+  // The task root this Navbar item starts (docs/reference/portal-behavior.md §4.8).
   root: NavRoot
   icon: LucideIcon
   // Shown only on a campaign that grants this capability.

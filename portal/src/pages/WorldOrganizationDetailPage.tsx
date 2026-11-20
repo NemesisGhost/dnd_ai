@@ -108,7 +108,7 @@ export function OrganizationPanels({
     )
 }
 
-// Organization detail (UI_STYLE_GUIDE.md §10.2). The reader everyone without `canon.edit` sees,
+// Organization detail (docs/reference/portal-style.md §10.2). The reader everyone without `canon.edit` sees,
 // with the read-only Members and offices section; editors get the workspace instead, which reuses
 // the panels and embeds the editor roster.
 export function WorldOrganizationDetailPage({

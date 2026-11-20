@@ -6,7 +6,7 @@ import type { Recovery } from "./terminalRecovery"
 import "./authoring/authoring.css"
 
 // One presentation for a destination that ends in a message instead of a page: not found,
-// access denied, or an action the record does not offer (docs/UI_DESIGN.md "Unavailable and
+// access denied, or an action the record does not offer (docs/reference/portal-behavior.md "Unavailable and
 // unauthorized destinations"). It renders content only; the caller's frame owns the page's <main>.
 
 // A terminal destination: its own <h1>, focused once per navigation (that move is the

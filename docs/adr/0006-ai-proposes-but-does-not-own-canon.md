@@ -17,4 +17,4 @@ AI output is a proposal with provenance. Only normal authorized commands promote
 
 ## References
 
-- [PLAN.md §18.2](../README.md) and [DATABASE_CONVENTIONS.md §17](../DATABASE_CONVENTIONS.md#17-ai-data-conventions)
+- [PLAN.md §18.2 (historical)](https://github.com/NemesisGhost/dnd_ai/blob/53416d5/docs/PLAN.md#182-controlled-mutation) and [DATABASE_CONVENTIONS.md §17](../DATABASE_CONVENTIONS.md#17-ai-data-conventions)

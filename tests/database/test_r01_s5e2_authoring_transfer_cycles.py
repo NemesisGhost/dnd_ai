@@ -2,7 +2,7 @@
 """R01 S5-E2 E10 correction (plan 6.29): ownership transfer against keyed authoring, per transfer branch, per author,
 both transaction orderings.
 
-Design: docs/R01_S5E2_E10_CORRECTION_DESIGN_2026-11-15.md (sections 2, 3, 4, 7). Every case drives real routes over
+Historical local design: docs/R01_S5E2_E10_CORRECTION_DESIGN_2026-11-15.md (sections 2, 3, 4, 7). Every case drives real routes over
 real connections: the keyed authoring request (`POST .../authoring/dungeons`; since R01 O-2 its reservation defers the
 campaign foreign key, so the INSERT takes no campaign lock) against `POST .../ownership-transfer`. Author = `w.gm_user` (holds `gm`): it is either the
 transferring owner ("actor") or the recipient.

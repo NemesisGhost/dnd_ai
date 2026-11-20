@@ -126,7 +126,7 @@ export function LocationCurrentState({
     )
 }
 
-// Location detail (UI_STYLE_GUIDE.md §10.2). The reader everyone sees; editors get the workspace
+// Location detail (docs/reference/portal-style.md §10.2). The reader everyone sees; editors get the workspace
 // instead (components/world/WorldRecordWorkspace), which reuses these panels.
 export function WorldLocationDetailPage({
     campaignId,

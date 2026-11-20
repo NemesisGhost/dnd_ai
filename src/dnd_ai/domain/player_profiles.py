@@ -1,5 +1,5 @@
 """Campaign-scoped character player profiles: the field vocabulary and the read rule
-(P03-A slice A5a, docs/PHASE15_P03A_A5_PLAYER_PROFILE_DESIGN_2026-11-11.md, decisions D13-D18).
+(P03-A slice A5a, docs/delivery/player-profile-design.md, decisions D13-D18).
 
 A *player profile* is narrative a character's controllers write, per campaign, for the campaign's
 GMs and for the character's eligible controllers. It is not world canon and not a GM-private store.

@@ -1,5 +1,5 @@
 """Character public-profile drafts and releases: vocabulary, errors and the read/edit/release policy
-(P03-A slice A2a, docs/PHASE14_15_P03A_IMPLEMENTATION_PLAN_2026-11-06.md section 5, decision D8).
+(P03-A slice A2a, docs/delivery/shared-characters.md section 5, decision D8).
 
 A campaign's GMs author a public profile for a character (two text fields) in a mutable draft and
 publish immutable, versioned releases of it. A release makes nothing visible by itself; an audience

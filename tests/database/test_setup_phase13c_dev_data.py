@@ -2018,7 +2018,7 @@ def test_phase13e_access_overview_shows_the_visible_grant_and_excludes_the_revok
 
     # The disabled account's membership still appears, with an ordinary
     # "Active" membership status — the overview never consults
-    # security.users.lifecycle_status_id (docs/PHASE13E_ACCESS_CONTRACT.md
+    # security.users.lifecycle_status_id (docs/api/ACCESS_CONTROL.md
     # §3). This is the documented contract, not a defect.
     disabled = by_name[setup_phase13c_dev_data._PHASE13E_DISABLED_DISPLAY_NAME]
     assert disabled.status_display_name == "Active"

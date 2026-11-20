@@ -12,7 +12,7 @@ import type { MockServer } from "../test/authoringHarness"
 import type { SessionBootstrap } from "../types/bootstrap"
 
 // World evidence belongs to the owner (user + browser session) under which the read STARTED
-// (docs/UI_DESIGN.md §4.8.12). A result that settled under a previous owner is never recorded for the next
+// (docs/reference/portal-behavior.md §4.8.12). A result that settled under a previous owner is never recorded for the next
 // one, and the next owner's read of the same world path produces its own evidence.
 
 const { useCharacterMock } = vi.hoisted(() => ({ useCharacterMock: vi.fn() }))

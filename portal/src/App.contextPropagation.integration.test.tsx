@@ -6,7 +6,7 @@ import { RouteSessionProvider } from "./context/RouteSessionProvider"
 import { ThemeProvider } from "./themes/ThemeProvider"
 import type { CampaignContext, SessionBootstrap } from "./types/bootstrap"
 
-// World / Campaign context propagation (docs/UI_DESIGN.md §4.5, §4.8.2): a newer
+// World / Campaign context propagation (docs/reference/portal-behavior.md §4.5, §4.8.2): a newer
 // explicit selection (route campaign, or the world the route selects) always
 // wins, the campaign this tab retained follows the person only while it
 // belongs to the world the route confirmed, and the saved last-visited /
@@ -276,7 +276,7 @@ async function chooseInfoBoxWorld(id: string) {
   )
   await sleep(50)
   // The World level stays disabled ("Loading worlds…") until that list answers, so a destination never
-  // changes under the person (docs/UI_DESIGN.md §4.8.12): wait for it to be usable.
+  // changes under the person (docs/reference/portal-behavior.md §4.8.12): wait for it to be usable.
   await waitFor(() => expect(select).toBeEnabled())
   fireEvent.change(select, { target: { value: id } })
 }

@@ -347,7 +347,7 @@ interface LifecycleBadgeProps {
 }
 
 // State is communicated by text AND an icon, never color alone
-// (docs/UI_STYLE_GUIDE.md accessibility rules).
+// (docs/reference/portal-style.md accessibility rules).
 export function LifecycleBadge({ status }: LifecycleBadgeProps) {
     const badge = BADGES[status]
     if (badge === undefined) {

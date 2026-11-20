@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useSyncExternalStore } from "react"
 import type { SessionBootstrap } from "../types/bootstrap"
 
-// The person's explicit selection in this tab (docs/UI_DESIGN.md §4.8): ids only, in memory only, owned
+// The person's explicit selection in this tab (docs/reference/portal-behavior.md §4.8): ids only, in memory only, owned
 // above the campaign-scoped session so it survives a campaign-scope change. It is NOT execution scope
 // (the route decides what a page reads and writes), NOT the viewed record, and NOT authority: every
 // consumer validates it against the current bootstrap before showing it, and every read is authorized

@@ -1,11 +1,13 @@
 # ADR 0022: Creature templates, encounter combatants, and promotion
 
-- **Status**: Accepted by the owner on 2026-11-06, as reviewed at `2ca4648` (the ADR file is unchanged from that revision). R19-P0 architecture deliverable, corrected after independent review (finding R19-07). It implements owner Decision 3 (hybrid creature representation) and is the creature-model ADR that [PLANv2.md](../PLANv2.md) 19.3 and §18 item 8 require.
+- **Status**: Accepted by the owner on 2026-11-06, as reviewed at `2ca4648` (the ADR file is unchanged from that revision). R19-P0 architecture deliverable, corrected after independent review (finding R19-07). It implements owner Decision 3 (hybrid creature representation) and is the creature-model ADR that [roadmap](../delivery/roadmap.md) 19.3 and §18 item 8 require.
 - **Owner decisions applied (Owner-approved 2026-11-03)**: OD-5 (no delegation for creating and publishing a promoted character, §6) and OD-11 (no promotion during an active encounter, §6). These are policy approvals, not acceptance of this ADR.
 - **Date**: 2026-11-02
 - **Extends**: [ADR 0005](0005-separate-rules-definitions-from-world-instances.md). A creature template is a rules definition; a persistent creature is a world instance.
 - **Depends on**: [ADR 0021](0021-shared-actor-identity-control-and-authoring-responsibility.md) (actor identity, control, build scope, campaign-aware active build); [ADR 0023](0023-rules-engine-calculation-validation-and-source-authorization.md) (adapters, payload validation, provenance, validation and review).
 - **Implementation gate**: Template definitions are R19-P2d. **Every encounter-integration change in this ADR (§4–§7) is R19-P4b**. That work happens after the Phase 17 gate, under Phase 15 encounter-command owner review. Nothing in §4–§7 is implemented by an early checkpoint.
+
+**Current delivery mapping:** template definitions map to [P19-C05](../delivery/work-register.md#p19-c05); Phase 17-gated encounter combatants and promotion remain in the [p4b placeholder](../delivery/work-register.md#p4b). R19-P and former P19 checkpoint labels remain historical technical references in the [register crosswalk](../delivery/work-register.md#id-migration-crosswalk).
 
 ## Context
 
@@ -216,7 +218,7 @@ All schema changes are additive or relax a NOT NULL, so existing encounters need
 
 ## References
 
-- [PLANv2.md](../PLANv2.md) 19.0, 19.3, 19.4, §6.1
+- [roadmap](../delivery/roadmap.md) 19.0, 19.3, 19.4, §6.1
 - [DATABASE_MODEL.md](../architecture/DATABASE_MODEL.md) §9.2, §12, §13; [DATABASE_CONVENTIONS.md](../DATABASE_CONVENTIONS.md) §5.7, §18, §34
 - Code: `src/dnd_ai/persistence/tables/{encounters,interaction,narrative}.py`, `src/dnd_ai/commands/{encounters,encounter_operations,encounter_preparation,integration}.py`, `src/dnd_ai/queries/{encounter,encounter_preparation}.py`, `src/dnd_ai/api/{encounters,encounter_preparation}.py`
-- [R19_FOUNDATION_IMPLEMENTATION_PLAN.md](../R19_FOUNDATION_IMPLEMENTATION_PLAN.md) §5.3, §6 (P2d, P4a, P4b)
+- [rules foundations](../delivery/rules-foundations.md) §5.3, §6 (P2d, P4a, P4b)

@@ -447,7 +447,7 @@ describe("Items: inventory, item workspace, edit and create", () => {
             })
         })
         await itemHeading()
-        // The legacy `worldSearch` entry is adapted to World's task (docs/UI_DESIGN.md §4.8.9).
+        // The legacy `worldSearch` entry is adapted to World's task (docs/reference/portal-behavior.md §4.8.9).
         expect(trail()).toEqual(["World", "Moonblade"])
         expect(trailLinks()).toEqual([`${base}/world?category=item&cursor=abc`])
         expect(screen.queryByRole("link", { name: "Back to World" })).toBeNull()

@@ -3,7 +3,7 @@ import type { SelectionArrival } from "./selectionArrival"
 import type { SelectedContextState } from "./selectedContextStore"
 
 // Whether an accepted selection arrival may speak and move focus yet: the committed selection must be the
-// one the person chose AND agree with the scope of the route the choice arrived at (docs/UI_DESIGN.md
+// one the person chose AND agree with the scope of the route the choice arrived at (docs/reference/portal-behavior.md
 // §4.8.4). One predicate for both, so an announcement and a heading focus can never disagree about what
 // happened. It reads nothing but the arrival's ids, the committed selection and the session's own lists;
 // whether a name is readable only changes the wording, never the eligibility.

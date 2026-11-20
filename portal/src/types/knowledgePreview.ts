@@ -1,4 +1,4 @@
-// The Knowledge "Member preview" contracts (docs/UI_DESIGN.md, Member preview).
+// The Knowledge "Member preview" contracts (docs/reference/portal-behavior.md, Member preview).
 // The server projects everything for the selected member (dnd_ai.api.preview); these shapes
 // only describe what comes back.
 

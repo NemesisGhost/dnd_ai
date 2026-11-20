@@ -1,6 +1,6 @@
 export interface EffectiveAccessSource {
     // One of "role" | "character_relationship" | "resource_grant" |
-    // "access_group" — server-authoritative, never narrowed client-side.
+    // "access_group" | "revelation" — server-authoritative, never narrowed client-side.
     kind: string
     label: string
     target_display_name: string | null

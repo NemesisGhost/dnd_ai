@@ -12,7 +12,7 @@ export interface NavigationWorldScope {
 }
 
 // The campaign the persistent sidebar's campaign-specific links target
-// (docs/UI_DESIGN.md §4.5, §4.8). Precedence, most to least authoritative:
+// (docs/reference/portal-behavior.md §4.5, §4.8). Precedence, most to least authoritative:
 //
 //   1. the route campaign, when it is in the current bootstrap. A route that
 //      names a campaign the bootstrap does not contain (unknown, revoked,

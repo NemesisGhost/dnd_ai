@@ -1,5 +1,5 @@
 // Mirrors dnd_ai.api.audit_history.AuditHistoryItemResponse /
-// AuditHistoryListResponse (docs/AUDIT_HISTORY_API.md). Every field here is
+// AuditHistoryListResponse (docs/reference/audit-history.md). Every field here is
 // already a server-generated, safe-presentation projection — never raw
 // audit.change_log JSON, never an unreviewed metadata field. See that
 // module's docstring for the exact allowlist.

@@ -23,7 +23,7 @@ import { WorldTimePicker } from "./authoring/WorldTimePicker"
 // jsdom proves the DOM state it can: aria state, document.activeElement, the router's final location and
 // its task / context state. It does not prove real browser focus visibility, a keyboard's native
 // activation, touch, narrow-viewport layout or screen-reader output; those are the manual checks in
-// docs/UI_DESIGN.md §4.8. A keyboard activation of a native button is the browser's own click with
+// docs/reference/portal-behavior.md §4.8. A keyboard activation of a native button is the browser's own click with
 // `detail: 0`, which is what the keyboard cases dispatch.
 
 configure({ asyncUtilTimeout: 5000 })
