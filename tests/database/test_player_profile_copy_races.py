@@ -13,14 +13,16 @@ Each case asserts the status codes, the draft row (version, text, origin, proven
 the release rows, the audit-row and receipt counts, and that a loser wrote nothing.
 
 C-tests (unkeyed or independent keys) are deterministic and must serialise without a deadlock.
-KA-tests run the keyed copy (or release) in the interleaving that realises DEF-019's reservation cycle
-(the competitor holds its membership or role row and has not yet taken the campaign row; the keyed
-request has already reserved its key, which holds the campaign row `FOR KEY SHARE`). They accept either
-valid serialised outcome or the documented deadlock loser (SQLSTATE 40P01, proved through the
-database's deadlock counter, never any other 5xx), record which occurred, and require the same
-invariants whichever happens: a copy never commits after the authority loss committed, every 2xx
-matches committed state, and a non-2xx loser leaves no draft change, audit row or receipt. They never
-require a deadlock.
+KA-tests run the keyed copy (or release) in the interleaving that used to realise DEF-019's reservation
+cycle (the competitor holds its membership or role row and has not yet taken the campaign row; the keyed
+request has already reserved its key). Since R01 O-2 defers the reservation's campaign foreign key for
+these post-write routes, the KA-tests require the `serialized` outcome in every arrival they run: no 5xx
+and the database's deadlock counter unchanged. They no longer accept a deadlock loser (SQLSTATE 40P01).
+The shared `_classify` helper still recognises a 40P01 loser, so a regression is named precisely before
+the `serialized` assertion fails. In each arrival the invariants hold as well: a copy or release never
+commits after the authority loss committed, every 2xx matches committed state, and a non-2xx loser
+leaves no draft change, release, audit row or receipt. The observed deadlocks of the original A5c run
+are kept as dated history in the design's A5c implementation record, not here.
 """
 
 import threading
@@ -484,7 +486,12 @@ def test_c6_a_keyed_release_first_both_commit_and_the_release_holds_the_pre_copy
     assert code(released) == 201, body(released)
     assert code(copied) == 200, body(copied)
     rows = release_rows(postgres_engine, g, npc)
-    assert [(r["version_number"], r["public_background"]) for r in rows] == [(1, None)]
+    assert [(r["version_number"], r["from_draft_row_version"]) for r in rows] == [(1, 1)]
+    # Exactly draft version n (the authored text, no copied text), not the post-copy draft.
+    assert (rows[0]["public_appearance"], rows[0]["public_background"]) == (
+        "AUTHORED-FACE-9090",
+        None,
+    )
     row = draft(postgres_engine, g, npc)
     assert row is not None and row["row_version"] == 2 and row["b_mark"] == 2
     assert row["public_background"] == source["personality"]  # copied, restricted and uncovered
@@ -496,10 +503,11 @@ def test_c6_a_keyed_release_first_both_commit_and_the_release_holds_the_pre_copy
 def test_c6_a_keyed_copy_first_the_release_of_the_earlier_version_is_stale_and_writes_nothing(
     client_factory: Factory, postgres_engine: Engine, g: Gate, npc: uuid.UUID, source: dict[str, str]
 ) -> None:  # fmt: skip
-    """Deviation from the design's table (it says both commit in either order): once the copy holds
-    the draft and commits, the draft is at version n+1, so a release of version n is a stale write,
-    exactly as for the A2b legacy copy (`test_a_copy_holding_the_draft_makes_a_release_of_the_earlier_
-    version_stale`). The copy's field is restricted and uncovered."""
+    """Approved C6 outcome (owner decision, A5c-R1): once the copy commits first, the draft is at
+    version n+1, so a keyed release that expected version n is `409 stale_write` and creates no release
+    row, receipt or audit row (optimistic concurrency, as for the A2b legacy copy; see
+    `test_a_copy_holding_the_draft_makes_a_release_of_the_earlier_version_stale`). The copy's field is
+    restricted and uncovered. Both operations need not commit in both orders."""
     _a_draft(client_factory, g, npc)
     release_key, copy_key = new_key(), new_key()
     releasing = lambda: release(client_factory, g.o1_user_id, g, npc, 1, key=release_key)  # noqa: E731
@@ -512,6 +520,10 @@ def test_c6_a_keyed_copy_first_the_release_of_the_earlier_version_is_stale_and_w
     assert release_rows(postgres_engine, g, npc) == []
     row = draft(postgres_engine, g, npc)
     assert row is not None and row["row_version"] == 2 and row["b_mark"] == 2
+    assert row["public_appearance"] == "AUTHORED-FACE-9090"
+    assert (
+        row["public_background"] == source["personality"]
+    )  # the copy committed and nothing was released
     assert (completed_receipts_for(postgres_engine, copy_key), receipts_for(postgres_engine, release_key)) == (1, 0)  # fmt: skip
     assert deadlock_count(postgres_engine) == baseline
 

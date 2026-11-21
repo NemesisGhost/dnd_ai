@@ -245,6 +245,15 @@ export const ROUTE_METAS: readonly RouteMeta[] = [
         { parent: "characters.detail" },
     ),
     campaign(
+        "characters.publicProfile",
+        "characters/:characterId/public-profile",
+        "characters",
+        CHARACTER_ROOTS,
+        "section",
+        "Public profile",
+        { parent: "characters.detail" },
+    ),
+    campaign(
         "characters.edit",
         "characters/:characterId/edit",
         "characters",
