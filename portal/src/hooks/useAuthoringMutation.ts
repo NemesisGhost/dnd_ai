@@ -68,6 +68,12 @@ export interface UseAuthoringMutationResult<TBody, TResult> {
     // same status is still the current one, so ending an old episode can never clear a write that has
     // started or finished since.
     reset: (expected?: AuthoringMutationStatus) => void
+    // Forgets this scope's unresolved attempt and its reserved key, and returns to idle unless a request is in
+    // flight (that one is left to finish; if it then fails unresolved, call this again). For a caller whose
+    // right to send that body has gone: the same body sent later is a new attempt under a new key. It says
+    // nothing about the discarded attempt's outcome, which the server may or may not have applied. Other
+    // scopes are untouched.
+    discard: () => void
 }
 
 interface Snapshot<TResult> {
@@ -253,5 +259,15 @@ export function useAuthoringMutation<TBody, TResult>({
         [scopeKey],
     )
 
-    return { status, receipt, submit, retry, reset }
+    const discard = useCallback(() => {
+        if (unresolvedRef.current?.scopeKey === scopeKey) unresolvedRef.current = null
+        if (reservationRef.current?.scopeKey === scopeKey) reservationRef.current = null
+        setSnapshot((current) =>
+            current.scopeKey === scopeKey && current.status.kind === "pending"
+                ? current
+                : { scopeKey, status: IDLE, receipt: null },
+        )
+    }, [scopeKey])
+
+    return { status, receipt, submit, retry, reset, discard }
 }

@@ -557,6 +557,33 @@ describe("CharacterRevelationsSection: access.manage lost mid-form (R-S02-2)", (
         expect(creates(server)).toHaveLength(0)
     })
 
+    it("R-S02-4: the lost attempt's body and key are discarded; reselecting the same member after the right returns is a new attempt", async () => {
+        let next = withoutManage()
+        const { server } = setup({ capabilities: ["canon.edit", "access.manage"], onRefresh: async () => next })
+        const form = await pickMember(server)
+        server.on("POST", LIST, { networkError: true })
+        submitForm(form)
+        // While the right is held, a retry is the same attempt: same body, same key.
+        fireEvent.click(await screen.findByRole("button", { name: "Retry" }))
+        await vi.waitFor(() => expect(creates(server)).toHaveLength(2))
+        await screen.findByRole("button", { name: "Retry" })
+        const keyOf = (i: number) => creates(server)[i]!.headers["Idempotency-Key"]
+        expect(keyOf(1)).toBe(keyOf(0))
+        refreshSession()
+        await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument())
+        next = withManage()
+        refreshSession()
+        await within(form).findByRole("radio", { name: "One member" })
+        server.on("POST", LIST, { status: 201, body: { character_revelation_id: "r-new", created: true } })
+        fireEvent.click(within(form).getByRole("radio", { name: "One member" }))
+        fireEvent.change(await within(form).findByRole("combobox", { name: /Member/ }), { target: { value: "m-1" } })
+        typeReason("Because")
+        submitForm(form)
+        await vi.waitFor(() => expect(creates(server)).toHaveLength(3))
+        expect(creates(server)[2]!.body).toEqual(creates(server)[0]!.body)
+        expect(keyOf(2)).not.toBe(keyOf(0))
+    })
+
     it("offers no retry of a failed targeted create once the right is lost", async () => {
         const { server } = setup({ capabilities: ["canon.edit", "access.manage"], onRefresh: async () => withoutManage() })
         const form = await pickMember(server)

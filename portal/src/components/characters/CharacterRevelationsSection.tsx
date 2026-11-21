@@ -299,10 +299,15 @@ export function CharacterRevelationsSection({
     }, [refocus])
     // A failed create that sent a member or group offers no retry once the right to pick one is gone.
     const createStatusKind = createMutation.status.kind
-    const resetCreate = createMutation.reset
+    const discardCreate = createMutation.discard
+    // The attempt's outcome is unknown, so it is not called unsent; it is only no longer ours to repeat. Its body,
+    // reserved key and retry go, so choosing the same member again later is a new attempt under a new key.
     useEffect(() => {
-        if (!canPickTargets && lastTargeted.current && createStatusKind === "error") resetCreate()
-    }, [canPickTargets, createStatusKind, resetCreate])
+        if (!canPickTargets && lastTargeted.current && createStatusKind === "error") {
+            discardCreate()
+            lastTargeted.current = false
+        }
+    }, [canPickTargets, createStatusKind, discardCreate])
 
     const writesHeld = reading || stale || createRefresh.held || revokeRefresh.held
     const creating = createMutation.status.kind === "pending"
@@ -503,8 +508,10 @@ export function CharacterRevelationsSection({
                             <MutationStatusMessage
                                 error={createError}
                                 onRetry={() => {
-                                    if (lastTargeted.current && !canPickTargets) createMutation.reset()
-                                    else createMutation.retry()
+                                    if (lastTargeted.current && !canPickTargets) {
+                                        createMutation.discard()
+                                        lastTargeted.current = false
+                                    } else createMutation.retry()
                                 }}
                                 onCheckSession={() => readPageRef.current()}
                             />

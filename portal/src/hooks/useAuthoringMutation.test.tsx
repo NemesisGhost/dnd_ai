@@ -106,6 +106,42 @@ describe("useAuthoringMutation", () => {
         expect(keys[2]).not.toBe(keys[0])
     })
 
+    it("discard forgets this scope's unresolved attempt and key, so the same body is a new attempt; a retry before it is unchanged", async () => {
+        const keys: string[] = []
+        const request = vi.fn(async (_b: Body, c: MutationRequestContext) => {
+            keys.push(c.idempotencyKey)
+            throw new ApiRequestError(500, "internal_error", null)
+        })
+        const { result } = renderHook(
+            () => useAuthoringMutation<Body, string>({ scopeKey: "a", request }),
+            { wrapper: wrapperWith() },
+        )
+        const other = renderHook(
+            () => useAuthoringMutation<Body, string>({ scopeKey: "b", request }),
+            { wrapper: wrapperWith() },
+        )
+        act(() => result.current.submit({ name: "same" }))
+        await waitFor(() => expect(result.current.status.kind).toBe("error"))
+        act(() => result.current.retry())
+        await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+        await waitFor(() => expect(result.current.status.kind).toBe("error"))
+        expect(keys[1]).toBe(keys[0])
+        act(() => other.result.current.submit({ name: "other" }))
+        await waitFor(() => expect(other.result.current.status.kind).toBe("error"))
+        act(() => result.current.discard())
+        expect(result.current.status.kind).toBe("idle")
+        // Nothing to retry, and the other scope still holds its own attempt.
+        act(() => result.current.retry())
+        expect(request).toHaveBeenCalledTimes(3)
+        expect(other.result.current.status.kind).toBe("error")
+        act(() => other.result.current.retry())
+        await waitFor(() => expect(request).toHaveBeenCalledTimes(4))
+        expect(keys[3]).toBe(keys[2])
+        act(() => result.current.submit({ name: "same" }))
+        await waitFor(() => expect(request).toHaveBeenCalledTimes(5))
+        expect(keys[4]).not.toBe(keys[0])
+    })
+
     it("ignores a second submit while pending", async () => {
         const gate = deferred<string>()
         const request = vi.fn(() => gate.promise)

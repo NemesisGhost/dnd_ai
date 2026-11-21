@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from "@testing-library/react"
+import { act, fireEvent, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
@@ -270,5 +270,140 @@ describe("the Revelations section on the Public profile page", () => {
         render()
         expect(await screen.findByText("Release the profile before revealing it.")).toBeInTheDocument()
         expect(screen.queryByRole("button", { name: "Reveal" })).not.toBeInTheDocument()
+    })
+
+    // R-S02-5: an authoritative list denial removes the Revelations section with the rest of the page, so the
+    // page, not the section, decides where focus goes.
+    describe("focus across the masking (R-S02-5)", () => {
+        const heading = () => screen.getByRole("heading", { level: 1, name: "Public profile" })
+        const renderWithElsewhere = () =>
+            renderAuthoringRoutes({
+                initialEntry: "/app/c1/characters/ch1/public-profile",
+                bootstrap: bootstrapWith({
+                    campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities: ["canon.edit"] }],
+                }),
+                routes: [
+                    {
+                        path: "/app/:campaignId/characters/:characterId/public-profile",
+                        element: (
+                            <>
+                                <CharacterPublicProfilePage />
+                                <button type="button">Elsewhere</button>
+                            </>
+                        ),
+                    },
+                ],
+            })
+
+        // The page, then (after the write) a list that is denied; the page's second read is held so the masked state is visible.
+        function denyAfterWrite(server: ReturnType<typeof installMockServer>) {
+            let reads = 0
+            server.on("GET", PATH, () =>
+                ++reads === 1 ? { body: profile({ latest_release: released }) } : new Promise(() => undefined),
+            )
+            let list = 0
+            server.on("GET", REVELATIONS, () => (++list === 1 ? listWith(true) : gone))
+        }
+
+        it("a confirmed create whose list read is then denied puts focus on the page heading", async () => {
+            const server = installMockServer()
+            denyAfterWrite(server)
+            server.on("POST", REVELATIONS, { status: 201, body: { character_revelation_id: "r-new", created: true } })
+            renderWithElsewhere()
+            const reveal = await screen.findByRole("button", { name: "Reveal" })
+            reveal.focus()
+            fireEvent.click(reveal)
+            const form = await screen.findByRole("form", { name: "Reveal this character" })
+            fireEvent.change(within(form).getByRole("textbox", { name: /Reason/ }), { target: { value: "Go" } })
+            const submit = within(form).getByRole("button", { name: "Reveal" })
+            submit.focus()
+            fireEvent.click(submit)
+            await screen.findByText("This character's public profile is not available to you.")
+            expect(screen.queryByRole("heading", { name: "Revelations" })).not.toBeInTheDocument()
+            expect(document.body).not.toHaveTextContent(PROTECTED)
+            await vi.waitFor(() => expect(heading()).toHaveFocus())
+        })
+
+        it("a confirmed revoke whose list read is then denied puts focus on the page heading", async () => {
+            const server = installMockServer()
+            denyAfterWrite(server)
+            server.on("POST", `${REVELATIONS}/r-1/revoke`, { status: 200, body: { character_revelation_id: "r-1", revoked: true } })
+            renderWithElsewhere()
+            const revoke = await screen.findByRole("button", { name: /^Revoke/ })
+            revoke.focus()
+            fireEvent.click(revoke)
+            const dialog = await screen.findByRole("dialog", { name: /Revoke access for/ })
+            fireEvent.change(within(dialog).getByRole("textbox", { name: /Reason for revoking/ }), { target: { value: "Done" } })
+            fireEvent.click(within(dialog).getByRole("button", { name: "Revoke" }))
+            await screen.findByText("This character's public profile is not available to you.")
+            await vi.waitFor(() => expect(heading()).toHaveFocus())
+        })
+
+        it("focus the person moved to another connected control meanwhile is left there", async () => {
+            const server = installMockServer()
+            denyAfterWrite(server)
+            let answer: (value: { status: number; body: object }) => void = () => undefined
+            server.on("POST", REVELATIONS, () => new Promise((resolve) => (answer = resolve)))
+            renderWithElsewhere()
+            fireEvent.click(await screen.findByRole("button", { name: "Reveal" }))
+            const form = await screen.findByRole("form", { name: "Reveal this character" })
+            fireEvent.change(within(form).getByRole("textbox", { name: /Reason/ }), { target: { value: "Go" } })
+            const submit = within(form).getByRole("button", { name: "Reveal" })
+            submit.focus()
+            fireEvent.click(submit)
+            await vi.waitFor(() => expect(server.callsTo("POST", REVELATIONS)).toHaveLength(1))
+            const elsewhere = screen.getByRole("button", { name: "Elsewhere" })
+            elsewhere.focus()
+            answer({ status: 201, body: { character_revelation_id: "r-new", created: true } })
+            await screen.findByText("This character's public profile is not available to you.")
+            expect(elsewhere).toHaveFocus()
+        })
+
+        it("focus that was never in the section is not taken by the denial", async () => {
+            const server = installMockServer()
+            denyAfterWrite(server)
+            server.on("POST", REVELATIONS, { status: 201, body: { character_revelation_id: "r-new", created: true } })
+            renderWithElsewhere()
+            await screen.findByRole("button", { name: "Reveal" })
+            screen.getByRole("button", { name: "Elsewhere" }).focus()
+            fireEvent.click(screen.getByRole("button", { name: "Reveal" }))
+            const form = await screen.findByRole("form", { name: "Reveal this character" })
+            fireEvent.change(within(form).getByRole("textbox", { name: /Reason/ }), { target: { value: "Go" } })
+            screen.getByRole("button", { name: "Elsewhere" }).focus()
+            fireEvent.click(within(form).getByRole("button", { name: "Reveal" }))
+            await screen.findByText("This character's public profile is not available to you.")
+            expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus()
+        })
+
+        it("a focus intent from one character does not act on the next after navigation", async () => {
+            const server = installMockServer()
+            const PATH2 = "/campaigns/c1/characters/ch2/public-profile"
+            const REV2 = "/campaigns/c1/characters/ch2/revelations"
+            server.on("GET", PATH, { body: profile({ latest_release: released }) })
+            server.on("GET", REVELATIONS, listWith(true))
+            server.on("GET", PATH2, { body: profile({ character_id: "ch2", label: { name: "Other", summary: "s" }, latest_release: released }) })
+            server.on("GET", REV2, listWith(true, []))
+            let answer: (value: { status: number; body: object }) => void = () => undefined
+            server.on("POST", REVELATIONS, () => new Promise((resolve) => (answer = resolve)))
+            const { router } = renderWithElsewhere()
+            fireEvent.click(await screen.findByRole("button", { name: "Reveal" }))
+            const form = await screen.findByRole("form", { name: "Reveal this character" })
+            fireEvent.change(within(form).getByRole("textbox", { name: /Reason/ }), { target: { value: "Go" } })
+            const submit = within(form).getByRole("button", { name: "Reveal" })
+            submit.focus()
+            fireEvent.click(submit)
+            await vi.waitFor(() => expect(server.callsTo("POST", REVELATIONS)).toHaveLength(1))
+            await act(async () => {
+                void router.navigate("/app/c1/characters/ch2/public-profile")
+            })
+            await screen.findByText("Other", { exact: false })
+            const elsewhere = screen.getByRole("button", { name: "Elsewhere" })
+            elsewhere.focus()
+            server.on("GET", REVELATIONS, gone)
+            await act(async () => answer({ status: 201, body: { character_revelation_id: "r-new", created: true } }))
+            expect(elsewhere).toHaveFocus()
+            expect(screen.getByRole("form", { name: "Public profile draft" })).toBeInTheDocument()
+            expect(document.body).not.toHaveTextContent("This character's public profile is not available to you.")
+        })
     })
 })

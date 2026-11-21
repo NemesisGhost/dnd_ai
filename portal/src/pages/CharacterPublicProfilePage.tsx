@@ -260,6 +260,19 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
     const announceWhenRead = useAnnounceWhenRead(state.kind === "ready" && !state.refreshing, state)
     const headingRef = usePageArrival(state.kind === "ready")
     const [handoff] = useState(createFocusHandoff)
+    // Whether focus was last in the Revelations section (set by focus events, so it is known after the section's
+    // own controls are gone). An authoritative denial removes the section with everything else; if it held
+    // focus, focus goes to the page heading unless it has moved to something else that is still on the page.
+    // The page is keyed on campaign and character, so a focus note never outlives its character.
+    const focusWasInRevelations = useRef(false)
+    useLayoutEffect(() => {
+        if (!readDenied || !focusWasInRevelations.current) return
+        focusWasInRevelations.current = false
+        const active = document.activeElement
+        if (active !== null && active !== document.body) return
+        const heading = headingRef.current
+        if (canTakeFocus(heading)) heading.focus()
+    }, [readDenied, headingRef])
 
     // Once an applied read withholds a field, what was typed into it is discarded from the stored refusal,
     // not only hidden: when access comes back the old rejected input must not return. The state is this
@@ -355,7 +368,15 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
             aria-labelledby="public-profile-heading"
             // The control the person last used, so a rebuilt form can give it back. A control inside a
             // dialog is represented by the button that opened it (noted where it opens).
-            onFocus={(event) => handoff.note(event.target)}
+            onFocus={(event) => {
+                handoff.note(event.target)
+                focusWasInRevelations.current = event.target.closest('[aria-label="Revelations"]') !== null
+            }}
+            // Focus the person moved off the section (the element is still there) is not the section's any more;
+            // a control removed with the section leaves the note as it was.
+            onBlur={(event) => {
+                if (event.target.isConnected && event.relatedTarget === null) focusWasInRevelations.current = false
+            }}
         >
             <TaskBreadcrumb />
             <h1 id="public-profile-heading" ref={headingRef} tabIndex={-1}>
