@@ -313,7 +313,8 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
                 <CharacterRevelationsSection
                     campaignId={campaignId}
                     characterId={characterId}
-                    onGone={() => void refetch()}
+                    hasRelease={view.latest_release !== null}
+                    readPage={() => void refetch()}
                 />
             </>
         )

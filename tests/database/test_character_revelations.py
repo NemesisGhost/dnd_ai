@@ -721,6 +721,61 @@ def test_the_gm_list_shows_live_and_ended_revelations_and_the_snapshot_to_reader
     assert listing(client_factory, g.o1_user_id, g, c).status_code == 404
 
 
+# --- can_reveal on the list (P15-C02-S02, owner decision OD-1 option A) -------------------------
+
+
+def test_the_list_says_whether_the_caller_may_reveal_now(
+    client_factory: Factory, postgres_engine: Engine, g: Gate, m: Members, rev: Rev
+) -> None:
+    c = rev.character_id
+    # B1: the owner and a delegated GM may reveal.
+    assert listing(client_factory, g.o1_user_id, g, c).json()["can_reveal"] is True
+    assert listing(client_factory, m.gm_user_id, g, c).json()["can_reveal"] is True
+    # B2: an editor with canon.edit and no reveal authority reads the list and is told no.
+    editor = listing(client_factory, m.ast_user_id, g, c)
+    assert editor.status_code == 200 and editor.json()["can_reveal"] is False
+    # The delegated GM still reads (the gm role holds canon.edit) but the flag follows the delegation.
+    with postgres_engine.begin() as connection:
+        revoke_character_reveal_delegation(
+            connection,
+            campaign_id=g.campaign_id,
+            actor_membership_id=g.o1,
+            grantee_campaign_membership_id=m.gm,
+            reason="No more",
+        )
+    after = listing(client_factory, m.gm_user_id, g, c)
+    assert after.status_code == 200 and after.json()["can_reveal"] is False
+    # B3: the flag is a boolean and is the only addition.
+    assert set(listing(client_factory, g.o1_user_id, g, c).json()) == {
+        "character_id",
+        "can_reveal",
+        "revelations",
+    }
+
+
+def test_can_reveal_ignores_the_release_and_the_archive_and_a_deny_is_still_404(
+    client_factory: Factory, postgres_engine: Engine, g: Gate, rev: Rev
+) -> None:
+    # No release: create is refused by state, but authority is held, so the flag is true.
+    unreleased = listing(client_factory, g.o1_user_id, g, rev.unreleased_id)
+    assert unreleased.status_code == 200 and unreleased.json()["can_reveal"] is True
+    # An archived character: create is refused by state, revoke is allowed, so the flag stays true.
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE core.entities SET lifecycle_status_id = (SELECT lifecycle_status_id "
+                "FROM core.lifecycle_statuses WHERE code = 'archived') WHERE entity_id = :c"
+            ),
+            {"c": rev.character_id},
+        )
+    archived = listing(client_factory, g.o1_user_id, g, rev.character_id)
+    assert archived.status_code == 200 and archived.json()["can_reveal"] is True
+    # A whole-character deny is still a 404 with no flag.
+    deny(postgres_engine, g, g.o1, "campaign.view", rev.unreleased_id)
+    denied = listing(client_factory, g.o1_user_id, g, rev.unreleased_id)
+    assert denied.status_code == 404 and "can_reveal" not in denied.text
+
+
 # --- public_summary (D5-c) --------------------------------------------------------------------
 
 

@@ -36,5 +36,35 @@ export interface CharacterRevelation {
 
 export interface CharacterRevelationsRead {
     character_id: string
+    // Whether the caller holds reveal authority now (the same check create and revoke make first). It says
+    // nothing about a release, an archived character or a target, which only create needs.
+    can_reveal: boolean
     revelations: CharacterRevelation[]
+}
+
+// The write bodies and receipts (P15-C02-S02-T02). `reason` is private to the GM and the server: it is
+// stored, never returned, and never shown again after it is sent.
+export interface CreateRevelationBody {
+    audience_kind: RevelationAudienceKind
+    target_campaign_membership_id?: string
+    target_access_group_id?: string
+    reason: string
+}
+
+export interface CreateRevelationReceipt {
+    character_revelation_id: string
+    // false when the same audience already had a live revelation of this character.
+    created: boolean
+}
+
+// What the client hands the mutation to revoke one revelation; the id goes in the URL and only the reason in the body.
+export interface RevokeRevelationSubmit {
+    character_revelation_id: string
+    reason: string
+}
+
+export interface RevokeRevelationReceipt {
+    character_revelation_id: string
+    // false when the revelation had already ended.
+    revoked: boolean
 }

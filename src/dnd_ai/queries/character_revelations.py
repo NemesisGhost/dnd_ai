@@ -20,10 +20,17 @@ from .character_public_profile import _readable
 def list_character_revelations(
     connection: Connection, *, access: AccessContext, character_id: uuid.UUID
 ) -> dict[str, Any] | None:
-    """Live and ended revelations, newest first, or `None` (404) when the caller may not read this
-    character's profile."""
-    if _readable(connection, access, character_id) is None:
+    """Live and ended revelations, newest first, with whether the caller holds reveal authority
+    now (`can_reveal`), or `None` (404) when the caller may not read this character's profile.
+
+    `can_reveal` is the authority the D8 read already resolved (`resolve_reveal_authority` is not
+    `none`), the same check the create and revoke routes make first. It says nothing about the
+    state a create also needs (a release, an active character, an active target); it is a read-only
+    offer value and every write is re-judged by the command."""
+    readable = _readable(connection, access, character_id)
+    if readable is None:
         return None
+    _character, can_reveal = readable
     rows = connection.execute(
         text("""
             SELECT r.character_revelation_id, k.code AS audience_kind,
@@ -99,7 +106,7 @@ def list_character_revelations(
                 for m in members
             ]
         entries.append(entry)
-    return {"character_id": str(character_id), "revelations": entries}
+    return {"character_id": str(character_id), "can_reveal": can_reveal, "revelations": entries}
 
 
 def _text(value: uuid.UUID | None) -> str | None:

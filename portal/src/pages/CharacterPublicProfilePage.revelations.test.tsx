@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react"
+import { fireEvent, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
@@ -128,5 +128,86 @@ describe("the Revelations section on the Public profile page", () => {
         await vi.waitFor(() => expect(server.callsTo("GET", PATH).length).toBeGreaterThanOrEqual(2))
         expect(screen.getByRole("form", { name: "Public profile draft" })).toBeInTheDocument()
         expect(screen.queryByText("Pia Player")).not.toBeInTheDocument()
+    })
+
+    // The offer follows the revelations list's can_reveal, never the page's can_release (which also needs a
+    // readable draft, an active character and a readable identity preview).
+    const released = {
+        version_number: 1,
+        from_draft_row_version: 3,
+        authority_source: "owner",
+        released_at: "2026-11-19T10:00:00Z",
+        released_by: "Gina GM",
+        character_public_profile_release_id: "rel1",
+        public_summary: "S",
+        public_appearance: "A",
+        public_background: "B",
+        release_note: null,
+        species: null,
+        size: null,
+        identity_entity_row_version: null,
+    }
+    const listWith = (can_reveal: boolean, revelations: object[] = [revelation]) => ({
+        body: { character_id: "ch1", can_reveal, revelations },
+    })
+
+    it("a revealer whose draft has a withheld field (can_release false) can still reveal and revoke", async () => {
+        const server = installMockServer()
+        const withheld = profile({
+            can_release: false,
+            latest_release: released,
+            releases: [{ version_number: 1 }],
+        })
+        withheld.draft.public_background_withheld = true
+        ;(withheld.draft as { public_background: string | null }).public_background = null
+        server.on("GET", PATH, { body: withheld })
+        server.on("GET", REVELATIONS, listWith(true))
+        render()
+        expect(await screen.findByRole("button", { name: "Reveal" })).toBeEnabled()
+        expect(screen.getByRole("button", { name: /^Revoke/ })).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Release" })).not.toBeInTheDocument()
+    })
+
+    it("an editor without reveal authority edits the draft and sees the list with no reveal or revoke control", async () => {
+        const server = installMockServer()
+        server.on("GET", PATH, { body: profile({ can_edit: true, can_release: false, latest_release: released }) })
+        server.on("GET", REVELATIONS, listWith(false))
+        render()
+        expect(await screen.findByText("Pia Player")).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Save draft" })).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: /^(Reveal|Revoke)/ })).not.toBeInTheDocument()
+        expect(screen.getByText("You can't reveal or revoke this character.")).toBeInTheDocument()
+    })
+
+    it("an archived character: revoke is offered, a create is refused by state and the page reads again", async () => {
+        const server = installMockServer()
+        let pageReads = 0
+        server.on("GET", PATH, () => {
+            pageReads += 1
+            return { body: profile({ can_release: false, latest_release: released }) }
+        })
+        server.on("GET", REVELATIONS, listWith(true))
+        server.on("POST", REVELATIONS, {
+            status: 409,
+            body: { error: { code: "public_profile_character_not_active", message: "SERVER-SECRET", correlation_id: "c" } },
+        })
+        render()
+        expect(await screen.findByRole("button", { name: /^Revoke/ })).toBeInTheDocument()
+        fireEvent.click(await screen.findByRole("button", { name: "Reveal" }))
+        const form = await screen.findByRole("form", { name: "Reveal this character" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Reason/ }), { target: { value: "Try" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Reveal" }))
+        expect(await screen.findByText(/archived, so it can't be revealed/)).toBeInTheDocument()
+        await vi.waitFor(() => expect(pageReads).toBeGreaterThanOrEqual(2))
+        expect(document.body).not.toHaveTextContent("SERVER-SECRET")
+    })
+
+    it("a page with no release offers no Reveal and says to release first", async () => {
+        const server = installMockServer()
+        server.on("GET", PATH, { body: profile({ latest_release: null }) })
+        server.on("GET", REVELATIONS, listWith(true, []))
+        render()
+        expect(await screen.findByText("Release the profile before revealing it.")).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Reveal" })).not.toBeInTheDocument()
     })
 })
