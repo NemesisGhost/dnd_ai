@@ -24,6 +24,7 @@ import type {
     RevokeRevelationSubmit,
 } from "../../types/characterRevelations"
 import { useAnnounce } from "../authoring/announcer"
+import { canTakeFocus } from "../../utils/focusEligibility"
 import { ConfirmDialog } from "../authoring/ConfirmDialog"
 import { RadioGroupField, SelectField, TextAreaField } from "../authoring/fields"
 import { ErrorSummary, MutationStatusMessage } from "../authoring/feedback"
@@ -115,13 +116,16 @@ function revokeRefusal(error: AuthoringError): Omit<Refusal, "reason"> | null {
 // The page mounts it only while its own read is held, so its audience is the page's audience (the
 // D8 read rule), and keys the page on the character, so what was read, typed or is pending for one
 // character never appears under another. A 404 means the list may no longer be read: the content
-// is dropped and the page is asked to read again, which decides whether the whole page is gone.
+// is dropped and the page is told its own read is denied (`onReadDenied`), which drops the page's protected
+// content at once and reads it again; the page decides whether it is gone. That is not a write's 404, which
+// only says the audience or revelation may be gone and re-reads the list.
 // The offer to reveal or revoke is the server's `can_reveal`; the page never decides authority.
 export function CharacterRevelationsSection({
     campaignId,
     characterId,
     hasRelease,
     readPage,
+    onReadDenied,
 }: {
     campaignId: string
     characterId: string
@@ -129,6 +133,8 @@ export function CharacterRevelationsSection({
     hasRelease: boolean
     // Reads the page again (it decides whether the page is still readable, and what it offers).
     readPage: () => void
+    // The list answered 404 or 403 on a read: the page may no longer be readable (the same D8 rule).
+    onReadDenied: () => void
 }) {
     const path = revelationsPath(campaignId, characterId)
     const { state, refetch } = useAuthoringResource<CharacterRevelationsRead>(path)
@@ -144,13 +150,19 @@ export function CharacterRevelationsSection({
     useEffect(() => {
         readPageRef.current = readPage
     })
+    const onReadDeniedRef = useRef(onReadDenied)
     useEffect(() => {
-        if (gone) readPageRef.current()
+        onReadDeniedRef.current = onReadDenied
+    })
+    useEffect(() => {
+        if (gone) onReadDeniedRef.current()
     }, [gone])
 
     // The create form.
     const [open, setOpen] = useState(false)
-    const [kind, setKind] = useState<RevelationAudienceKind>("campaign_current")
+    // "" is no choice: what a member or group choice becomes when the right to pick one is lost, so the person
+    // chooses again and a lost target never turns into a wider audience.
+    const [kind, setKind] = useState<RevelationAudienceKind | "">("campaign_current")
     const [targetId, setTargetId] = useState("")
     const [reason, setReason] = useState("")
     const [errors, setErrors] = useState<FieldError[]>([])
@@ -158,6 +170,21 @@ export function CharacterRevelationsSection({
     // The label of the audience being revealed to, kept for the announcement.
     const audienceName = useRef("")
     const [targetsToken, setTargetsToken] = useState(0)
+    const [targetName, setTargetName] = useState("")
+    // Whether the last create sent a member or group, so a retry of it can be refused after the right to pick one is lost.
+    const lastTargeted = useRef(false)
+    // Losing `access.manage` withdraws a member or group choice with everything that went with it. It is not
+    // restored if the right comes back: the person chooses again.
+    const [seenCanPick, setSeenCanPick] = useState(canPickTargets)
+    if (seenCanPick !== canPickTargets) {
+        setSeenCanPick(canPickTargets)
+        if (!canPickTargets) {
+            if (kind === "member" || kind === "access_group") setKind("")
+            setTargetId("")
+            setTargetName("")
+            setErrors((current) => current.filter((e) => e.fieldId !== "revelation-target"))
+        }
+    }
     // The revoke dialog.
     const [revoking, setRevoking] = useState<CharacterRevelation | null>(null)
     const [revokeReason, setRevokeReason] = useState("")
@@ -261,11 +288,21 @@ export function CharacterRevelationsSection({
     // After a write has been read back, a control that held focus may be gone (the form closed, the
     // revoked row moved). Focus goes to Reveal, or the section heading, only if it is on nothing; focus
     // the person moved to something still on the page is left alone.
+    // Reveal is the target only if it can take focus now (it is disabled while a failed read holds writes);
+    // otherwise the section heading, which is always there.
     useLayoutEffect(() => {
         if (refocus === 0) return
         const active = document.activeElement
-        if (active === null || active === document.body) (revealRef.current ?? headingRef.current)?.focus()
+        if (active !== null && active !== document.body) return
+        const place = canTakeFocus(revealRef.current) ? revealRef.current : headingRef.current
+        place?.focus()
     }, [refocus])
+    // A failed create that sent a member or group offers no retry once the right to pick one is gone.
+    const createStatusKind = createMutation.status.kind
+    const resetCreate = createMutation.reset
+    useEffect(() => {
+        if (!canPickTargets && lastTargeted.current && createStatusKind === "error") resetCreate()
+    }, [canPickTargets, createStatusKind, resetCreate])
 
     const writesHeld = reading || stale || createRefresh.held || revokeRefresh.held
     const creating = createMutation.status.kind === "pending"
@@ -291,15 +328,17 @@ export function CharacterRevelationsSection({
               ]
             : []),
     ]
-    const [targetName, setTargetName] = useState("")
 
     function submit() {
+        // Whatever the form still holds, a member or group is sent only while the right to pick one is held now.
+        if (needsTarget && !canPickTargets) return
         if (creating || writesHeld) return
         const trimmed = reason.trim()
         const problems: FieldError[] = []
         if (trimmed === "") problems.push({ fieldId: "revelation-reason", message: "Give a reason." })
         else if (trimmed.length > REASON_MAX)
             problems.push({ fieldId: "revelation-reason", message: `The reason must be ${REASON_MAX} characters or fewer.` })
+        if (kind === "") problems.push({ fieldId: "revelation-kind", message: "Choose who to reveal to." })
         if (needsTarget && targetId === "")
             problems.push({
                 fieldId: "revelation-target",
@@ -310,6 +349,7 @@ export function CharacterRevelationsSection({
             setAttempt((n) => n + 1)
             return
         }
+        if (kind === "") return
         audienceName.current =
             kind === "member"
                 ? targetName
@@ -324,6 +364,7 @@ export function CharacterRevelationsSection({
             ...(kind === "access_group" ? { target_access_group_id: targetId } : {}),
             reason: trimmed,
         }
+        lastTargeted.current = needsTarget
         createMutation.submit(body)
     }
 
@@ -423,6 +464,7 @@ export function CharacterRevelationsSection({
                             legend="Reveal to"
                             value={kind}
                             options={kinds}
+                            error={errors.find((e) => e.fieldId === "revelation-kind")?.message ?? null}
                             onChange={(value) => {
                                 setKind(value as RevelationAudienceKind)
                                 setTargetId("")
@@ -460,7 +502,10 @@ export function CharacterRevelationsSection({
                         {createError !== null ? (
                             <MutationStatusMessage
                                 error={createError}
-                                onRetry={() => createMutation.retry()}
+                                onRetry={() => {
+                                    if (lastTargeted.current && !canPickTargets) createMutation.reset()
+                                    else createMutation.retry()
+                                }}
                                 onCheckSession={() => readPageRef.current()}
                             />
                         ) : null}

@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { useParams } from "react-router"
+import { useSession } from "../../context/SessionContext"
 import { sessionBootstrapFixture } from "../../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../../test/authoringHarness"
 import type { MockServer } from "../../test/authoringHarness"
@@ -61,7 +62,16 @@ afterEach(() => {
 
 function Host({ hasRelease, readPage }: { hasRelease: boolean; readPage: () => void }) {
     const { characterId = "ch1" } = useParams()
-    return <CharacterRevelationsSection key={characterId} campaignId="c1" characterId={characterId} hasRelease={hasRelease} readPage={readPage} />
+    const { refresh } = useSession()
+    return (
+        <>
+            <CharacterRevelationsSection key={characterId} campaignId="c1" characterId={characterId} hasRelease={hasRelease} readPage={readPage} onReadDenied={readPage} />
+            {/* Applies the bootstrap the test supplies, as a real session refresh does; also a control that is not the section's. */}
+            <button type="button" onClick={() => void refresh()}>
+                Refresh session
+            </button>
+        </>
+    )
 }
 
 function setup({
@@ -69,7 +79,14 @@ function setup({
     hasRelease = true,
     capabilities = ["canon.edit"],
     rows = [row()],
-}: { canReveal?: boolean; hasRelease?: boolean; capabilities?: string[]; rows?: object[] } = {}) {
+    onRefresh,
+}: {
+    canReveal?: boolean
+    hasRelease?: boolean
+    capabilities?: string[]
+    rows?: object[]
+    onRefresh?: () => Promise<ReturnType<typeof bootstrapWith> | null>
+} = {}) {
     const world: World = { canReveal, rows }
     const server = installMockServer()
     const readPage = vi.fn()
@@ -83,6 +100,7 @@ function setup({
             campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities }],
         }),
         routes: [{ path: "/app/:campaignId/characters/:characterId/public-profile", element: <Host hasRelease={hasRelease} readPage={readPage} /> }],
+        onRefresh,
     })
     return { server, world, readPage, ...rendered }
 }
@@ -477,5 +495,120 @@ describe("CharacterRevelationsSection: requests and late answers (V29, V30)", ()
         })
         expect(screen.queryByRole("alert")).not.toBeInTheDocument()
         expect(screen.getByRole("button", { name: "Reveal" })).toBeInTheDocument()
+    })
+})
+
+// The corrections of the independent review (R-S02-2, R-S02-3).
+const withoutManage = () =>
+    bootstrapWith({ campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities: ["canon.edit"] }] })
+const withManage = () =>
+    bootstrapWith({
+        campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities: ["canon.edit", "access.manage"] }],
+    })
+const refreshSession = () => fireEvent.click(screen.getByRole("button", { name: "Refresh session" }))
+
+describe("CharacterRevelationsSection: access.manage lost mid-form (R-S02-2)", () => {
+    async function pickMember(server: MockServer) {
+        const form = await openForm()
+        fireEvent.click(within(form).getByRole("radio", { name: "One member" }))
+        const select = await within(form).findByRole("combobox", { name: /Member/ })
+        fireEvent.change(select, { target: { value: "m-1" } })
+        typeReason("Because")
+        expect(server.callsTo("GET", OVERVIEW)).toHaveLength(1)
+        return form
+    }
+    const noneChecked = (form: HTMLElement) =>
+        within(form).getAllByRole("radio").every((r) => !(r as HTMLInputElement).checked)
+
+    it("clears the selection, offers no target and sends no targeted write; campaign-wide still works", async () => {
+        const { server } = setup({ capabilities: ["canon.edit", "access.manage"], onRefresh: async () => withoutManage() })
+        const form = await pickMember(server)
+        refreshSession()
+        await vi.waitFor(() =>
+            expect(within(form).queryByRole("radio", { name: /One member|One access group/ })).not.toBeInTheDocument(),
+        )
+        expect(within(form).queryByRole("combobox", { name: /Member/ })).not.toBeInTheDocument()
+        expect(within(form).getByText("To reveal to one member or group, ask someone who manages campaign access.")).toBeInTheDocument()
+        expect(noneChecked(form)).toBe(true)
+        // Submitting what is left sends nothing: it does not turn into a wider audience.
+        submitForm(form)
+        expect(await screen.findAllByText("Choose who to reveal to.")).not.toHaveLength(0)
+        expect(creates(server)).toHaveLength(0)
+        expect(server.callsTo("GET", OVERVIEW)).toHaveLength(1)
+        // The campaign-wide choice is still the person's to make, and sends no target.
+        fireEvent.click(within(form).getByRole("radio", { name: "Everyone in the campaign now" }))
+        submitForm(form)
+        await vi.waitFor(() => expect(creates(server)).toHaveLength(1))
+        expect(creates(server)[0]!.body).toEqual({ audience_kind: "campaign_current", reason: "Because" })
+    })
+
+    it("does not bring the old selection back when the right returns", async () => {
+        let next = withoutManage()
+        const { server } = setup({ capabilities: ["canon.edit", "access.manage"], onRefresh: async () => next })
+        const form = await pickMember(server)
+        refreshSession()
+        await vi.waitFor(() => expect(within(form).queryByRole("radio", { name: "One member" })).not.toBeInTheDocument())
+        next = withManage()
+        refreshSession()
+        await within(form).findByRole("radio", { name: "One member" })
+        expect(noneChecked(form)).toBe(true)
+        expect(within(form).queryByRole("combobox", { name: /Member/ })).not.toBeInTheDocument()
+        submitForm(form)
+        expect(creates(server)).toHaveLength(0)
+    })
+
+    it("offers no retry of a failed targeted create once the right is lost", async () => {
+        const { server } = setup({ capabilities: ["canon.edit", "access.manage"], onRefresh: async () => withoutManage() })
+        const form = await pickMember(server)
+        server.on("POST", LIST, refused(500))
+        submitForm(form)
+        await screen.findByRole("button", { name: "Retry" })
+        expect(creates(server)).toHaveLength(1)
+        refreshSession()
+        await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument())
+        expect(creates(server)).toHaveLength(1)
+    })
+})
+
+describe("CharacterRevelationsSection: focus after a confirmed write whose re-read fails (R-S02-3)", () => {
+    it("create: focus goes to the section heading, not body, while Reveal is disabled", async () => {
+        const { server } = setup()
+        const form = await openForm()
+        typeReason("Confirmed")
+        server.on("GET", LIST, refused(500))
+        submitForm(form)
+        await screen.findAllByText(/The latest revelations could not be loaded/)
+        expect(screen.getByRole("button", { name: "Reveal" })).toBeDisabled()
+        await vi.waitFor(() => expect(screen.getByRole("heading", { name: "Revelations" })).toHaveFocus())
+    })
+
+    it("revoke: focus goes to the section heading when the re-read fails", async () => {
+        const { server } = setup()
+        const dialog = await openRevoke()
+        fireEvent.change(within(dialog).getByRole("textbox", { name: /Reason for revoking/ }), { target: { value: "Done" } })
+        server.on("GET", LIST, refused(500))
+        confirmRevoke(dialog)
+        await screen.findAllByText(/The latest revelations could not be loaded/)
+        await vi.waitFor(() => expect(screen.getByRole("heading", { name: "Revelations" })).toHaveFocus())
+    })
+
+    it("focus the person moved to another control during the write is left there, on a failed or a good re-read", async () => {
+        for (const readFails of [true, false]) {
+            const { server, unmount } = setup()
+            const form = await openForm()
+            typeReason("Mine")
+            let answer: (value: { status: number; body: object }) => void = () => undefined
+            server.on("POST", LIST, () => new Promise((resolve) => (answer = resolve)))
+            submitForm(form)
+            await vi.waitFor(() => expect(creates(server)).toHaveLength(1))
+            const other = screen.getByRole("button", { name: "Refresh session" })
+            other.focus()
+            if (readFails) server.on("GET", LIST, refused(500))
+            await act(async () => answer({ status: 201, body: { character_revelation_id: "r-new", created: true } }))
+            await vi.waitFor(() => expect(screen.queryByRole("form", { name: "Reveal this character" })).not.toBeInTheDocument())
+            expect(other).toHaveFocus()
+            unmount()
+            vi.unstubAllGlobals()
+        }
     })
 })

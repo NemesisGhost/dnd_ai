@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { AlertTriangle } from "lucide-react"
 import { Link, useParams } from "react-router"
@@ -238,7 +238,12 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
     const path = publicProfilePath(campaignId, characterId)
     const { state, refetch, authority } = useAuthoringResource<CharacterPublicProfileRead>(path)
     // The last read that loaded stays through a failed re-read; a denied or missing answer drops it.
-    const view = useKept(state, path)
+    const keptView = useKept(state, path)
+    // Raised when the revelations read says this page may no longer be read (the same D8 rule). The page's
+    // protected content is dropped at once, whatever the next read does: it comes back only when a read
+    // that began after the denial succeeds, never from what was kept through a failed one.
+    const [readDenied, setReadDenied] = useState(false)
+    const view = readDenied ? null : keptView
     const stale = state.kind === "error" && view !== null
     const reading = state.kind === "ready" && state.refreshing
     const [lost, setLost] = useState<RetainedChange[] | null>(null)
@@ -248,8 +253,8 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
     useBreadcrumbLabel({
         route: "characters.detail",
         params: { campaignId, characterId },
-        name: state.kind === "ready" && lost === null ? state.data.label.name : undefined,
-        denied: state.kind === "denied" || state.kind === "unavailable" || lost !== null,
+        name: state.kind === "ready" && lost === null && !readDenied ? state.data.label.name : undefined,
+        denied: state.kind === "denied" || state.kind === "unavailable" || lost !== null || readDenied,
         authority,
     })
     const announceWhenRead = useAnnounceWhenRead(state.kind === "ready" && !state.refreshing, state)
@@ -262,6 +267,23 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
     const keptCarried = refusal === null ? null : shownBack(refusal.carried, view)
     if (refusal !== null && keptCarried !== null && keptCarried.length !== refusal.carried.length) {
         setRefusal({ ...refusal, carried: keptCarried })
+    }
+
+    // The revelations list answered 404/403: drop everything protected now, then read this page again. Only
+    // a successful read lifts it; a read that fails or is replaced by one nobody asked for does not.
+    // A denial that comes straight after a read that lifted one is not read again by itself (the list and the
+    // page would answer each other forever); the person asks for the next read.
+    const liftedOnce = useRef(false)
+    function confirmDenial(byPerson = false, attemptsLeft = 2) {
+        setReadDenied(true)
+        setRefusal(null)
+        if (!byPerson && liftedOnce.current) return
+        void refetch().then((outcome) => {
+            if (outcome === "ok") {
+                liftedOnce.current = true
+                setReadDenied(false)
+            } else if (outcome === "superseded" && attemptsLeft > 1) confirmDenial(byPerson, attemptsLeft - 1)
+        })
     }
 
     function refuse(next: Refusal) {
@@ -284,7 +306,14 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
     } else if (state.kind === "loading") {
         body = <p role="status">Loading…</p>
     } else if (view === null) {
-        body = <p role="alert">{UNAVAILABLE}</p>
+        body = (
+            <>
+                <p role="alert">{UNAVAILABLE}</p>
+                {readDenied && state.kind !== "unavailable" && state.kind !== "denied" && !reading ? (
+                    <StaleReadNotice what="public profile" onRetry={() => confirmDenial(true)} />
+                ) : null}
+            </>
+        )
     } else {
         body = (
             <>
@@ -315,6 +344,7 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
                     characterId={characterId}
                     hasRelease={view.latest_release !== null}
                     readPage={() => void refetch()}
+                    onReadDenied={() => confirmDenial()}
                 />
             </>
         )

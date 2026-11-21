@@ -119,15 +119,76 @@ describe("the Revelations section on the Public profile page", () => {
         expect(document.body).not.toHaveTextContent(/Mira|Pia Player|Gina GM|SERVER-SECRET/)
     })
 
-    it("V9: a list that is gone while the page is still readable keeps the page and hides the names", async () => {
+    it("V9: a list that is gone while the page then reads fine: the page is read once, then stays closed until the person asks again", async () => {
         const server = installMockServer()
-        server.on("GET", PATH, () => ({ body: profile() }))
+        let release: () => void = () => undefined
+        let reads = 0
+        server.on("GET", PATH, () => (++reads === 2 ? new Promise((resolve) => (release = () => resolve({ body: profile() }))) : { body: profile() }))
         server.on("GET", REVELATIONS, { status: 404, body: { error: { code: "not_found", message: "x" } } })
         render()
-        expect(await screen.findByText("The revelations of this character are not available to you.")).toBeInTheDocument()
-        await vi.waitFor(() => expect(server.callsTo("GET", PATH).length).toBeGreaterThanOrEqual(2))
-        expect(screen.getByRole("form", { name: "Public profile draft" })).toBeInTheDocument()
+        await vi.waitFor(() => expect(server.callsTo("GET", PATH)).toHaveLength(2))
+        release()
+        // The list and the page answer under one rule, so a page that reads fine after a list 404 is a race:
+        // it is not read again by itself (no loop), and nothing protected stays on screen meanwhile.
+        await screen.findByRole("button", { name: /Try again|Retry/ })
+        expect(screen.getByText("This character's public profile is not available to you.")).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Public profile draft" })).not.toBeInTheDocument()
         expect(screen.queryByText("Pia Player")).not.toBeInTheDocument()
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(server.callsTo("GET", PATH)).toHaveLength(2)
+        fireEvent.click(await screen.findByRole("button", { name: /Try again|Retry/ }))
+        await vi.waitFor(() => expect(server.callsTo("GET", PATH)).toHaveLength(3))
+    })
+
+    // R-S02-1: the list's 404 is an authoritative read denial, so the page's own protected content goes at once.
+    const PROTECTED = /Mira|A weary ferryman|Tall and grey|Raised on the river|Gina GM|Draft version/
+    const gone = { status: 404, body: { error: { code: "not_found", message: "SERVER-SECRET" } } }
+
+    it("R-S02-1: list 404 then a failed page read leaves no protected content, during or after, and a later good read restores it", async () => {
+        const server = installMockServer()
+        let pageReads = 0
+        let answerSecond: (value: { status: number; body: object }) => void = () => undefined
+        server.on("GET", PATH, () => {
+            pageReads += 1
+            if (pageReads === 1) return { body: profile({ latest_release: released }) }
+            if (pageReads === 2) return new Promise((resolve) => (answerSecond = resolve))
+            return { body: profile() }
+        })
+        let listReads = 0
+        server.on("GET", REVELATIONS, () => (++listReads === 1 ? gone : { body: { character_id: "ch1", can_reveal: true, revelations: [] } }))
+        render()
+        // While the page's own re-read is still pending, nothing protected is on screen.
+        expect(await screen.findByText("This character's public profile is not available to you.")).toBeInTheDocument()
+        expect(pageReads).toBe(2)
+        expect(screen.queryByRole("form", { name: "Public profile draft" })).not.toBeInTheDocument()
+        expect(document.body).not.toHaveTextContent(PROTECTED)
+        expect(screen.queryByDisplayValue(/weary ferryman|Tall and grey|Raised on the river/)).not.toBeInTheDocument()
+        // The re-read fails recoverably: the earlier read is not brought back.
+        answerSecond({ status: 500, body: { error: { code: "x", message: "SERVER-SECRET" } } })
+        await screen.findByRole("button", { name: /Try again|Retry/ })
+        expect(document.body).not.toHaveTextContent(PROTECTED)
+        expect(screen.queryByRole("form", { name: "Public profile draft" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: "Revelations" })).not.toBeInTheDocument()
+        expect(document.body).not.toHaveTextContent("SERVER-SECRET")
+        // Only a later successful read restores the page.
+        fireEvent.click(screen.getByRole("button", { name: /Try again|Retry/ }))
+        expect(await screen.findByRole("form", { name: "Public profile draft" })).toBeInTheDocument()
+    })
+
+    it("R-S02-1: a write's own 404 (an audience that may be gone) is not a read denial and leaves the page", async () => {
+        const server = installMockServer()
+        server.on("GET", PATH, () => ({ body: profile({ latest_release: released }) }))
+        server.on("GET", REVELATIONS, { body: { character_id: "ch1", can_reveal: true, revelations: [] } })
+        server.on("POST", REVELATIONS, gone)
+        render()
+        fireEvent.click(await screen.findByRole("button", { name: "Reveal" }))
+        const form = await screen.findByRole("form", { name: "Reveal this character" })
+        fireEvent.change(within(form).getByRole("textbox", { name: /Reason/ }), { target: { value: "Try" } })
+        fireEvent.click(within(form).getByRole("button", { name: "Reveal" }))
+        expect(await screen.findByText("That audience is no longer available.")).toBeInTheDocument()
+        expect(screen.getByRole("form", { name: "Public profile draft" })).toBeInTheDocument()
+        expect(screen.getByText("A weary ferryman", { selector: "textarea" })).toBeInTheDocument()
+        expect(server.callsTo("GET", PATH)).toHaveLength(1)
     })
 
     // The offer follows the revelations list's can_reveal, never the page's can_release (which also needs a

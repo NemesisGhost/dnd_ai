@@ -45,7 +45,7 @@ function setup(list: object = read(), characterId = "ch1", onGone = vi.fn()) {
         routes: [
             {
                 path: "/app/:campaignId/characters/:characterId/public-profile",
-                element: <CharacterRevelationsSection campaignId="c1" characterId={characterId} hasRelease readPage={onGone} />,
+                element: <CharacterRevelationsSection campaignId="c1" characterId={characterId} hasRelease readPage={() => undefined} onReadDenied={onGone} />,
             },
         ],
     })
@@ -193,7 +193,7 @@ import { useParams } from "react-router"
 
 function Scoped() {
     const { characterId = "" } = useParams()
-    return <CharacterRevelationsSection key={characterId} campaignId="c1" characterId={characterId} hasRelease readPage={() => undefined} />
+    return <CharacterRevelationsSection key={characterId} campaignId="c1" characterId={characterId} hasRelease readPage={() => undefined} onReadDenied={() => undefined} />
 }
 
 describe("V10: no other surface asks for revelations", () => {
