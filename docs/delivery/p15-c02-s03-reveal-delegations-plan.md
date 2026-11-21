@@ -1,0 +1,484 @@
+# D/P15-C02-S03 implementation plan: manage reveal-authority delegations
+
+**Status:** Opus plan prepared 2026-11-21; **refined and owner decisions recorded 2026-11-21** (§10.1): OD-S03-1 = option A and OD-S03-2 = the default. The refinements (§10.2) were made before implementation: an open delegation row is distinguished from an effective one (G-F), repeated-write semantics are stated without claiming replay safety (§2.1, §8), and owner status, eligibility and effective state are derived on the server. No implementation has started at this plan's commit. Work-register row: [D/P15-C02-S03](work-register.md#p15-c02-s03), tasks [T01](work-register.md#p15-c02-s03-t01) and [T02](work-register.md#p15-c02-s03-t02). Parent checkpoint: [D/P15-C02](work-register.md#p15-c02).
+
+**Baseline.** This plan was read at `3381f7e69ba17d8dc9ef20008c047569056d4e00` ("docs: record P15-C02-S02 R-S02-4a/4b confirmation (11.14); T02 and S02 pass with verification limits"). That is the finalized S02 records commit.
+- It is the head of `phase15/completion` and equals `origin/phase15/completion` (fetched 2026-11-21). The worktree was clean. No repository-path `AGENTS.md` exists.
+- It is also the head of **PR #71**: open, draft, base `main`. That head's CI run `44951144761` was **in progress** when read (shard 4/8 pending; the others reported had passed). It is not recorded as a pass. The earlier runs `44835164789` (head `97f75b6`) and `44946172550` (head `fe88842`, synthetic merge `0c5d6ec`) stay as recorded. This plan does not change PR #71.
+- **Preserved review records.** S01's pass with verification limits ([S01 plan §11.4 to §11.8](p15-c02-s01-draft-release-plan.md#118-f1-r1-independent-confirmation)) and S02's T01, T02 and combined passes with verification limits ([S02 plan §11.4 to §11.14](p15-c02-s02-revelations-plan.md#1114-independent-confirmation-of-r-s02-4a-and-r-s02-4b-codex-2026-11-21)) are unchanged. So are every historical local full-suite failure, its isolated reruns, and §11.13's unread run, which remains unknown.
+
+**How each statement was established.** By reading source, documents and git/GitHub metadata at the baseline. No application, test or probe was run, and no application, test, schema or backend file changed.
+
+**Contract sources.**
+- [ACCESS_CONTROL §3u](../api/ACCESS_CONTROL.md#3u-reveal-delegation-p03-a-a1): reveal delegation.
+- `src/dnd_ai/api/character_reveal.py`, `commands/reveal_delegation_plans.py`, `commands/character_reveal.py`, `commands/reveal_delegation_lifecycle.py`, `domain/reveal_authority.py` and `domain/access.py` (`find_live_builtin_owner_assignment`, `find_live_builtin_gm_assignment`).
+- `persistence/tables/security.py` (`character_reveal_delegations`).
+- `api/access_overview.py` and `queries/access_overview.py`; `queries/bootstrap.py`.
+- The [A1 design](ownership-design.md) and [shared characters §1 and §4](shared-characters.md#4-slices-dependencies-and-review-boundaries).
+- The [operation catalog](../api/identity-and-access.md).
+- The portal's Access pages (`pages/CampaignAccessPage.tsx`, `pages/AccessPage.tsx`, `components/AccessTabNav.tsx`, `components/AccessNavGroup.tsx`, `navigation/routeMeta.ts`, `App.tsx`) and S02's `hooks/useAuthoringMutation.ts`.
+- The register's [execution stages and review gates](work-register.md#execution-stages-and-review-gates), and the [grading rubric](grading.md).
+
+---
+
+## 1. Entry readiness
+
+### 1.1 Prerequisites
+
+| Requirement | Source | State at the baseline |
+|---|---|---|
+| Checkpoint entry criteria: `a4` merged, `r01` owner accepted | [C02 criteria](work-register.md#criteria-p15-c02) | Met; confirmed in [S01 plan §1](p15-c02-s01-draft-release-plan.md#1-entry-readiness). Nothing since changes them |
+| Slice-specific gate | S03 row: "Checkpoint entry criteria; no additional slice-specific gate" | None |
+| Task gates | T01, T02: "Completed Opus plan for P15-C02-S03 and its required slice prerequisites" | This plan. It is complete except for OD-S03-1 |
+| Other slices | None named | S01 and S02 are reviewed. S03 needs neither, though S02's `can_reveal` is how a grantee sees the effect (§2.4). S04 is independent |
+
+`a5c`, `copy-ui` and `preview` are not prerequisites of S03.
+
+### 1.2 Readiness verdict
+
+- **S03 is eligible.**
+- **Neither task can start** until OD-S03-1 is recorded. §2.3 shows that the existing contracts cannot say who holds a delegation, who may receive one, or whether the caller may grant or revoke. Building T01 on them would make the portal decide authority on the client, which is not admissible (§10, option C).
+- **After OD-S03-1:** T01, then T02, with no further owner decision required. OD-S03-2 has a recommended default that applies unless the owner chooses otherwise.
+
+### 1.3 C02 merge scope (unchanged)
+
+C02 merges only with S01 to S04 together. Every included slice must be independently reviewed, the PR acceptance cases must pass, and CI must pass on the integration head ([register execution stages](work-register.md#execution-stages-and-review-gates); [S02 plan §1.3](p15-c02-s02-revelations-plan.md#13-does-c02-merge-only-with-s01-to-s04-together)). The owner retained that scope on 2026-11-21 (OD-2, [S02 plan §10.1](p15-c02-s02-revelations-plan.md#101-owner-decisions-recorded-2026-11-21)). This plan neither changes nor relies on it. S03's review is one input to that merge, and S04 is still unplanned.
+
+---
+
+## 2. Verified current behavior
+
+### 2.1 Write routes (A1; R01 S5-E6)
+
+| Route | Gate | Body | Result |
+|---|---|---|---|
+| `POST /campaigns/{campaign_id}/reveal-delegations` | `access.manage` route capability (a coarse filter); then the command requires a **live built-in `campaign_owner`** assignment | `{grantee_campaign_membership_id, reason}` (`reason` 1–1000 characters) | `200 {grantee_campaign_membership_id, character_reveal_delegation_id, granted}`; `granted: false` when a delegation bound to the grantee's current `gm` assignment already exists |
+| `POST /campaigns/{campaign_id}/reveal-delegations/{grantee_campaign_membership_id}/revoke` | As above | `{reason}` | `200 {grantee_campaign_membership_id, revoked}`; `revoked: false` when none was live |
+
+**Refusals.**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | — | Not signed in |
+| 403 or 404 | (capability gate) | No `access.manage`. A non-member, or an archived or deleted campaign, gets 404 |
+| 403 | `campaign_owner_required` | The caller is not a live built-in owner, at discovery, at the lock or at the fresh instant. This includes a custom `access.manage` holder and a delegated GM, so **a delegated GM cannot redelegate**. The server's `safe_message` reads "Only a campaign owner may grant the campaign owner role.", which is wrong in this context (G-D) |
+| 404 | (non-disclosing) | The grantee membership is not in this campaign |
+| 409 | `reveal_delegation_recipient_not_gm` | Grant only: the grantee holds no live built-in `gm` assignment (open, `active` membership; active account; assignment neither revoked nor expired; the built-in template, not a campaign-scoped role coded `gm` or `assistant_gm`) |
+| 409 | `reveal_delegation_recipient_changed` | Grant only: the `gm` assignment or live delegations changed while the grant waited. Nothing was written and a retry is safe |
+| 422 | (validation) | Shape or reason length |
+
+**Semantics.**
+- **Unkeyed.** An `Idempotency-Key` header is ignored, and there is no reservation or receipt replay. A repeat is idempotent **by state**: `granted: false` and `revoked: false` write nothing and no audit row. A repeat therefore **re-executes the command against whatever the state is by then**; it does not replay the first command's outcome. If another owner revoked (or granted) in between, a repeated grant (or revoke) would make a **new change the person did not just choose**. This plan therefore never presents a repeat as safe replay: an uncertain outcome is resolved by an authorized read of the current state, and any further write is a new, deliberate action (§8). Only the server's two refusals that say "nothing was written" (`reveal_delegation_recipient_changed`, 403, 404, 409 not-GM, 422) are known not to have changed anything.
+- **Binding and ending.** A delegation is bound to one specific `gm` assignment. It is closed with an `end_reason` (`revoked_by_owner`, `gm_role_revoked`, `gm_role_changed`, `membership_ended`, `membership_status_changed`, `gm_assignment_lapsed`) by the revoke, by the role and membership commands, and by recovery. Regaining GM status needs a fresh grant.
+- **An expired `gm` assignment is not closed when it expires.** Its delegation row stays unrevoked but authorizes nothing (`resolve_reveal_authority` compares it with the live assignment). It is closed as `gm_assignment_lapsed` only by a later grant (G-C).
+- **Other rules.** Delegations survive an ownership transfer, and the new owner may revoke those the former owner granted. An owner who is also a GM may delegate to themselves (`test_an_owner_who_is_also_a_gm_can_delegate_to_themselves`).
+- **Effect.** Reveal authority (`character.reveal`) is not a role capability. It is not in the bootstrap's `capabilities` and changes no bootstrap value. The grantee sees the change through S01's `can_release` and S02's `can_reveal` on their next read, and their next release or reveal is judged at a fresh instant.
+
+### 2.2 Backend proofs that already exist (slice criteria)
+
+| Criterion | Existing database test |
+|---|---|
+| A live built-in owner grants to a live built-in GM assignment | `test_character_reveal_delegation.py`: `test_an_owner_grants_revokes_and_regrants_with_one_audit_row_each`, `test_only_a_member_holding_the_builtin_gm_role_can_receive_a_delegation`, `test_a_gm_whose_membership_ended_or_account_is_inactive_cannot_receive_one` |
+| A delegated GM cannot redelegate | `test_nobody_but_a_live_owner_can_grant_or_revoke`; route form in `test_r01_s5e6_reveal_delegation_routes.py` |
+| A grant ends with its bound role | `test_a_delegation_binds_to_the_gm_assignment_and_cannot_be_revived`, `test_changing_a_gm_to_another_role_ends_the_delegation`, `test_ending_the_membership_ends_the_delegation_but_not_ones_it_granted`, `test_an_expired_gm_assignment_ends_authority_and_does_not_block_a_fresh_grant` |
+| Stale-owner refusal | `test_a_caller_whose_owner_assignment_expires_during_the_wait_is_refused`, `test_a_grant_that_waits_on_a_relinquishing_transfer_is_refused_afterwards`; `test_r01_s5e6_final_authority.py` |
+| Membership or role ending during a grant | `test_a_grant_that_waits_on_a_gm_role_revocation_is_refused`, `test_a_gm_role_revocation_that_waits_on_a_grant_closes_the_new_delegation`, `test_a_grant_that_waits_on_ending_the_gms_membership_is_refused`, `test_ending_the_gms_membership_while_a_grant_is_in_flight_closes_the_delegation` |
+| Revocation, then the next reveal attempt | `test_character_revelations.py::test_a_revoked_delegation_and_an_outsider_are_refused`; `test_character_public_profile_api.py::test_a_revoked_delegation_or_gm_role_ends_future_release_but_keeps_earlier_releases`; `test_character_public_profile_concurrency.py::test_a_release_that_waited_for_a_delegation_revocation_is_refused_and_writes_nothing` |
+
+S03 does not re-prove these. It adds portal cases (and, under OD-S03-1, read-route cases) that bind the UI to these outcomes.
+
+### 2.3 What the client can learn today: the gaps
+
+- **G-A: no read of delegation state.** No route returns delegations: the catalog has only the two POSTs, and `/access-overview` has no delegation field. The only evidence the portal can get is a write receipt. It cannot show who holds reveal authority, offer Revoke only where something is live, or show that a grant ended with its role.
+- **G-B: no server value for eligibility or for the caller's authority.**
+  - **Eligibility.** The overview's `members[].roles[]` carries `role_id`, `code` and `display_name`, with no built-in marker. A campaign-scoped role coded `gm` is allowed by the schema (`uq_roles_campaign_code` is per campaign, and templates have `campaign_id IS NULL`). No command creates one today, but the predicate `find_live_builtin_gm_assignment` deliberately excludes it. A client would also have to re-derive "live" from membership status, account activity and expiry.
+  - **The caller's authority.** `access.manage` is not ownership: a custom manager is refused `403 campaign_owner_required`. The bootstrap's per-campaign `roles` are role **codes**, read when the session was read, with the same built-in ambiguity.
+  - So any client rule would be a client-side authorization decision.
+- **G-C: an unrevoked row is not necessarily live.** A row bound to an expired `gm` assignment stays unrevoked. Even a raw row read would need the server's comparison to say whether it authorizes.
+- **G-F: an open row is not an effective delegation, and the owner needs to see both.** Today's revoke acts on **any open row of the grantee in the campaign** (`REVOKE_DELEGATION_LOCK` filters on `revoked_at IS NULL`, not on the live `gm` assignment), so an owner can already close a delegation whose bound `gm` assignment has expired. The only way such a row stays open is the expiry case of G-C: nothing closes it when it expires. A list of live GMs alone would hide it: the member is not listed (no live `gm` assignment), so the owner could not find the row to revoke it, and would learn of it only when a fresh grant closes it as `gm_assignment_lapsed`. S03 must not invent a lifecycle rule (no auto-close, no new end reason). It surfaces the state the server already holds, as **lapsed delegations**: open rows of members who hold no live built-in `gm` assignment. They authorize nothing (`resolve_reveal_authority` compares the bound row with the live assignment) and can be closed by the existing revoke route, with its existing semantics (`end_reason` `revoked_by_owner`). A member who **does** hold a live `gm` assignment and has a stale open row is listed with `delegation: null` (they cannot reveal); the next grant closes the stale row as `gm_assignment_lapsed`, as today, and the portal shows no separate entry for it.
+- **G-D: misleading server message.** `campaign_owner_required`'s `safe_message` names the owner role. The portal must map by code and never render that message. No backend change is proposed, because the same error class serves the owner-role paths.
+- **G-E (outside S03): no effective-access source.** The effective-access explanation does not list `character.reveal` sources. It is not proposed here (§3.3).
+
+### 2.4 Portal at the baseline
+
+- **No portal code calls `/reveal-delegations`** (grep of `portal/src`).
+- **Access section.**
+  - Three routes share `AccessTabNav`: `access` (management), `access/invitations` and `access/audit`. Each is registered in `App.tsx` and `navigation/routeMeta.ts` (`access.*`, parent `access.overview`) and listed in `AccessNavGroup`.
+  - Each page mounts only while `useCampaignCapability(campaignId, "access.manage")` holds. Losing it unmounts the content and aborts its reads (C01 O-5 pattern, `CampaignAccessPage.tsx`).
+  - The management page keeps one persistent `role="status"` announcement region above the overview boundary so that announcements survive the re-read.
+- **Access write hooks** (`useRevokeMembershipRole` and others) finish through `useAccessWriteCompletion`. That helper reloads or refreshes the session because those writes can change the caller's bootstrap. A delegation write cannot (§2.1).
+- **S02's `useAuthoringMutation`** gives per-scope attempts:
+  - an owner-guarded settlement, so a superseded confirmation runs only `onSupersededSuccess`;
+  - `discard()`, which leaves a target-free `withdrawn` unknown-outcome state;
+  - retry of the same body;
+  - an `idempotencyKey` handed to the request function. An unkeyed API function may decline to send it.
+
+---
+
+## 3. Outcome, scope and exclusions
+
+### 3.1 User outcome
+
+A new **Reveal authority** tab in the Access section serves anyone who may manage campaign access (subject to OD-S03-2). It lists every member who currently holds the built-in GM role and says, for each, whether they can reveal characters through a delegation, since when, and who granted it. It states that campaign owners can always reveal. Below that, any **lapsed delegation** (an open delegation of someone who no longer holds a live built-in GM role; it gives no authority) is listed separately, so it can be found and closed.
+
+A **live campaign owner** can also:
+- **grant** reveal authority to a listed GM, with a required private reason;
+- **revoke** a live or lapsed delegation, with a reason.
+
+Everyone else, including a custom access manager or a delegated GM who manages access, sees the list and one neutral line: "Only a campaign owner can grant or revoke reveal authority."
+
+The list changes only when the server says so. A GM whose role ends drops out of the list on the next read, and their delegation is gone. If they become GM again they are listed as unable to reveal, with Grant offered.
+
+### 3.2 In scope
+
+- **The read contract chosen by OD-S03-1.** It must be read-only, with no table, lock, migration, write path or authorization rule.
+- **T01 (read and offer).**
+  - The types and API for the read.
+  - The new tab route, route metadata, navigation entries and page.
+  - The list, the owner explanation, the offer state (text only; no controls yet; see D-5), and read-failure, denial and scope handling.
+- **T02 (grant and revoke).**
+  - Keyless API functions for both POSTs.
+  - Grant and revoke dialogs, receipts with their idempotent wording, and the mapped refusals.
+  - Unknown-outcome handling, authority loss, supersession, focus and announcements.
+- **Docs:**
+  - ACCESS_CONTROL §3u (the read row, plus one "Portal:" sentence);
+  - the catalog row in `identity-and-access.md` (the documentation check requires one row per registered route) and the count in `operations.md`;
+  - one paragraph in [portal-behavior §6.4](../reference/portal-behavior.md#64-access-management).
+
+### 3.3 Exclusions
+
+- **Other work, not started here.**
+  - S04 (denies), `copy-ui` and `preview`.
+  - Any change to S01's or S02's behavior, records or tests.
+  - Any change to the management tab's member cards, or to the overview contract unless OD-S03-1 chooses option B.
+  - Effective-access sources for `character.reveal` (G-E).
+  - A history of ended delegations (D-2).
+- **Constraints on this slice.**
+  - No change to either delegation write route, its locks, its refusals or its messages (G-D is handled by mapping).
+  - No client-side authorization. The portal never decides eligibility or ownership from role codes, bootstrap roles or receipts.
+  - No polling, push or timers.
+  - No session reload or refresh after a confirmed delegation write; it changes no bootstrap value.
+  - No `Idempotency-Key` header on the delegation POSTs. The server ignores it, and sending it would imply replay protection that does not exist.
+  - The reason is never rendered after submission, because the server never returns it. Only the person's own unsent typing may be shown back.
+
+---
+
+## 4. Affected files and interfaces
+
+Shown for OD-S03-1 = **A** (recommended). The §10 option B column lists what changes instead.
+
+| File | T01 | T02 |
+|---|---|---|
+| `src/dnd_ai/queries/reveal_delegations.py` (new) | The read (§10, option A); one statement set, no locks, no writes | — |
+| `src/dnd_ai/api/character_reveal.py` | `GET /campaigns/{campaign_id}/reveal-delegations`, same `access.manage` gate as the POSTs; DTOs | — |
+| `tests/database/test_reveal_delegations_read.py` (new) | BD1–BD11 | — |
+| `docs/api/ACCESS_CONTROL.md` §3u, `docs/api/identity-and-access.md`, `docs/api/operations.md` | Read row and catalog row; operation count | "Portal:" sentence |
+| `portal/src/types/revealDelegations.ts` (new) | Read types: exactly the response keys | Request bodies and receipts |
+| `portal/src/api/revealDelegations.ts` (new) | `getRevealDelegations` | `grantRevealDelegation` and `revokeRevealDelegation`, with no `Idempotency-Key`; errors carry status and code |
+| `portal/src/pages/CampaignRevealAuthorityPage.tsx` (new) and `.test.tsx` | Page, list, offer text, L1–L12 | Dialogs and mutations, M1–M21 |
+| `portal/src/App.tsx`, `navigation/routeMeta.ts`, `components/AccessTabNav.tsx`, `components/AccessNavGroup.tsx` | Route `access/reveal-authority`, meta `access.revealAuthority` (parent `access.overview`), tab, navigation child | — |
+| `docs/reference/portal-behavior.md` §6.4 | — | One paragraph |
+
+The C01 management page, its overview hook and its fixtures do not change under option A. Existing route-metadata and navigation tests that enumerate Access children may need one added entry. That is additive, and it is the only permitted change to existing tests.
+
+---
+
+## 5. Task commits
+
+| Commit | Message | Cases |
+|---|---|---|
+| T01 | `P15-C02-S03-T01: show eligible built-in GM assignments and owner-only delegation availability from a server read` | BD1–BD11 (option A), L1–L12 |
+| T02 | `P15-C02-S03-T02: grant and revoke reveal delegations through the existing endpoints with refreshed authority and role-loss handling` | M1–M21 |
+
+The backend read is the first part of T01, in the same commit as its only consumer, so that no head exposes a field nothing reads. T01 renders the offer as text only, with no Grant or Revoke control (D-5), so no head carries a control with nothing behind it. Each commit passes §7.1 on its own and ends with the attribution lines.
+
+---
+
+## 6. Acceptance cases
+
+Portal cases use jsdom with a mocked fetch, as S01 and S02 do. "Sent" means the fetch log. The response shape is OD-S03-1's (option A unless decided otherwise). Wording is D-3.
+
+### 6.1 T01: read and offer (L1–L12)
+
+| # | Case | Expected |
+|---|---|---|
+| L1 | Navigation | The **Reveal authority** tab appears in `AccessTabNav` and `AccessNavGroup` beside the others. A direct load of `/app/:campaignId/access/reveal-authority` works. The page sends exactly one `GET …/reveal-delegations` per mount, and no `/access-overview`, invitation or audit request. The other Access tabs never send it |
+| L2 | Bootstrap without `access.manage` | The page shows the existing "Access unavailable" placeholder and sends nothing. If the capability is lost in place (O-5), the content unmounts, an in-flight read is aborted and nothing is published |
+| L3 | Empty list | "No member currently holds the GM role." The static owner line still shows: "Campaign owners can always reveal characters." |
+| L4 | Rows | One row per listed member, in server order. A delegated member shows "Can reveal characters", the grant date and "granted by {name}" (or "granted by a former member" when the name is null). Others show "Cannot reveal characters". No id, reason or role id is rendered |
+| L5 | `can_manage: true` | The line "You can grant or revoke reveal authority." (The T02 controls attach here) |
+| L6 | `can_manage: false` | The neutral line "Only a campaign owner can grant or revoke reveal authority." No control. Nothing is inferred from roles or the bootstrap |
+| L7 | GET 403 or 404 | All content (names, dates, granters) is dropped and the unavailable placeholder is shown. One in-place session refresh is requested, so a lost `access.manage` also removes the tab. No retry loop |
+| L8 | GET network error or 5xx | `StaleReadNotice` with Retry. A kept earlier list stays, marked out of date, and shows **no offer** (T02: no controls) until a read succeeds |
+| L9 | Scope change | Moving to another campaign discards a late response. No row from campaign A appears under campaign B |
+| L10 | Role ending reflected | The server's next answer omits a member whose GM role ended, and the page drops them. Mocked sequence: listed and delegated; then absent; then listed again with `delegation: null` (a new `gm` assignment, as after regaining the role) |
+| L11 | No other surfaces | No `…/reveal-delegations` request from member cards, character pages, the public-profile page or the bootstrap path |
+| L12 | Lapsed delegations | Each `lapsed_delegations` entry is listed apart from the GM rows under "Delegations that no longer apply": "{name} no longer holds the GM role, so this gives no authority.", the grant date and granter as in L4. An empty array renders no such section. Nothing says it was revoked or removed. Its Revoke control follows `can_manage` (T02) |
+
+### 6.2 T02: grant and revoke (M1–M21)
+
+**Offer rule.** Grant appears on a listed row with `delegation: null`, and Revoke on a row with a delegation. Both appear only when the last successful read returned `can_manage: true` and is not stale.
+
+| # | Case | Expected |
+|---|---|---|
+| M1 | Grant dialog | A dialog naming the member, with a required reason (1–1000 characters, counted) and an error summary. Cancel sends nothing and returns focus to that row's Grant |
+| M2 | Grant `granted: true` | Re-read, then announce in the page's persistent status region: "{name} can now reveal characters." The reason clears. Focus moves to that row's Revoke, or to the status region if the row is gone |
+| M3 | Grant `granted: false` | Re-read, then "{name} already had reveal authority." Not an error |
+| M4 | Revoke dialog | As in M1, with Revoke wording |
+| M5 | Revoke `revoked: true` | Re-read, then "Reveal authority revoked for {name}." Focus moves to that row's Grant, or to the status region |
+| M6 | Revoke `revoked: false` | Re-read, then "That member's reveal authority had already ended." |
+| M7 | 403 `campaign_owner_required` (ownership transferred or relinquished, owner role revoked or expired, or a custom manager or delegated GM forcing the call) | Re-read. Controls follow the new `can_manage`. Message: "Only a campaign owner can grant or revoke reveal authority. Nothing was changed." The typed reason is shown back read-only. The server's `safe_message` is never rendered (G-D) |
+| M8 | Other 403, or 404 | As L7: content is dropped, the dialog closes and its typed reason is discarded, and the session is refreshed in place. Announce "Reveal authority isn't available." |
+| M9 | Grant 409 `reveal_delegation_recipient_not_gm` (GM role revoked or changed, or membership ended while the dialog was open) | Re-read. "That member no longer holds the GM role. Nothing was changed." The dialog closes |
+| M10 | Grant 409 `reveal_delegation_recipient_changed` | Re-read. "Their GM assignment changed while this was being saved. Nothing was changed; review and grant again." The dialog stays open with the reason. Nothing is sent again automatically |
+| M11 | 422 | The error summary. Nothing else changes |
+| M12 | Network error or 5xx (unknown outcome), still authorized | The dialog closes and its typed reason is dropped. An alert: "We couldn't confirm whether your last change to reveal authority was applied." It names no member. **There is no Retry and no automatic re-send** (§2.1: a repeat would be a new change against whatever the state is by then). **Check current reveal authority** sends only the GET. After a good read: "The list shows current reveal authority. It doesn't show whether your last attempt made the change." After a failed read: "That says nothing about whether the change was applied." **Dismiss** clears the alert. The owner may then open a dialog and act again, as a new deliberate action (a new attempt) |
+| M13 | Authority loss around an uncertain attempt: pending, then loss (re-read gives `can_manage: false`, or the member leaves the list), or an already-ambiguous attempt, then loss | A pending attempt is withdrawn (`discard()`) and, if its answer is then lost, shows the same target-free alert; an already-ambiguous attempt keeps the alert (the hook keeps it as a withdrawn unknown outcome). Check stays (a read only, while authorized to read). Restoring authority restores nothing: no controls return until a successful read says `can_manage`, and no old intent is repeated. Loss of the page's read right (L2, L7) drops the page, including the alert |
+| M14 | Pending, then navigation or a campaign change | The response is discarded: no announcement, no row change, no focus move. Scope keys are `reveal-delegation-grant:{campaign}:{membership}` and `reveal-delegation-revoke:{campaign}:{membership}` |
+| M15 | Superseded confirmation | An older confirmed attempt after a same-scope reset and replacement runs only `onSupersededSuccess`, which re-reads. The replacement's form, announcement, focus and status stay its own (the R-S02-4b contract). Real callbacks are supplied in the test |
+| M16 | Requests | Grant sends exactly `{grantee_campaign_membership_id, reason}` and revoke sends exactly `{reason}`, to the §2.1 paths. Neither sends an `Idempotency-Key` header. After an unknown outcome the next write is sent only after the owner opens the dialog and submits it again (M12); the same request is never re-sent by the page |
+| M17 | No session churn | A confirmed grant or revoke triggers no session reload or refresh, and no `/access-overview`, `/effective-access` or bootstrap request; only the page's re-read |
+| M18 | Self-delegation | An owner who is also a listed GM may grant to themselves; the row behaves like any other. The portal adds no self-marker (no field carries one) |
+| M19 | Delegated GM cannot redelegate | A session whose read returns `can_manage: false` (a delegated GM with a custom manager role) sees no controls. A forced call's 403 is handled by M7 |
+| M21 | Revoking a lapsed delegation | Revoke on a lapsed entry sends the same revoke request; `revoked: true` re-reads, then announces "Reveal authority revoked for {name}." and the entry leaves the list. `revoked: false` announces "That member's reveal authority had already ended." It follows the owner-only rule (M7 on refusal). Nothing is described as an automatic ending |
+| M20 | The next reveal attempt | Not a portal case on this page. It is covered by the §2.2 backend tests and S02 V18 (a 403 `character_reveal_required` withdraws the reveal controls). The persona check is in §7.3 |
+
+### 6.3 Backend read cases (OD-S03-1 = A; database tests)
+
+| # | Case | Expected |
+|---|---|---|
+| BD1 | A live owner reads | 200, `can_manage: true`. `members` is exactly the members with a live built-in `gm` assignment |
+| BD2 | A custom `access.manage` holder who is not an owner | 200, `can_manage: false`, same members (under the OD-S03-2 default) |
+| BD3 | Gate | A delegated GM without `access.manage`, or a player: refused by the gate (403). A non-member, or an archived campaign: 404 |
+| BD4 | Eligibility | Not listed: `assistant_gm`; a campaign-scoped role coded `gm` (fixture); an expired or revoked `gm` assignment; an ended or non-`active` membership; an inactive account |
+| BD5 | Delegation is shown only when it is effective | `delegation` is non-null exactly when an unrevoked row is bound to the member's live `gm` assignment, which for a non-owner is `resolve_reveal_authority(member) == "delegation"` (an owner who is also a GM resolves to `owner` first, so the case compares the bound row, and the oracle for owners is the row itself). A member whose bound assignment expired is not in `members`. After they get a new `gm` assignment they are listed with `delegation: null` while the old unrevoked row remains, and that stale row is **not** in `lapsed_delegations` |
+| BD11 | Lapsed delegations | An unrevoked row of a member with no live built-in `gm` assignment (expired assignment; inactive account) appears in `lapsed_delegations` with the member's name, grant date and granter, and the member is absent from `members`. A closed row never appears. A stale row of a member who holds a new live `gm` assignment is excluded. After the existing revoke route closes it, the next read omits it. The set is campaign-scoped |
+| BD6 | Endings | After a revoke, a GM-role revoke or change, or a membership end, the member's delegation is null or the member is absent |
+| BD7 | Transfer | Delegations survive. `granted_by_name` is the former owner. The new owner reads `can_manage: true`, and the former owner reads `can_manage: false` |
+| BD8 | Disclosure | The response keys are exactly the contract's, at every level. No reason, revocation reason, `gm_membership_role_id`, delegation id, user id or ended row |
+| BD9 | Campaign isolation | Another campaign's members and delegations never appear |
+| BD10 | Read-only | The read writes nothing (no row change, no audit row) and takes no row lock |
+
+Under option B the same cases apply to the overview fields, plus the existing overview tests unchanged apart from fixtures.
+
+---
+
+## 7. Verification
+
+### 7.1 Automated checks (per commit, by Sonnet; again by the independent reviewer)
+
+- **From `portal/` in PowerShell:** `npm test` (with counts), `npm run lint` and `npm run build`. Also run `npx vitest run src/pages/CampaignRevealAuthorityPage.test.tsx` plus the touched navigation and route-metadata tests, and report the counts separately. S01's and S02's focused suites must still pass unchanged (the 150 tests of [S02 §11.14](p15-c02-s02-revelations-plan.md#1114-independent-confirmation-of-r-s02-4a-and-r-s02-4b-codex-2026-11-21)).
+- **Backend (T01):**
+  - `uv run pytest tests/database/test_reveal_delegations_read.py tests/database/test_character_reveal_delegation.py tests/database/test_r01_s5e6_reveal_delegation_routes.py`;
+  - `ruff format --check`, `ruff check` and `mypy src`;
+  - the shard runner `uv run python scripts/run_sharded_tests.py`, because a route is added. Include `tests/unit` route-manifest tests: if a unit test classifies every registered route, add the GET where reads belong and report it.
+- **From the repository root:** `uv run python scripts/check_documentation.py` (it fails without the new catalog row) and `git diff --check`.
+- **Mutation probes** (at least one per commit, restored, with SHA-256 recorded before and after):
+  - T01: derive `can_manage` on the client, or render a kept stale list with its offer. L6 or L8 must fail. A backend probe: return an unrevoked row bound to an expired assignment as live. BD5 must fail.
+  - T02: send an `Idempotency-Key`, or keep Retry after authority loss. M16 or M13 must fail.
+- **Recording runs:** report first runs and reruns separately. A full-suite failure is recorded as it happened, and an isolated rerun is not a suite pass (as in S01 and S02).
+
+### 7.2 Checkpoint gate (C02)
+
+C02 merges only as in §1.3, with S01 to S04 each independently reviewed, the PR acceptance cases passing, and CI on the integration head. This plan claims no merge readiness. A green PR #71 run belongs to its head only.
+
+### 7.3 Separate events (not this slice's review verdict, and not C02 merge gates)
+
+- **Persona browser checks** at the final integrated head, under [browser](work-register.md#browser):
+  - the owner grants to a GM, and that GM's next reveal succeeds;
+  - the owner revokes, and the GM's next reveal is refused;
+  - the GM's role is revoked on the management tab, and the delegation is gone on the Reveal authority tab;
+  - a custom manager reads only.
+- **AT checks** under [ax](work-register.md#ax) and [b16](work-register.md#b16): tab navigation; dialog focus trap and return; the reason error summary; announcements in the persistent region; the unknown-outcome alert; reflow at 320 CSS px and at actual zoom.
+- **Owner acceptance** at [actor-a](work-register.md#actor-a) and [p15-owner](work-register.md#p15-owner).
+
+None of these is performed, accepted or waived here.
+
+---
+
+## 8. Authorization, disclosure, concurrency and cleanup
+
+- **Server-authoritative availability.**
+  - The page mounts only while the bootstrap grants `access.manage`.
+  - The read is gated by the server. Controls follow `can_manage` from the last successful read, and rows follow the server's eligibility.
+  - Every write is judged again by the server at a fresh instant (§2.1).
+  - Owner status, built-in GM eligibility and effective-delegation state are computed on the server with the same predicates the commands use, at read time. The portal never derives them.
+  - The client never decides from role codes, bootstrap roles, receipts or ownership records.
+- **Disclosure.**
+  - Render only the names the read carries; never ids, reasons or role ids. The read carries no delegation id.
+  - Error text comes only from mapped codes (G-D).
+  - The 404 causes are not told apart.
+  - Under the OD-S03-2 default, delegation status is visible to `access.manage` holders, who already see roles and revelations.
+- **Stale responses and navigation.**
+  - Reads are scoped by campaign, and mutations by campaign and member.
+  - A late answer for another scope is discarded, and the page remounts on a campaign change.
+  - A superseded confirmation only re-reads (M15).
+  - Every write re-reads, so the owner never acts on a row the server has changed.
+- **Authority loss.**
+  - Bootstrap loss unmounts everything (L2).
+  - A read 403/404 drops everything and refreshes the session in place (L7).
+  - A write 403 `campaign_owner_required` withdraws the controls after the re-read (M7).
+  - Another 403/404 follows L7 (M8).
+  - A role or membership ending shows up as the member leaving the list (L10, M9).
+- **Pending and uncertain writes; retry ownership.**
+  - One `useAuthoringMutation` instance per scope owns its attempt. Only the owning attempt publishes status, announcement and focus.
+  - Unkeyed means a repeat re-executes against the current state and does not replay (§2.1). So the page offers **no Retry**: an attempt that ends in a network error or a 5xx is made non-retryable at once (`discard()`, which keeps a target-free `withdrawn` unknown outcome), with an alert, an authorized state check and Dismiss (M12, M13).
+  - A further write is a new attempt chosen deliberately after the owner has looked at the current state. Nothing is retried automatically, including `reveal_delegation_recipient_changed` (M10), whose message says nothing was changed and leaves the choice to the owner.
+- **Protected-state cleanup.**
+  - On read 403/404 or capability loss, drop the members, names, dates, granters, open dialogs and typed reasons.
+  - On a re-read that no longer lists a dialog's member, close that dialog.
+  - Show back only the person's own typing, and only while they stay authorized to read the page (M7). Never show it after a drop (M8).
+- **Focus and announcements.**
+  - One persistent `role="status"` region above the read boundary, as on the management tab, carries success and refusal text and survives the re-read.
+  - The unknown-outcome text is an alert.
+  - Focus moves to the acting row's counterpart control, or to the status region when the row is gone.
+  - Dialogs trap focus and return it on cancel.
+  - Starting a new operation clears a stale announcement.
+
+---
+
+## 9. Intermediate states
+
+- **After T01:** a read-only tab and the backend read. Nothing changes for any authority, and there are no controls.
+- **After T02:** the full slice.
+- **Neither task** changes S01, S02, the management tab's member cards (under option A), the write routes, or any audience read.
+
+---
+
+## 10. Decisions
+
+### OD-S03-1 (owner decision, blocking both tasks): the read contract for delegation state, eligibility and owner authority
+
+**Option A (selected, §10.1): a new read-only `GET /campaigns/{campaign_id}/reveal-delegations`.** Same `access.manage` route gate as the two POSTs. The concrete contract (the refined one, §10.2):
+
+```
+{
+  "can_manage": bool,
+  "members": [
+    {
+      "campaign_membership_id": uuid,
+      "display_name": str,
+      "delegation": null | { "granted_at": timestamptz, "granted_by_name": str | null }
+    }
+  ],
+  "lapsed_delegations": [
+    {
+      "campaign_membership_id": uuid,
+      "display_name": str,
+      "granted_at": timestamptz,
+      "granted_by_name": str | null
+    }
+  ]
+}
+```
+
+- **`can_manage`:** the caller holds a live built-in owner assignment (`find_live_builtin_owner_assignment`, unlocked, at read time), the predicate the D3 gate uses.
+- **`members`:** every membership with a live built-in `gm` assignment (the `find_live_builtin_gm_assignment` definition, as one set query, the lowest `membership_role_id` per member as that function chooses), ordered by display name, then membership id. `display_name` is the account's display name, as in the access overview.
+- **`delegation`:** non-null only when an unrevoked row is bound to that live assignment, so the delegation authorizes (for a non-owner, exactly `resolve_reveal_authority == "delegation"`); otherwise null. `granted_by_name` is the granting membership's account display name, or null when that membership no longer exists.
+- **`lapsed_delegations`:** every unrevoked row of this campaign whose grantee holds **no** live built-in `gm` assignment (G-F). It authorizes nothing and can be closed by the existing revoke route. A stale row of a member who does hold a live `gm` assignment is not listed (the member is in `members` with `delegation: null`). Order: display name, then membership id.
+- **Not returned:** reasons, revocation reasons, delegation ids, `gm_membership_role_id`, user ids, ended rows and end reasons.
+- **What it is not:** it adds no table, lock, migration, write or authorization rule, and it is read-only. It invents no lifecycle rule: it reports what the server already holds.
+- **Cost:**
+  - a query module, a route and DTOs, BD1–BD11, and a shard run;
+  - a catalog row, which the documentation check requires, the `operations.md` count, and a §3u row.
+- **Why this one:** only S03 consumes it. The C01-reviewed overview contract and its roughly 20 portal fixture files stay untouched. It follows the Access sub-tab rule that "neither sibling route fetches another's data".
+
+**Option B: the same fields on `GET /access-overview`.** A top-level `can_manage_reveal_delegations`, and a per-member `reveal_delegation: {eligible, delegation}`.
+- **Gain:** one read, and the management tab's existing re-read after a role change refreshes delegation status too. S03's UI would sit in each member card instead of a tab.
+- **Cost:**
+  - it changes C01's reviewed contract, which the overview's other consumers also read (S02's target options among them);
+  - about 20 portal fixture files and the overview's backend tests must change;
+  - the payload grows for every consumer.
+
+**Option C (not admissible): no backend change.**
+- **How it would work:** eligibility from overview role codes (`code === "gm"`) plus `status_code` and `account_is_active`; ownership from bootstrap `roles`; state from receipts only.
+- **Why not:** it makes the client decide authority, contrary to [Phase 15 exit criterion](roadmap.md#159-phase-15-exit-criteria) "All portal write options come from server-authoritative catalogs and capabilities". It cannot tell a built-in `gm` from a campaign-scoped `gm` (G-B) or a lapsed row from a live one (G-C). It cannot show who holds a delegation (G-A), so it cannot meet the slice criterion that "a grant ends with its bound role" as the user sees it.
+
+**Consequence of each.** A gives correct behavior plus a small, isolated backend read. B gives the same correctness with wider churn in reviewed C01 surfaces. C is not admissible.
+
+### 10.1 Owner decisions recorded 2026-11-21
+
+- **OD-S03-1 = option A.** The dedicated read-only `GET /campaigns/{campaign_id}/reveal-delegations` endpoint.
+- **OD-S03-2 = retain `access.manage` for reading and the existing current-owner authorization for writes.** The default below applies.
+- **Scope of these decisions.** They authorize the bounded backend read contract and its portal consumption only. They add **no write authority**, change neither write route, and add no lifecycle rule.
+
+### OD-S03-2 (owner decision, default applies): who may read the delegation state
+
+- **Default (recommended):** every `access.manage` holder may read, the same gate as the POSTs and the overview. Custom managers already see roles and revelations there. Only `can_manage` holders get controls.
+- **Alternative:** the read is owner-only, and other callers get 403. Custom managers then see nothing and need another signal to hide the tab, which this plan would have to add.
+
+### Plan decisions (recommendations; not blocking)
+
+| ID | Decision | Recommendation |
+|---|---|---|
+| D-1 | Placement | Under option A: a fourth Access tab, **Reveal authority**, at `access/reveal-authority`. Under option B: a "Reveal authority" line in each member card's Roles section |
+| D-2 | Ended delegations | Not listed in S03. Grant and revoke audit rows remain in Access audit. A history list is a follow-up candidate |
+| D-3 | Wording | As quoted in §6. The owner may reword without changing the cases |
+| D-4 | G-D message | Map `campaign_owner_required` to this page's own wording and never render the server message. No backend message change |
+| D-5 | T01 "owner-only delegation actions" | T01 renders the offer (L5/L6) as text and the backend's `can_manage`, but no buttons, so no head has a dead control. T02 attaches the controls |
+
+### 10.2 Refinements made before implementation
+
+1. **Open versus effective (G-F).** The earlier contract listed only live GMs, so an open delegation row of a member whose `gm` assignment expired could not be identified or revoked from the portal, although the revoke route can close it. The read now returns `lapsed_delegations` beside `members`. This surfaces existing state and uses the existing revoke semantics; it adds no end reason, no auto-close and no authorization rule. Cases L12, BD11 and M21 cover it.
+2. **Repeated writes (§2.1).** Both writes ignore `Idempotency-Key`, so a repeat re-executes against the current state. The earlier text offered Retry as a same-command replay. That is dropped: an unknown outcome gets an alert, an authorized state check and Dismiss, with no Retry and no automatic re-send (M12, M13, M16). The hook's `discard()` makes every ambiguous attempt non-retryable at once, and its withdrawn-error state carries the target-free notice.
+3. **Server derivation.** `can_manage`, GM eligibility and the effective delegation are all server-computed with the commands' own predicates (§8). The delegation id is dropped from the read (the portal revokes by membership), and `lapsed_delegations` is derived the same way.
+4. **BD5 wording.** An owner who is also a GM resolves to `owner` in `resolve_reveal_authority`, so `delegation` is defined by the bound row for owners (M18), and by `resolve_reveal_authority == "delegation"` for everyone else.
+
+### Gaps
+
+- **G-A, G-B and G-C:** disposition is OD-S03-1 (option A, recorded in §10.1).
+- **G-F:** disposition is §10.2 item 1 (`lapsed_delegations`).
+- **G-D:** disposition is D-4.
+- **G-E:** out of scope, and a follow-up candidate.
+
+No other DTO field is proposed.
+
+---
+
+## 11. Handoffs
+
+### 11.1 Sonnet implementation instructions
+
+1. Start on `phase15/completion` at the commit that records this plan **and** OD-S03-1. Record that SHA as the base, and record `git status --short`. Preserve unrelated work. Do not push, change PR #71, merge, or start S04, `copy-ui` or `preview`.
+2. Re-check §2.1 to §2.4 at the base. If anything differs, stop and report.
+3. **T01.**
+   - The backend read per the recorded OD-S03-1 option, with BD1–BD11.
+   - Then the portal: §4's T01 column, with L1–L12.
+   - Run §7.1, including the shard runner, and commit.
+4. **T02.**
+   - §4's T02 column, with M1–M21.
+   - Reuse `useAuthoringMutation`: its `onSupersededSuccess` and `discard()`, and a request function that ignores the key.
+   - Reuse `StaleReadNotice`, the persistent status-region pattern and the focus handoff.
+   - Run §7.1 and commit.
+5. **Rules.**
+   - Never infer eligibility or ownership.
+   - Never render server messages, ids or reasons.
+   - No `Idempotency-Key` header on the delegation POSTs.
+   - No session reload after delegation writes.
+   - No polling.
+   - No change to S01 or S02 behavior or tests, or to the write routes.
+   - Existing classes only, unless a reflow defect requires CSS.
+6. Append §11.3 with:
+   - the base and the commit SHAs;
+   - the commands, with counts, first runs and reruns separate;
+   - the probes with SHA-256;
+   - any deviation and its reason.
+
+   Set the S03, T01 and T02 register cells to "Implemented; independent review pending".
+
+### 11.2 Independent review boundary
+
+- **Range.** Base = the commit that records this plan and OD-S03-1. Head = T02, or the last correcting commit. Review the slice whole, and each commit on its own.
+- **Required evidence.**
+  1. The read matches the recorded OD-S03-1 contract, with no lock, write or authorization change. BD1–BD11 pass, including BD5 against `resolve_reveal_authority`.
+  2. By reading, the controls follow only `can_manage`, and the rows only the server list (no client rule), and nothing renders a server message, id or reason.
+  3. The cleanup and authority-loss paths of §8 (L2, L7, M7, M8, M13).
+  4. Unkeyed retry ownership: M12 and M13. No key is sent, and a withdrawn attempt cannot be replayed.
+  5. Run §7.1 and map L1–L12, M1–M21 and BD1–BD11 to tests.
+  6. At least one independent mutation probe per commit, restored, with SHA-256 recorded.
+  7. The §3.3 exclusions were not entered, and S01's and S02's tests are unchanged.
+- **Verdict.** Use the [rubric](grading.md#severity-and-checkpoint-disposition). Keep new findings distinct from S01's and S02's closed findings (F1, F2, F1-R1, R-S02-1 to R-S02-5, R-S02-4a, R-S02-4b). §7.3 events are not part of the verdict.
+
+### 11.3 Implementation record
+
+Pending. Nothing is implemented at the commit that records this plan and OD-S03-1.
