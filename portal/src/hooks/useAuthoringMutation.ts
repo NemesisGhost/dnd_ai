@@ -124,6 +124,13 @@ export function useAuthoringMutation<TBody, TResult>({
     // The attempt whose outcome is unknown (a network or server failure). Held until it is
     // confirmed or definitively refused, whatever the caller does with its drafts meanwhile.
     const unresolvedRef = useRef<LastAttempt<TBody, TResult> | null>(null)
+    // Each send is an attempt with its own number. `inFlightRef` names the one now in flight (and its scope);
+    // `discardedRef` names one the caller has withdrawn while it was in flight: when that attempt later fails
+    // with an unknown outcome it is not kept as retryable, whatever has changed since. A number belongs to one
+    // attempt only, so a late settlement can never act on a newer attempt or on another scope.
+    const attemptSeqRef = useRef(0)
+    const inFlightRef = useRef<{ attempt: number; scopeKey: string } | null>(null)
+    const discardedRef = useRef<number | null>(null)
 
     // The latest callbacks, read only inside event handlers/promises.
     const requestRef = useRef(request)
@@ -151,6 +158,8 @@ export function useAuthoringMutation<TBody, TResult>({
                 return false
             }
             const requestScope = scopeKey
+            const attempt = ++attemptSeqRef.current
+            inFlightRef.current = { attempt, scopeKey: requestScope }
             const fingerprint = JSON.stringify(body)
             const reserved = reservationRef.current
             const key =
@@ -177,7 +186,17 @@ export function useAuthoringMutation<TBody, TResult>({
                     if (controller.signal.aborted) {
                         return
                     }
+                    if (inFlightRef.current?.attempt === attempt) inFlightRef.current = null
                     const error = classifyApiError(cause)
+                    // Withdrawn while in flight and its answer was lost: its outcome is still unknown, but it is no
+                    // longer the caller's to repeat. Nothing of it is kept, and nothing is shown that would offer to.
+                    if (discardedRef.current === attempt && (error.kind === "network" || error.kind === "server")) {
+                        discardedRef.current = null
+                        if (reservationRef.current?.key === key) reservationRef.current = null
+                        if (unresolvedRef.current?.scopeKey === requestScope) unresolvedRef.current = null
+                        setSnapshot({ scopeKey: requestScope, status: IDLE, receipt: null })
+                        return
+                    }
                     if (error.kind === "expired") {
                         unresolvedRef.current = null
                         setSnapshot({ scopeKey: requestScope, status: IDLE, receipt: null })
@@ -196,6 +215,8 @@ export function useAuthoringMutation<TBody, TResult>({
                     return
                 }
                 // Confirmed: the key and the body are spent, so nothing here can repeat the write.
+                if (inFlightRef.current?.attempt === attempt) inFlightRef.current = null
+                if (discardedRef.current === attempt) discardedRef.current = null
                 reservationRef.current = null
                 unresolvedRef.current = null
                 // Anything but a completed read leaves the refresh unresolved: a superseded read
@@ -262,6 +283,9 @@ export function useAuthoringMutation<TBody, TResult>({
     const discard = useCallback(() => {
         if (unresolvedRef.current?.scopeKey === scopeKey) unresolvedRef.current = null
         if (reservationRef.current?.scopeKey === scopeKey) reservationRef.current = null
+        // An attempt still in flight cannot be called back: mark it, so that if it fails with an unknown
+        // outcome it is not made retryable later (even if the caller's right has returned by then).
+        if (inFlightRef.current?.scopeKey === scopeKey) discardedRef.current = inFlightRef.current.attempt
         setSnapshot((current) =>
             current.scopeKey === scopeKey && current.status.kind === "pending"
                 ? current

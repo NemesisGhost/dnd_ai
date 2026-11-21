@@ -297,13 +297,15 @@ export function CharacterRevelationsSection({
         const place = canTakeFocus(revealRef.current) ? revealRef.current : headingRef.current
         place?.focus()
     }, [refocus])
-    // A failed create that sent a member or group offers no retry once the right to pick one is gone.
+    // A create that sent a member or group offers no retry once the right to pick one is gone: a failed one is
+    // discarded now, and one still in flight is marked, so if it fails later it is not made retryable even if the
+    // right has come back by then.
     const createStatusKind = createMutation.status.kind
     const discardCreate = createMutation.discard
     // The attempt's outcome is unknown, so it is not called unsent; it is only no longer ours to repeat. Its body,
     // reserved key and retry go, so choosing the same member again later is a new attempt under a new key.
     useEffect(() => {
-        if (!canPickTargets && lastTargeted.current && createStatusKind === "error") {
+        if (!canPickTargets && lastTargeted.current && (createStatusKind === "error" || createStatusKind === "pending")) {
             discardCreate()
             lastTargeted.current = false
         }

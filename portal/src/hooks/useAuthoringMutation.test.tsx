@@ -106,6 +106,65 @@ describe("useAuthoringMutation", () => {
         expect(keys[2]).not.toBe(keys[0])
     })
 
+    it("discard while an attempt is in flight: its later lost answer is not retryable, a newer attempt and another scope are unaffected, and a confirmed answer still counts", async () => {
+        const keys: string[] = []
+        const gates: ReturnType<typeof deferred<string>>[] = []
+        const request = vi.fn(async (_b: Body, c: MutationRequestContext) => {
+            keys.push(c.idempotencyKey)
+            const gate = deferred<string>()
+            gates.push(gate)
+            return gate.promise
+        })
+        const { result } = renderHook(
+            () => useAuthoringMutation<Body, string>({ scopeKey: "a", request }),
+            { wrapper: wrapperWith() },
+        )
+        const other = renderHook(
+            () => useAuthoringMutation<Body, string>({ scopeKey: "b", request }),
+            { wrapper: wrapperWith() },
+        )
+        act(() => other.result.current.submit({ name: "other" }))
+        act(() => result.current.submit({ name: "same" }))
+        await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+        act(() => result.current.discard())
+        expect(result.current.status.kind).toBe("pending")
+        // The answer is lost: no error, nothing retryable, nothing kept.
+        await act(async () => gates[1]!.reject(new ApiRequestError(500, "internal_error", null)))
+        expect(result.current.status.kind).toBe("idle")
+        act(() => result.current.retry())
+        expect(request).toHaveBeenCalledTimes(2)
+        // The same body afterwards is a new attempt under a new key, and a later failure of it is an ordinary one.
+        act(() => result.current.submit({ name: "same" }))
+        await waitFor(() => expect(request).toHaveBeenCalledTimes(3))
+        expect(keys[2]).not.toBe(keys[1])
+        await act(async () => gates[2]!.reject(new ApiRequestError(500, "internal_error", null)))
+        expect(result.current.status.kind).toBe("error")
+        act(() => result.current.retry())
+        await waitFor(() => expect(request).toHaveBeenCalledTimes(4))
+        expect(keys[3]).toBe(keys[2])
+        // The other scope's attempt was never touched by it.
+        expect(other.result.current.status.kind).toBe("pending")
+        await act(async () => gates[0]!.resolve("done"))
+        await waitFor(() => expect(other.result.current.status.kind).toBe("success"))
+        // A discarded attempt that is confirmed is still confirmed.
+        await act(async () => gates[3]!.resolve("ok"))
+        await waitFor(() => expect(result.current.status.kind).toBe("success"))
+    })
+
+    it("discard of an in-flight attempt, then a confirmed answer: still a confirmed write", async () => {
+        const gate = deferred<string>()
+        const request = vi.fn(async () => gate.promise)
+        const { result } = renderHook(
+            () => useAuthoringMutation<Body, string>({ scopeKey: "a", request }),
+            { wrapper: wrapperWith() },
+        )
+        act(() => result.current.submit({ name: "x" }))
+        act(() => result.current.discard())
+        await act(async () => gate.resolve("done"))
+        await waitFor(() => expect(result.current.status.kind).toBe("success"))
+        expect(result.current.receipt).toBe("done")
+    })
+
     it("discard forgets this scope's unresolved attempt and key, so the same body is a new attempt; a retry before it is unchanged", async () => {
         const keys: string[] = []
         const request = vi.fn(async (_b: Body, c: MutationRequestContext) => {

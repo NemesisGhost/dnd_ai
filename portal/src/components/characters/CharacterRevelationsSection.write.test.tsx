@@ -557,6 +557,36 @@ describe("CharacterRevelationsSection: access.manage lost mid-form (R-S02-2)", (
         expect(creates(server)).toHaveLength(0)
     })
 
+    it("R-S02-4: a targeted create held across loss and restoration, then failing with 500, offers no Retry; reselecting sends a fresh key", async () => {
+        let next = withoutManage()
+        const { server } = setup({ capabilities: ["canon.edit", "access.manage"], onRefresh: async () => next })
+        const form = await pickMember(server)
+        let settle: (value: { status: number; body: object }) => void = () => undefined
+        server.on("POST", LIST, () => new Promise((resolve) => (settle = resolve)))
+        submitForm(form)
+        await vi.waitFor(() => expect(creates(server)).toHaveLength(1))
+        refreshSession()
+        await vi.waitFor(() => expect(within(form).queryByRole("radio", { name: "One member" })).not.toBeInTheDocument())
+        next = withManage()
+        refreshSession()
+        await within(form).findByRole("radio", { name: "One member" })
+        // The answer is lost after the right is back: its outcome is unknown, but it is not offered again.
+        await act(async () => settle({ status: 500, body: { error: { code: "internal_error", message: "SERVER-SECRET-TEXT" } } }))
+        await vi.waitFor(() => expect(screen.getByRole("button", { name: "Reveal" })).toBeEnabled())
+        expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument()
+        expect(screen.queryByText(/Something went wrong on our side/)).not.toBeInTheDocument()
+        expect(creates(server)).toHaveLength(1)
+        // A deliberate reselection of the same member and reason is a new attempt under a new key.
+        server.on("POST", LIST, { status: 201, body: { character_revelation_id: "r-new", created: true } })
+        fireEvent.click(within(form).getByRole("radio", { name: "One member" }))
+        fireEvent.change(await within(form).findByRole("combobox", { name: /Member/ }), { target: { value: "m-1" } })
+        typeReason("Because")
+        submitForm(form)
+        await vi.waitFor(() => expect(creates(server)).toHaveLength(2))
+        expect(creates(server)[1]!.body).toEqual(creates(server)[0]!.body)
+        expect(creates(server)[1]!.headers["Idempotency-Key"]).not.toBe(creates(server)[0]!.headers["Idempotency-Key"])
+    })
+
     it("R-S02-4: the lost attempt's body and key are discarded; reselecting the same member after the right returns is a new attempt", async () => {
         let next = withoutManage()
         const { server } = setup({ capabilities: ["canon.edit", "access.manage"], onRefresh: async () => next })
