@@ -11,6 +11,7 @@ import { CharacterPublicProfilePage } from "./CharacterPublicProfilePage"
 const PATH = "/campaigns/c1/characters/ch1/public-profile"
 const SAVE = `${PATH}/draft`
 const RELEASE = `${PATH}/releases`
+const REVELATIONS = "/campaigns/c1/characters/ch1/revelations"
 
 function draft(overrides: object = {}) {
     return {
@@ -69,6 +70,10 @@ afterEach(() => {
 function setup(current: object = profile(), initialEntry = "/app/c1/characters/ch1/public-profile") {
     const server = installMockServer()
     server.on("GET", PATH, () => ({ body: current }))
+    // The page's Revelations section (P15-C02-S02) reads its own list; the S01 cases do not depend on it.
+    server.on("GET", REVELATIONS, () => ({
+        body: { character_id: "ch1", revelations: [] },
+    }))
     server.on("POST", SAVE, { status: 200, body: { character_public_profile_id: "p1", character_id: "ch1", row_version: 4, created: false, changed: true } })
     const rendered = renderAuthoringRoutes({
         initialEntry,
@@ -333,6 +338,9 @@ describe("CharacterPublicProfilePage: draft editing (T01)", () => {
         // A save still pending when the person moves to another character answers into nothing.
         let answer: (r: { status: number; body: unknown }) => void = () => undefined
         server.on("POST", SAVE, () => new Promise((resolve) => (answer = resolve)))
+        server.on("GET", "/campaigns/c1/characters/ch2/revelations", {
+            body: { character_id: "ch2", revelations: [] },
+        })
         server.on("GET", "/campaigns/c1/characters/ch2/public-profile", {
             body: profile({ character_id: "ch2", label: { name: "Other", summary: null }, draft: null }),
         })
@@ -560,8 +568,12 @@ describe("CharacterPublicProfilePage: release (T02)", () => {
         confirm(await openRelease())
         await screen.findByText("Released as version 1.")
         const paths = server.calls.map((c) => `${c.method} ${c.path}`)
-        expect(paths.every((path) => path === `GET ${PATH}` || path === `POST ${RELEASE}`)).toBe(true)
-        expect(paths.some((path) => /revelations|effective-access|access-overview/.test(path))).toBe(false)
+        // The page's Revelations section (P15-C02-S02) reads its own list; a release writes no revelation.
+        expect(
+            paths.every((path) => [`GET ${PATH}`, `POST ${RELEASE}`, `GET ${REVELATIONS}`].includes(path)),
+        ).toBe(true)
+        expect(paths.some((path) => /effective-access|access-overview/.test(path))).toBe(false)
+        expect(paths.some((path) => path.startsWith("POST") && /revelations/.test(path))).toBe(false)
         expect(screen.queryByRole("button", { name: /reveal/i })).not.toBeInTheDocument()
         expect(screen.queryByRole("link", { name: /reveal/i })).not.toBeInTheDocument()
     })

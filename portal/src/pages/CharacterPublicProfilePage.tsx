@@ -12,6 +12,7 @@ import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { TextAreaField } from "../components/authoring/fields"
 import { ErrorSummary, MutationStatusMessage } from "../components/authoring/feedback"
 import type { FieldError } from "../components/authoring/feedback"
+import { CharacterRevelationsSection } from "../components/characters/CharacterRevelationsSection"
 import { StaleReadNotice } from "../components/StaleReadNotice"
 import { TaskBreadcrumb } from "../components/navigation/TaskBreadcrumb"
 import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
@@ -306,6 +307,13 @@ function PublicProfile({ campaignId, characterId }: { campaignId: string; charac
                     handoff={handoff}
                     onRefused={refuse}
                     onLost={setLost}
+                />
+                {/* Outside `Loaded`, which is rebuilt after a write, so the list survives it. It exists only
+                    while this page's own read is held, and it asks the page to read again on a 404. */}
+                <CharacterRevelationsSection
+                    campaignId={campaignId}
+                    characterId={characterId}
+                    onGone={() => void refetch()}
                 />
             </>
         )
