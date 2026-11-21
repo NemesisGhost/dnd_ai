@@ -424,6 +424,9 @@ export const ROUTE_METAS: readonly RouteMeta[] = [
     campaign("access.audit", "access/audit", "access", ["access"], "section", "Access audit", {
         parent: "access.overview",
     }),
+    campaign("access.revealAuthority", "access/reveal-authority", "access", ["access"], "section", "Reveal authority", {
+        parent: "access.overview",
+    }),
     campaign("campaign.notFound", "*", null, [], "other", "Campaign page not found"),
 ]
 

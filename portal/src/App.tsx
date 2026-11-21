@@ -64,6 +64,7 @@ import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage
 import { CampaignAccessPage } from "./pages/CampaignAccessPage"
 import { CampaignInvitationsPage } from "./pages/CampaignInvitationsPage"
 import { CampaignAccessAuditPage } from "./pages/CampaignAccessAuditPage"
+import { CampaignRevealAuthorityPage } from "./pages/CampaignRevealAuthorityPage"
 import { AcceptCampaignInvitationPage } from "./pages/AcceptCampaignInvitationPage"
 import { AdminAccountsPage } from "./pages/AdminAccountsPage"
 import { ActivateAccountPage } from "./pages/ActivateAccountPage"
@@ -569,6 +570,11 @@ function App() {
             <Route
               path="access/audit"
               element={<CampaignAccessAuditPage />}
+            />
+
+            <Route
+              path="access/reveal-authority"
+              element={<CampaignRevealAuthorityPage />}
             />
 
             <Route

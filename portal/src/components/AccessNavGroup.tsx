@@ -36,6 +36,7 @@ export function AccessNavGroup({
         { to: accessBasePath, label: "Access Management", end: true },
         { to: `${accessBasePath}/invitations`, label: "Invitations" },
         { to: `${accessBasePath}/audit`, label: "Audit History" },
+        { to: `${accessBasePath}/reveal-authority`, label: "Reveal Authority" },
         { to: settingsPath, label: "Campaign Settings", root: "campaign" },
       ]}
     />
