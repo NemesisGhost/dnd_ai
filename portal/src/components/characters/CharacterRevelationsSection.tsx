@@ -234,6 +234,10 @@ export function CharacterRevelationsSection({
             setRefocus((n) => n + 1)
             return outcome
         },
+        // An older confirmed create after a reset and replacement only re-reads; the form is the replacement's.
+        onSupersededSuccess: () => {
+            void refetch()
+        },
     })
     const createRefresh = useConfirmedRefresh({
         status: createMutation.status,

@@ -191,6 +191,76 @@ describe("useAuthoringMutation", () => {
         }
     })
 
+    it("an older confirmation after reset and a replacement send runs no onSuccess (form, announcement, focus), only the read-only reconciliation, and keeps the replacement's state", async () => {
+        const gates: ReturnType<typeof deferred<string>>[] = []
+        const request = vi.fn(async () => {
+            const gate = deferred<string>()
+            gates.push(gate)
+            return gate.promise
+        })
+        const onSuccess = vi.fn(async () => undefined)
+        const onSupersededSuccess = vi.fn()
+        const { result } = renderHook(
+            () => useAuthoringMutation<Body, string>({ scopeKey: "a", request, onSuccess, onSupersededSuccess }),
+            { wrapper: wrapperWith() },
+        )
+        act(() => result.current.submit({ name: "old" }))
+        act(() => result.current.reset())
+        act(() => result.current.submit({ name: "new" }))
+        await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+        await act(async () => gates[0]!.resolve("old-done"))
+        expect(onSuccess).not.toHaveBeenCalled()
+        expect(onSupersededSuccess).toHaveBeenCalledWith("old-done", { name: "old" })
+        expect(result.current.status.kind).toBe("pending")
+        expect(result.current.receipt).toBeNull()
+        // The replacement's own confirmation runs the ordinary callback.
+        await act(async () => gates[1]!.resolve("new-done"))
+        await waitFor(() => expect(result.current.status.kind).toBe("success"))
+        expect(onSuccess).toHaveBeenCalledTimes(1)
+        expect(onSuccess).toHaveBeenCalledWith("new-done", { name: "new" })
+        expect(onSupersededSuccess).toHaveBeenCalledTimes(1)
+    })
+
+    it("an already-failed attempt that is discarded stays a withdrawn error; reset clears it and the next send is a new key", async () => {
+        const keys: string[] = []
+        const request = vi.fn(async (_b: Body, c: MutationRequestContext) => {
+            keys.push(c.idempotencyKey)
+            throw new ApiRequestError(500, "internal_error", null)
+        })
+        const { result } = renderHook(
+            () => useAuthoringMutation<Body, string>({ scopeKey: "a", request }),
+            { wrapper: wrapperWith() },
+        )
+        act(() => result.current.submit({ name: "same" }))
+        await waitFor(() => expect(result.current.status.kind).toBe("error"))
+        expect(result.current.withdrawn).toBe(false)
+        act(() => result.current.discard())
+        act(() => result.current.discard())
+        expect(result.current.withdrawn).toBe(true)
+        act(() => result.current.retry())
+        expect(request).toHaveBeenCalledTimes(1)
+        act(() => result.current.reset())
+        expect(result.current.status.kind).toBe("idle")
+        expect(result.current.withdrawn).toBe(false)
+        act(() => result.current.submit({ name: "same" }))
+        await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+        expect(keys[1]).not.toBe(keys[0])
+    })
+
+    it("a definitive refusal that is discarded is not made an unknown outcome", async () => {
+        const request = vi.fn(async () => {
+            throw new ApiRequestError(409, "conflict", null)
+        })
+        const { result } = renderHook(
+            () => useAuthoringMutation<Body, string>({ scopeKey: "a", request }),
+            { wrapper: wrapperWith() },
+        )
+        act(() => result.current.submit({ name: "x" }))
+        await waitFor(() => expect(result.current.status.kind).toBe("error"))
+        act(() => result.current.discard())
+        expect(result.current.withdrawn).toBe(false)
+    })
+
     it("discard of an in-flight attempt, then a confirmed answer: still a confirmed write", async () => {
         const gate = deferred<string>()
         const request = vi.fn(async () => gate.promise)
@@ -228,7 +298,9 @@ describe("useAuthoringMutation", () => {
         act(() => other.result.current.submit({ name: "other" }))
         await waitFor(() => expect(other.result.current.status.kind).toBe("error"))
         act(() => result.current.discard())
-        expect(result.current.status.kind).toBe("idle")
+        // The unknown outcome is not erased: it stays as a withdrawn error, with nothing to retry.
+        expect(result.current.status.kind).toBe("error")
+        expect(result.current.withdrawn).toBe(true)
         // Nothing to retry, and the other scope still holds its own attempt.
         act(() => result.current.retry())
         expect(request).toHaveBeenCalledTimes(3)

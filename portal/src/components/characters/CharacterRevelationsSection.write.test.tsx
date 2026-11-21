@@ -634,6 +634,46 @@ describe("CharacterRevelationsSection: access.manage lost mid-form (R-S02-2)", (
         expect(keyOf(2)).not.toBe(keyOf(0))
     })
 
+    it("R-S02-4a: an already-ambiguous targeted failure, then loss and restoration, keeps the target-free notice and Check, with no Retry; Dismiss then a fresh submission uses a new key", async () => {
+        let next = withoutManage()
+        const { server } = setup({ capabilities: ["canon.edit", "access.manage"], onRefresh: async () => next })
+        const form = await pickMember(server)
+        server.on("POST", LIST, refused(500))
+        submitForm(form)
+        // Authority is still held: the ordinary same-key Retry is offered.
+        await screen.findByRole("button", { name: "Retry" })
+        expect(creates(server)).toHaveLength(1)
+        refreshSession()
+        await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument())
+        // The ambiguous outcome is not erased: the notice stays, without the target.
+        const notice = await screen.findByText(/We could not confirm whether your last reveal was applied/)
+        const alert = notice.closest("[role=alert]") as HTMLElement
+        expect(alert).toHaveTextContent("It may have been created")
+        expect(alert).not.toHaveTextContent(/Pia Player|m-1|did not|rejected/)
+        next = withManage()
+        refreshSession()
+        await within(form).findByRole("radio", { name: "One member" })
+        expect(screen.getByText(/We could not confirm whether your last reveal was applied/)).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument()
+        // Check reads the list only.
+        const reads = server.callsTo("GET", LIST).length
+        fireEvent.click(within(alert).getByRole("button", { name: "Check current revelations" }))
+        await vi.waitFor(() => expect(server.callsTo("GET", LIST).length).toBeGreaterThan(reads))
+        expect(creates(server)).toHaveLength(1)
+        // Dismiss clears the notice; a deliberate fresh submission is a new attempt under a new key.
+        fireEvent.click(within(alert).getByRole("button", { name: "Dismiss" }))
+        await vi.waitFor(() => expect(screen.queryByText(/We could not confirm whether/)).not.toBeInTheDocument())
+        expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument()
+        server.on("POST", LIST, { status: 201, body: { character_revelation_id: "r-new", created: true } })
+        fireEvent.click(within(form).getByRole("radio", { name: "One member" }))
+        fireEvent.change(await within(form).findByRole("combobox", { name: /Member/ }), { target: { value: "m-1" } })
+        typeReason("Because")
+        submitForm(form)
+        await vi.waitFor(() => expect(creates(server)).toHaveLength(2))
+        expect(creates(server)[1]!.body).toEqual(creates(server)[0]!.body)
+        expect(creates(server)[1]!.headers["Idempotency-Key"]).not.toBe(creates(server)[0]!.headers["Idempotency-Key"])
+    })
+
     it("offers no retry of a failed targeted create once the right is lost", async () => {
         const { server } = setup({ capabilities: ["canon.edit", "access.manage"], onRefresh: async () => withoutManage() })
         const form = await pickMember(server)

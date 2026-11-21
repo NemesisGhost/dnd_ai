@@ -46,6 +46,10 @@ export interface UseAuthoringMutationOptions<TBody, TResult> {
     // not sent as a second write. The earlier one is re-sent first (see `submit`). Otherwise an
     // edited body is simply a new request with a new key.
     holdUnresolved?: boolean
+    // Runs instead of `onSuccess` when the confirmed attempt is no longer the one that owns this hook's state (it was
+    // reset and replaced while in flight). Read-only reconciliation only (a re-read): it must not touch the current
+    // form, announce, or move focus, because those belong to the current attempt. Optional; absent means nothing runs.
+    onSupersededSuccess?: (result: TResult, body: TBody) => void
 }
 
 // What `submit` did with the request: sent it; re-sent an earlier unresolved attempt instead (the
@@ -70,13 +74,14 @@ export interface UseAuthoringMutationResult<TBody, TResult> {
     reset: (expected?: AuthoringMutationStatus) => void
     // Forgets this scope's unresolved attempt and its reserved key, and returns to idle unless a request is in
     // flight (that one is left to finish and marked withdrawn: if its answer is then lost it is reported through
-    // `withdrawn`, not kept as retryable). For a caller whose
+    // `withdrawn`, not kept as retryable) or the attempt had already failed with a lost answer (that error stays,
+    // as withdrawn, so its unknown outcome is not erased). For a caller whose
     // right to send that body has gone: the same body sent later is a new attempt under a new key. It says
     // nothing about the discarded attempt's outcome, which the server may or may not have applied. Other
     // scopes are untouched.
     discard: () => void
-    // True while `status` is the error of an attempt that was withdrawn by `discard()` while it was in flight and
-    // whose answer was then lost (a network or server failure). Its outcome is unknown: it may have been applied.
+    // True while `status` is the error of an attempt that was withdrawn by `discard()` (in flight, or already failed
+    // with a lost answer) and whose answer was lost (a network or server failure). Its outcome is unknown: it may have been applied.
     // It is never retryable (nothing of it is kept), so the caller shows its own notice and offers a read, not a
     // retry. Cleared by `reset`, by the next send, and by a scope change.
     withdrawn: boolean
@@ -123,6 +128,7 @@ export function useAuthoringMutation<TBody, TResult>({
     onSuccess,
     ownsRefreshNotice = false,
     holdUnresolved = false,
+    onSupersededSuccess,
 }: UseAuthoringMutationOptions<TBody, TResult>): UseAuthoringMutationResult<TBody, TResult> {
     const { state: sessionState, reload } = useSession()
     const announce = useAnnounce()
@@ -149,10 +155,12 @@ export function useAuthoringMutation<TBody, TResult>({
     // The latest callbacks, read only inside event handlers/promises.
     const requestRef = useRef(request)
     const onSuccessRef = useRef(onSuccess)
+    const onSupersededRef = useRef(onSupersededSuccess)
     const announceRef = useRef({ announce, own: ownsRefreshNotice })
     useEffect(() => {
         requestRef.current = request
         onSuccessRef.current = onSuccess
+        onSupersededRef.current = onSupersededSuccess
         announceRef.current = { announce, own: ownsRefreshNotice }
     })
 
@@ -242,6 +250,17 @@ export function useAuthoringMutation<TBody, TResult>({
                 // reservation and unresolved body are left alone.
                 if (owns || reservationRef.current?.key === key) reservationRef.current = null
                 if (owns) unresolvedRef.current = null
+                // Replaced since: the write is confirmed and its key spent, but the callback's effects (closing and
+                // clearing the form, announcing, focus) belong to the current attempt, not this one. Only the
+                // caller's read-only reconciliation may run.
+                if (!owns) {
+                    try {
+                        onSupersededRef.current?.(result, body)
+                    } catch {
+                        // Reconciliation is best effort; the current attempt's state is unaffected.
+                    }
+                    return
+                }
                 // Anything but a completed read leaves the refresh unresolved: a superseded read
                 // is only a promise that a newer one will answer.
                 let refresh: "ok" | "failed" = "ok"
@@ -304,16 +323,23 @@ export function useAuthoringMutation<TBody, TResult>({
     )
 
     const discard = useCallback(() => {
+        // An attempt that already failed with an unknown outcome is not erased: its body and key go, but the fact
+        // that it may have been applied stays visible as a withdrawn error (see `withdrawn`).
+        const wasUnresolved = unresolvedRef.current?.scopeKey === scopeKey
         if (unresolvedRef.current?.scopeKey === scopeKey) unresolvedRef.current = null
         if (reservationRef.current?.scopeKey === scopeKey) reservationRef.current = null
         // An attempt still in flight cannot be called back: mark it, so that if it fails with an unknown
         // outcome it is not made retryable later (even if the caller's right has returned by then).
         if (inFlightRef.current?.scopeKey === scopeKey) discardedRef.current = inFlightRef.current.attempt
-        setSnapshot((current) =>
-            current.scopeKey === scopeKey && current.status.kind === "pending"
-                ? current
-                : { scopeKey, status: IDLE, receipt: null },
-        )
+        setSnapshot((current) => {
+            if (current.scopeKey === scopeKey && (current.status.kind === "pending" || current.withdrawn === true)) {
+                return current
+            }
+            if (wasUnresolved && current.scopeKey === scopeKey && current.status.kind === "error") {
+                return { scopeKey, status: current.status, receipt: null, withdrawn: true }
+            }
+            return { scopeKey, status: IDLE, receipt: null }
+        })
     }, [scopeKey])
 
     return { status, receipt, submit, retry, reset, discard, withdrawn }
