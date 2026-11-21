@@ -31,3 +31,29 @@ export interface RevealDelegationState {
     members: RevealDelegationMember[]
     lapsed_delegations: LapsedRevealDelegation[]
 }
+
+// The two writes (P15-C02-S03-T02). `reason` is private to the GMs and the server: it is stored, never returned,
+// and never shown again after it is sent. The receipts carry no reason.
+export interface GrantRevealDelegationBody {
+    grantee_campaign_membership_id: string
+    reason: string
+}
+
+export interface GrantRevealDelegationReceipt {
+    grantee_campaign_membership_id: string
+    character_reveal_delegation_id: string
+    // false when the member already held a delegation bound to their current GM assignment.
+    granted: boolean
+}
+
+export interface RevokeRevealDelegationReceipt {
+    grantee_campaign_membership_id: string
+    // false when no delegation was open.
+    revoked: boolean
+}
+
+// What the client hands the revoke mutation: the member goes in the URL and only the reason in the body.
+export interface RevokeRevealDelegationSubmit {
+    grantee_campaign_membership_id: string
+    reason: string
+}
