@@ -1,6 +1,6 @@
 # D/P15-C02-S02 implementation plan: list, create and revoke revelations
 
-**Status:** Opus plan prepared 2026-11-20. Owner decisions recorded 2026-11-21 (§10.1): **OD-1 = option A** (read-only `can_reveal` on the revelations list) and **OD-2 = retain C02's S01 to S04 checkpoint scope** (PR #71 stays draft; no split). T01 and T02 are ready for Sonnet. Work-register row: [D/P15-C02-S02](work-register.md#p15-c02-s02), tasks [T01](work-register.md#p15-c02-s02-t01) and [T02](work-register.md#p15-c02-s02-t02). Parent checkpoint: [D/P15-C02](work-register.md#p15-c02).
+**Status:** Opus plan prepared 2026-11-20. Owner decisions recorded 2026-11-21 (§10.1): **OD-1 = option A** (read-only `can_reveal` on the revelations list) and **OD-2 = retain C02's S01 to S04 checkpoint scope** (PR #71 stays draft; no split). T01 and T02 are implemented ([Section 11.3](#113-implementation-record)); independent review pending. Work-register row: [D/P15-C02-S02](work-register.md#p15-c02-s02), tasks [T01](work-register.md#p15-c02-s02-t01) and [T02](work-register.md#p15-c02-s02-t02). Parent checkpoint: [D/P15-C02](work-register.md#p15-c02).
 
 **Baseline.** This plan was read at `97f75b6ff22d9447e26c34ffadfd8f31b195ad93` ("docs: record P15-C02-S01 F1-R1 independent confirmation; S01 passes with verification limits").
 - That commit is the head of `phase15/completion` and equals `origin/phase15/completion`. The worktree was clean, and no repository-path `AGENTS.md` exists.
@@ -410,4 +410,36 @@ No other DTO field is proposed.
 
 ### 11.3 Implementation record
 
-Pending. Sonnet appends it here.
+**Base and commits** (branch `phase15/completion`; planning baseline = implementation-review baseline `a92fb89c1f57911a748d1d59723e5e15186c414f`, which records OD-1 = A and OD-2 = retain scope):
+- T01 `ab72f72df0cc6f59c408946a89dbd5d526b4ae99`: the list.
+- T02 `2619f02c9dcedf936732f4f2c860147d8d548b36`: `can_reveal` (backend, B1 to B3), create and revoke, behavior documentation.
+- Records commit: the commit that carries this section (documentation only).
+
+**Authorization check (OD-1).** Create and revoke use one authority rule (`_reveal_precheck`, then `_lock_caller_and_campaign` and `_judge_caller`, all `resolve_reveal_authority`), so one `can_reveal` governs both. They differ only in state preconditions (release, active character, active target), which are not authorization and are handled by 409 messages. No authorization mismatch was found. `can_reveal` is the second value `_readable` already returns, so it adds no rule, query or lock.
+
+**What changed.**
+- Backend: `queries/character_revelations.py` returns `can_reveal`; ACCESS_CONTROL section 3w; `tests/database/test_character_revelations.py` B1 to B3 (owner and delegated GM true; a canon.edit editor and a GM whose delegation was revoked false; the key set is exactly `character_id`, `can_reveal`, `revelations`; true for an unreleased and an archived character; a whole-character deny is still 404 with no flag).
+- Portal: `types/characterRevelations.ts`, `api/characterRevelations.ts`, `components/characters/CharacterRevelationsSection.tsx` and three test files. The page mounts the section after `Loaded` (not inside it, so the list survives `Loaded` rebuilds) while the page read is held, with `hasRelease` and `readPage` props. Member and group targets use the existing overview read, mounted only for `access.manage` and only after one of those audiences is chosen. No new target-list route, and no change to `access.manage`.
+- S01 tests: no S01 assertion was weakened. Two test-data changes were needed because the page now makes one more request: `setup()` registers a default revelations list route (and the character-switch case registers `ch2`), and R11 now allows the section's `GET` of the list while still forbidding any revelation write, access-overview or effective-access request. The 58 S01 page tests pass.
+- Deviation from section 4: V1 and V9 are in `pages/CharacterPublicProfilePage.revelations.test.tsx`, not in the S01 test file, so the S01 file's cases stay as reviewed.
+
+**Acceptance map.** T01: V1 and V9 in `CharacterPublicProfilePage.revelations.test.tsx`; V2 to V8 and V10 in `CharacterRevelationsSection.test.tsx`. T02, all in `CharacterRevelationsSection.write.test.tsx`: V11 to V13 offer rule; V14 and V15 form and targets; V16 to V23 create outcomes; V24 to V28 revoke, including one of two overlapping revelations; V29 requests; V30 two late-response cases. Page-level T02 cases in `CharacterPublicProfilePage.revelations.test.tsx`: a revealer with a withheld draft field and `can_release` false still reveals and revokes; an editor without reveal authority edits but sees no reveal or revoke; an archived character offers revoke and refuses create by state; no release offers no Reveal. B1 to B3: the backend tests above.
+
+**Commands and results** (first runs).
+- T01: focused page 58, section 8, page-revelations 4: 70 passed. Full portal `npm test`: 434 files, 5364 tests passed. Lint, `tsc -b`, build passed.
+- T02: focused section list 8, section write 29, page-revelations 8, S01 page 58: all passed. Full portal `npm test`: 435 files, 5397 tests passed (the earlier S01 load-timeout failures did not recur in these runs). Lint, `tsc -b`, build (existing large-chunk warning) passed.
+- Backend: `uv run pytest` on the three `test_character_revelations*.py` files (main, keyed, http matrix): 80 passed. `ruff format --check`, `ruff check`, `mypy src`: passed. Sharded runner (`scripts/run_sharded_tests.py`, four shards, on the T02 tree): 11313 passed, 6 skipped, 11319 collected, RESULT PASSED, 30 min 37 s.
+- `scripts/check_documentation.py` and `git diff --check`: passed.
+
+**Mutation probes (restored; SHA-256 before and after are identical).**
+- T01: the section never treats a 404 as gone (`gone = false`): 3 tests failed (section V6 and both page V9 cases). Section SHA-256 `fec2d6fbae705fe757284d721b1f972d4a1c74be8f0daa7cb7ffc23b1215c71c`.
+- T02: `canReveal` forced true whenever a list is read: 5 tests failed (V12 and the page-level editor case, among others). Section SHA-256 `5bd18a039f1bd2f4e2b4855876ca16ba12eda66c3e05c5ee835611e97fddd637`.
+- The B1 to B3 tests assert a key that did not exist before the change; no separate backend probe was run.
+
+**Limits and not done.**
+- Browser, zoom, screen-reader and assistive-technology checks (radio group, error summary, dialog focus, announcements, snapshot disclosure); persona and human checks; `actor-a`, owner acceptance and final integrated-head evidence: none performed, none claimed.
+- Member and group targets stay limited to `access.manage` holders (G-2); a delegated GM without it can reveal campaign-wide only. The reveal-scoped target-list follow-up was not started.
+- CI: PR #71's earlier green run belongs to head `97f75b6` only. The new head's CI is reported in the report for this task, not in this record.
+- S03, S04, `copy-ui`, `preview` and the target-list follow-up were not started.
+
+**Luna review ranges.** Whole slice `a92fb89c1f57911a748d1d59723e5e15186c414f..<records head>`; T01 `a92fb89..ab72f72`; T02 `ab72f72..2619f02`; the records commit is documentation only.
