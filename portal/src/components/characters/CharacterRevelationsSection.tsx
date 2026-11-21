@@ -311,12 +311,23 @@ export function CharacterRevelationsSection({
         }
     }, [canPickTargets, createStatusKind, discardCreate])
 
+    // A withdrawn targeted create whose answer was lost: its outcome is unknown. Say so, offer only a read (never a
+    // repeat of that request), and never claim what the read shows about it. No target is named: the person's right
+    // to see targets was the thing lost.
+    const outcomeUnknown = createMutation.withdrawn
+    const [outcomeCheck, setOutcomeCheck] = useState<"none" | "read" | "failed">("none")
+    const [seenUnknown, setSeenUnknown] = useState(outcomeUnknown)
+    if (seenUnknown !== outcomeUnknown) {
+        setSeenUnknown(outcomeUnknown)
+        if (!outcomeUnknown) setOutcomeCheck("none")
+    }
+
     const writesHeld = reading || stale || createRefresh.held || revokeRefresh.held
     const creating = createMutation.status.kind === "pending"
     const revokePending = revokeMutation.status.kind === "pending"
     // A refusal the section explains itself (the alert above) is not shown a second time as a generic error.
     const createError =
-        createMutation.status.kind === "error" && createRefusal(createMutation.status.error) === null
+        createMutation.status.kind === "error" && !createMutation.withdrawn && createRefusal(createMutation.status.error) === null
             ? createMutation.status.error
             : null
     const revokeError =
@@ -414,6 +425,38 @@ export function CharacterRevelationsSection({
                 {state.kind === "error" ? <StaleReadNotice what="revelations" onRetry={() => void refetch()} /> : null}
                 {createRefresh.notice}
                 {revokeRefresh.notice}
+                {outcomeUnknown ? (
+                    <div className="authoring-message authoring-message--warning" role="alert">
+                        <AlertTriangle aria-hidden="true" className="authoring-message__icon" />
+                        <div>
+                            <p>
+                                We could not confirm whether your last reveal was applied. It may have been created. That
+                                attempt can't be sent again from this form.
+                            </p>
+                            {outcomeCheck === "read" ? (
+                                <p>
+                                    The list below was read just now. It may or may not include the result of that attempt, so
+                                    compare it before you reveal again.
+                                </p>
+                            ) : null}
+                            {outcomeCheck === "failed" ? (
+                                <p>The list could not be read. That says nothing about whether the attempt was applied.</p>
+                            ) : null}
+                            <button
+                                type="button"
+                                className="authoring-button"
+                                onClick={() => {
+                                    void refetch().then((outcome) => setOutcomeCheck(outcome === "ok" ? "read" : "failed"))
+                                }}
+                            >
+                                Check current revelations
+                            </button>
+                            <button type="button" className="authoring-button" onClick={() => createMutation.reset()}>
+                                Dismiss
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
                 {refusal !== null ? (
                     <div className="authoring-message authoring-message--warning" role="alert">
                         <AlertTriangle aria-hidden="true" className="authoring-message__icon" />

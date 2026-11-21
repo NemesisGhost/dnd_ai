@@ -572,10 +572,30 @@ describe("CharacterRevelationsSection: access.manage lost mid-form (R-S02-2)", (
         await within(form).findByRole("radio", { name: "One member" })
         // The answer is lost after the right is back: its outcome is unknown, but it is not offered again.
         await act(async () => settle({ status: 500, body: { error: { code: "internal_error", message: "SERVER-SECRET-TEXT" } } }))
-        await vi.waitFor(() => expect(screen.getByRole("button", { name: "Reveal" })).toBeEnabled())
+        const notice = await screen.findByText(/We could not confirm whether your last reveal was applied/)
+        const alert = notice.closest("[role=alert]") as HTMLElement
+        expect(alert).toHaveTextContent("It may have been created")
+        expect(alert).toHaveTextContent("can't be sent again from this form")
+        // No target is named, no claim of failure, and no replay of the withdrawn body.
+        expect(alert).not.toHaveTextContent(/Pia Player|m-1|SERVER-SECRET|did not|failed|rejected/)
         expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument()
         expect(screen.queryByText(/Something went wrong on our side/)).not.toBeInTheDocument()
         expect(creates(server)).toHaveLength(1)
+        // The offered way forward is a read, which makes no claim about that attempt; it sends no create.
+        const reads = server.callsTo("GET", LIST).length
+        fireEvent.click(within(alert).getByRole("button", { name: "Check current revelations" }))
+        await vi.waitFor(() => expect(server.callsTo("GET", LIST).length).toBeGreaterThan(reads))
+        expect(await within(alert).findByText(/may or may not include the result of that attempt/)).toBeInTheDocument()
+        expect(alert).not.toHaveTextContent(/was created|was not applied|has been created|was not created|is included|is not included/)
+        expect(creates(server)).toHaveLength(1)
+        // A failed read says nothing about the write either.
+        server.on("GET", LIST, refused(500))
+        fireEvent.click(within(alert).getByRole("button", { name: "Check current revelations" }))
+        expect(await within(alert).findByText(/says nothing about whether the attempt was applied/)).toBeInTheDocument()
+        expect(creates(server)).toHaveLength(1)
+        server.on("GET", LIST, () => ({ body: { character_id: "ch1", can_reveal: true, revelations: [row()] } }))
+        fireEvent.click(screen.getByRole("button", { name: "Check current revelations" }))
+        await vi.waitFor(() => expect(screen.getByRole("button", { name: "Reveal" })).toBeEnabled())
         // A deliberate reselection of the same member and reason is a new attempt under a new key.
         server.on("POST", LIST, { status: 201, body: { character_revelation_id: "r-new", created: true } })
         fireEvent.click(within(form).getByRole("radio", { name: "One member" }))

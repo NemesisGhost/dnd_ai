@@ -69,17 +69,25 @@ export interface UseAuthoringMutationResult<TBody, TResult> {
     // started or finished since.
     reset: (expected?: AuthoringMutationStatus) => void
     // Forgets this scope's unresolved attempt and its reserved key, and returns to idle unless a request is in
-    // flight (that one is left to finish; if it then fails unresolved, call this again). For a caller whose
+    // flight (that one is left to finish and marked withdrawn: if its answer is then lost it is reported through
+    // `withdrawn`, not kept as retryable). For a caller whose
     // right to send that body has gone: the same body sent later is a new attempt under a new key. It says
     // nothing about the discarded attempt's outcome, which the server may or may not have applied. Other
     // scopes are untouched.
     discard: () => void
+    // True while `status` is the error of an attempt that was withdrawn by `discard()` while it was in flight and
+    // whose answer was then lost (a network or server failure). Its outcome is unknown: it may have been applied.
+    // It is never retryable (nothing of it is kept), so the caller shows its own notice and offers a read, not a
+    // retry. Cleared by `reset`, by the next send, and by a scope change.
+    withdrawn: boolean
 }
 
 interface Snapshot<TResult> {
     scopeKey: string
     status: AuthoringMutationStatus
     receipt: TResult | null
+    // The error of a withdrawn attempt whose answer was lost (see `UseAuthoringMutationResult.withdrawn`).
+    withdrawn?: true
 }
 
 interface Reservation {
@@ -127,10 +135,16 @@ export function useAuthoringMutation<TBody, TResult>({
     // Each send is an attempt with its own number. `inFlightRef` names the one now in flight (and its scope);
     // `discardedRef` names one the caller has withdrawn while it was in flight: when that attempt later fails
     // with an unknown outcome it is not kept as retryable, whatever has changed since. A number belongs to one
-    // attempt only, so a late settlement can never act on a newer attempt or on another scope.
+    // attempt only, and `ownerRef` (below) names the one that owns the visible state: a settlement of any other
+    // attempt does not write status, receipt or the unresolved attempt (a confirmed one still spends its own key and
+    // runs its onSuccess). Another scope is a different hook instance with its own refs.
     const attemptSeqRef = useRef(0)
     const inFlightRef = useRef<{ attempt: number; scopeKey: string } | null>(null)
     const discardedRef = useRef<number | null>(null)
+    // The attempt that owns the visible state. Every settlement writes state, refs and status only while it is
+    // still this attempt (a `reset` followed by a replacement send makes the replacement the owner), so a late
+    // answer for an older attempt cannot change what the newer one shows or holds.
+    const ownerRef = useRef<number | null>(null)
 
     // The latest callbacks, read only inside event handlers/promises.
     const requestRef = useRef(request)
@@ -151,6 +165,7 @@ export function useAuthoringMutation<TBody, TResult>({
     const current = snapshot.scopeKey === scopeKey
     const status = current ? snapshot.status : IDLE
     const receipt = current ? snapshot.receipt : null
+    const withdrawn = current && snapshot.withdrawn === true
 
     const start = useCallback(
         (body: TBody, send: LastAttempt<TBody, TResult>["request"]): boolean => {
@@ -160,6 +175,7 @@ export function useAuthoringMutation<TBody, TResult>({
             const requestScope = scopeKey
             const attempt = ++attemptSeqRef.current
             inFlightRef.current = { attempt, scopeKey: requestScope }
+            ownerRef.current = attempt
             const fingerprint = JSON.stringify(body)
             const reserved = reservationRef.current
             const key =
@@ -187,14 +203,18 @@ export function useAuthoringMutation<TBody, TResult>({
                         return
                     }
                     if (inFlightRef.current?.attempt === attempt) inFlightRef.current = null
+                    const wasDiscarded = discardedRef.current === attempt
+                    if (wasDiscarded) discardedRef.current = null
+                    // Replaced since (a reset and a new send): this answer says nothing about what is shown now.
+                    if (ownerRef.current !== attempt) return
                     const error = classifyApiError(cause)
                     // Withdrawn while in flight and its answer was lost: its outcome is still unknown, but it is no
-                    // longer the caller's to repeat. Nothing of it is kept, and nothing is shown that would offer to.
-                    if (discardedRef.current === attempt && (error.kind === "network" || error.kind === "server")) {
-                        discardedRef.current = null
+                    // longer the caller's to repeat. Nothing of it is kept; the error is reported as withdrawn so
+                    // the caller can say the outcome is unknown instead of offering a retry.
+                    if (wasDiscarded && (error.kind === "network" || error.kind === "server")) {
                         if (reservationRef.current?.key === key) reservationRef.current = null
                         if (unresolvedRef.current?.scopeKey === requestScope) unresolvedRef.current = null
-                        setSnapshot({ scopeKey: requestScope, status: IDLE, receipt: null })
+                        setSnapshot({ scopeKey: requestScope, status: { kind: "error", error }, receipt: null, withdrawn: true })
                         return
                     }
                     if (error.kind === "expired") {
@@ -217,8 +237,11 @@ export function useAuthoringMutation<TBody, TResult>({
                 // Confirmed: the key and the body are spent, so nothing here can repeat the write.
                 if (inFlightRef.current?.attempt === attempt) inFlightRef.current = null
                 if (discardedRef.current === attempt) discardedRef.current = null
-                reservationRef.current = null
-                unresolvedRef.current = null
+                const owns = ownerRef.current === attempt
+                // The write is confirmed whoever owns the state now, so its own key is spent; a newer attempt's
+                // reservation and unresolved body are left alone.
+                if (owns || reservationRef.current?.key === key) reservationRef.current = null
+                if (owns) unresolvedRef.current = null
                 // Anything but a completed read leaves the refresh unresolved: a superseded read
                 // is only a promise that a newer one will answer.
                 let refresh: "ok" | "failed" = "ok"
@@ -230,7 +253,7 @@ export function useAuthoringMutation<TBody, TResult>({
                 } catch {
                     refresh = "failed"
                 }
-                if (controller.signal.aborted) {
+                if (controller.signal.aborted || ownerRef.current !== attempt) {
                     return
                 }
                 if (refresh === "failed" && !announceRef.current.own) {
@@ -293,5 +316,5 @@ export function useAuthoringMutation<TBody, TResult>({
         )
     }, [scopeKey])
 
-    return { status, receipt, submit, retry, reset, discard }
+    return { status, receipt, submit, retry, reset, discard, withdrawn }
 }

@@ -128,17 +128,20 @@ describe("useAuthoringMutation", () => {
         await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
         act(() => result.current.discard())
         expect(result.current.status.kind).toBe("pending")
-        // The answer is lost: no error, nothing retryable, nothing kept.
+        // The answer is lost: reported as an unknown, withdrawn outcome; nothing retryable, nothing kept.
         await act(async () => gates[1]!.reject(new ApiRequestError(500, "internal_error", null)))
-        expect(result.current.status.kind).toBe("idle")
+        expect(result.current.status.kind).toBe("error")
+        expect(result.current.withdrawn).toBe(true)
         act(() => result.current.retry())
         expect(request).toHaveBeenCalledTimes(2)
         // The same body afterwards is a new attempt under a new key, and a later failure of it is an ordinary one.
         act(() => result.current.submit({ name: "same" }))
         await waitFor(() => expect(request).toHaveBeenCalledTimes(3))
         expect(keys[2]).not.toBe(keys[1])
+        expect(result.current.withdrawn).toBe(false)
         await act(async () => gates[2]!.reject(new ApiRequestError(500, "internal_error", null)))
         expect(result.current.status.kind).toBe("error")
+        expect(result.current.withdrawn).toBe(false)
         act(() => result.current.retry())
         await waitFor(() => expect(request).toHaveBeenCalledTimes(4))
         expect(keys[3]).toBe(keys[2])
@@ -149,6 +152,43 @@ describe("useAuthoringMutation", () => {
         // A discarded attempt that is confirmed is still confirmed.
         await act(async () => gates[3]!.resolve("ok"))
         await waitFor(() => expect(result.current.status.kind).toBe("success"))
+    })
+
+    it("an older request settling after reset and a replacement send cannot change the replacement (failure, discarded failure, confirmation)", async () => {
+        for (const how of ["fails", "discarded-fails", "confirmed"] as const) {
+            const gates: ReturnType<typeof deferred<string>>[] = []
+            const keys: string[] = []
+            const request = vi.fn(async (_b: Body, c: MutationRequestContext) => {
+                keys.push(c.idempotencyKey)
+                const gate = deferred<string>()
+                gates.push(gate)
+                return gate.promise
+            })
+            const { result, unmount } = renderHook(
+                () => useAuthoringMutation<Body, string>({ scopeKey: "a", request }),
+                { wrapper: wrapperWith() },
+            )
+            act(() => result.current.submit({ name: "old" }))
+            if (how === "discarded-fails") act(() => result.current.discard())
+            // A public reset while the old request is in flight lets a replacement start.
+            act(() => result.current.reset())
+            act(() => result.current.submit({ name: "new" }))
+            await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+            expect(result.current.status.kind).toBe("pending")
+            await act(async () => {
+                if (how === "confirmed") gates[0]!.resolve("old-done")
+                else gates[0]!.reject(new ApiRequestError(500, "internal_error", null))
+            })
+            // The replacement is still pending, shows no old error and holds no old receipt.
+            expect(result.current.status.kind).toBe("pending")
+            expect(result.current.withdrawn).toBe(false)
+            expect(result.current.receipt).toBeNull()
+            // Its own answer is the only one that settles it.
+            await act(async () => gates[1]!.resolve("new-done"))
+            await waitFor(() => expect(result.current.status.kind).toBe("success"))
+            expect(result.current.receipt).toBe("new-done")
+            unmount()
+        }
     })
 
     it("discard of an in-flight attempt, then a confirmed answer: still a confirmed write", async () => {
