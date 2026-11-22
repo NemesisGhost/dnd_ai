@@ -2,7 +2,7 @@
 
 **Status: assessment only.** It performs no merge, grants no owner, `actor-a`, persona, browser, assistive-technology (AT) or human acceptance, and waives or relocates no gate. PR #71 stays a draft and unmerged. Scripted results below are labelled as scripted; none is browser, AT or human evidence.
 
-**Assessed head.** Code and tests are as of `a7ef391de64931e1a4a24030b441c338045ea89c` (branch `phase15/completion`, base `main` at `bf23c7648601eb1b3ad479078f2762fe13fd460b`, unchanged since the branch point). Later commits on the branch are documentation only; CI for the final head is read from GitHub, not recorded here (a record of its own result would be a new head).
+**Assessed head.** This readiness review is for exact head `85ca60c660d57fb78cfbc464105d12471c529592` (branch `phase15/completion`, base `main` at `bf23c7648601eb1b3ad479078f2762fe13fd460b`, unchanged since the branch point). The previous reviewed head was `7f965c313d1c5a09e298b643e36c084783b04850`; the integration tests were added at `a7ef391de64931e1a4a24030b441c338045ea89c`. CI was verified against the exact final head below.
 
 ## 1. Governing requirements
 
@@ -32,7 +32,7 @@ The scripted cases below exercise the same *behaviors* the persona lists name, t
 
 ## 3. Scripted integration cases completed
 
-File: `tests/database/test_p15_c02_checkpoint_integration.py` (new; commit `a7ef391de64931e1a4a24030b441c338045ea89c`). Disposable database, real HTTP routes through the test client, every write made by a route (grant, revoke, release, create, deny, group, membership), never a seeded row. **Scripted evidence. Not browser, AT, human, persona-in-browser or owner evidence.**
+File: `tests/database/test_p15_c02_checkpoint_integration.py` (new; commit `a7ef391de64931e1a4a24030b441c338045ea89c`). Disposable database and real HTTP routes through the test client. The tested scenario actions (grant, revoke, release, create, deny, group, membership) use routes; fixture setup creates the character and baseline draft/release through factories/domain commands. **Scripted evidence. Not browser, AT, human, persona-in-browser or owner evidence.**
 
 | Case | Test | Result |
 |---|---|---|
@@ -71,10 +71,10 @@ File: `tests/database/test_p15_c02_checkpoint_integration.py` (new; commit `a7ef
 | S04 independently reviewed | S04 plan §11.4 and §11.6: S04-R1 closed; T01 and combined S04 PASS WITH VERIFICATION LIMITS; T02 PASS WITH VERIFICATION LIMITS; expiry-test correction PASS WITH VERIFICATION LIMITS | Met | None for the gate. DEF-016 stays open and separate. |
 | PR acceptance cases: S01 to S04 slice cases | Recorded as passing in each reviewed range (D1 to D17, R1 to R17; V1 to V30; L1 to L12, M1 to M21 and backend read cases; O1 to O16, R1 to R18, BD1 to BD9) | Met on the reviewed ranges | Reviewers' verification limits stand. |
 | PR acceptance cases: C02 integration behaviors (grant to next reveal; revoke; role end; denies across personas and sources) | Section 3: 6 scripted tests passed at `a7ef391`; 116 passed with the related existing suites | Met by scripted evidence | None for the gate. Browser persona versions remain a separate event. |
-| CI on the integration head through the merge checkout | `45001046629` passed (14 of 14 jobs) for `7f965c3`, synthetic merge `1d8e3d956b9333184fba835263c7b5ec0f34076d`. The records and test commits after it are new heads. | **Open for the final head** | Read CI for the final pushed head. Each later commit, documentation-only included, needs its own run. |
+| CI on the integration head through the merge checkout | Run `45028919030` is green on exact PR head `85ca60c660d57fb78cfbc464105d12471c529592`. Attempts 1 and 2 failed only in the portal job (different tests); attempt 3 reran and passed that portal job. The completed workflow checked out synthetic merge `949b1658bc1bb17968198bda719fc8f77c74c3ce`. | Met after successful rerun; not a first-attempt clean run | None for this gate. Preserve the failed attempts as separate evidence. |
 | Entry criteria `a4` merged, `r01` owner accepted | Register: recorded | Met | None. |
 | Base unchanged since branch point | `origin/main` is `bf23c7648601eb1b3ad479078f2762fe13fd460b`, the merge base | Met | If `main` moves, re-review affected ranges. |
-| Accounting for CI failures `44951144761`, `44965989830` (S04 §7.2); repetition of the focus failure | Section 4: the focus symptom recurred once locally in a different S01 test (full run at `a7ef391`, 5526/5527; the file alone 58/58) | Accounted for; **repeats under load; uncertainty preserved** | Owner judgment whether the open focus item is acceptable at merge; browser/AX check at the final head. |
+| Accounting for CI failures `44951144761`, `44965989830` (S04 §7.2); repetition of the focus failure | Section 4 and §7: symptom recurred in two S01 tests; test-ordering evidence is incomplete and no real-browser trace resolves whether the focus effect can arrive after user interaction | Accounted for; **unresolved verification limitation**, not an additional formal merge gate | Owner considers the documented risk in the merge decision. Final integrated browser/AX checks remain post-merge. |
 | Historical failures and test-only corrections | Plan §11.3a records run `44979295720` (both attempts failed), the diagnosis and the profile-copy test correction; the expiry-test correction passed independent review | Preserved | None. |
 | Owner decision to merge | Not made. OD-2 (S01 to S04 together) is recorded. | **Open** | Owner decides the merge. PR #71 is a draft until then. |
 | Persona browser checks at the final integrated head | None performed. | Separate event, not a merge gate | `browser` at `p15-integration`. |
@@ -82,10 +82,32 @@ File: `tests/database/test_p15_c02_checkpoint_integration.py` (new; commit `a7ef
 | Owner acceptance of scoped A | None granted. | Separate event | `actor-a`. |
 | Final Phase 15 verification and release acceptance | None. | Separate event | `p15-integration`, `release-review`, `p15-owner`. |
 
-## 6. Remaining merge blockers
+## 6. Remaining owner decision and verification items
 
-1. **CI on the final pushed head** of PR #71 (a documentation-only commit is its own head).
-2. **The owner's decision to merge**, and marking the PR ready, which is theirs and not done here.
-3. The focus-return item (two S01 tests, three observed failures across CI and the local full run) is **not** a stated gate; it is an open, accounted-for uncertainty the owner should weigh, with a diagnosis step (is `usePageArrival` able to take focus after a user interaction?) that has not been done. I do not recommend dismissing it.
+1. No technical merge gate remains open in this assessment: current exact-head CI passed after the portal-only rerun. Any later commit creates a new head and needs its own CI.
+2. **The owner's decision to merge and, if they choose, mark the PR ready** are pending and were not made here.
+3. The focus-return item (two S01 tests, three observed failures across CI and the local full run) is **not** a stated gate; it remains an open, accounted-for uncertainty the owner should weigh. No browser trace establishes whether `usePageArrival` can take focus after a real user interaction.
 
 Everything else the gate lists is met. Browser/AX, `actor-a` and owner acceptance are separate and unperformed.
+
+## 7. Final independent checkpoint-readiness re-review (2026-11-22)
+
+**Boundary and verdict.** Reviewed the new integration coverage and cross-slice readiness at `85ca60c660d57fb78cfbc464105d12471c529592`, following the previous review at `7f965c313d1c5a09e298b643e36c084783b04850`. The intervening implementation evidence is the test-only commit `a7ef391de64931e1a4a24030b441c338045ea89c`; subsequent commits in this range are readiness records. **PASS WITH VERIFICATION LIMITS for checkpoint merge-gate evidence; owner merge decision remains pending.** PR #71 remains draft and unmerged. The recurring focus symptom remains unresolved as described in §4; this review neither dismisses it nor classifies it as an established product defect. It is accounted for under S04 §7.2, not an additional formal gate.
+
+**Integration assertions.** Independently inspected all six tests in `tests/database/test_p15_c02_checkpoint_integration.py`. They exercise public HTTP routes for the tested operations and assert effective authorization transitions across owner, delegated GM, assistant/custom manager, editor, revealed-to player and group-member contexts. Assertions cover grant followed by the GM's next authorized reveal, revoke followed by refusal, role loss and refusal to regrant, edit-only versus whole-character denies, member/group source overlap and revocation, group membership removal/re-add, self-deny removal, and player non-disclosure. Fixture setup directly creates the character and baseline draft/release; it does not seed the authorization transitions under test. This is API integration evidence, not a real-browser persona run or human/AT evidence.
+
+**Local verification.** PowerShell commands and outcomes:
+
+| Command | Result |
+|---|---|
+| `uv run pytest -q tests/database/test_p15_c02_checkpoint_integration.py` | 6 passed; one Starlette/httpx deprecation warning |
+| `uv run pytest -q tests/database/test_p15_c02_checkpoint_integration.py tests/database/test_character_denies_and_reveal_authority.py tests/database/test_r01_s5e6_reveal_delegation_routes.py tests/database/test_character_revelations.py` | 116 passed; same deprecation warning |
+| From `portal`: `npm test -- src/pages/CharacterPublicProfilePage.test.tsx src/hooks/usePageArrival.test.tsx` | 2 files, 62 tests passed (jsdom; not browser/AT evidence) |
+
+The prior full local portal run remains recorded as 440 files/5526 tests passed and one S01 focus failure; the isolated 58/58 run is not described as a full-suite pass. No new full-suite run was needed for this test-only readiness review.
+
+**Exact-head CI.** GitHub run `45028919030` completed successfully for exact PR head `85ca60c660d57fb78cfbc464105d12471c529592`. Attempts 1 and 2 each failed only the Portal tests/lint/build job, with different failures: attempt 1 failed `ItemDefinitionPages.save.test.tsx` (“re-sends an unresolved attempt by Save or Retry with the same key, body and version”; expected two POSTs, observed one); attempt 2 failed `OrganizationMembersReader.test.tsx` while waiting for “Eld”. The other 13 jobs, including all eight database shards, passed in attempt 1 and were not rerun. Attempt 3 reran only the portal job, which passed; it did not rerun those 13 jobs. Completed workflow logs identify its checkout as synthetic merge `949b1658bc1bb17968198bda719fc8f77c74c3ce` (merge of the PR head into `bf23c7648601eb1b3ad479078f2762fe13fd460b`). This is CI evidence for the PR integration checkout, not an actual merge of PR #71 and not a first-attempt clean run.
+
+**Focus symptom disposition.** The original Cancel failure and the later release-completion failure share the observed heading-versus-Release focus result. The natural-load probe (2 of 36) demonstrates a test synchronization window before page-arrival focus settles, supporting a test-ordering contribution. But the later failure occurred after dialog completion and the release region appeared, while `usePageArrival` has an unguarded heading focus on first ready; logs do not show whether that effect was delayed or re-fired, and no authenticated real-browser trace records focus ownership/timing. Therefore evidence establishes neither a product defect nor a test-only defect. This remains an unresolved verification limitation; green isolated runs and CI do not resolve it. No rubric-graded implementation finding is established, so no correction brief is issued.
+
+**Readiness.** The governing merge conditions are met on this reviewed head: S01–S04 independent reviews and slice acceptance cases are recorded, C02's cross-slice API cases pass, entry criteria are recorded, and exact-head CI completed successfully after the portal-only rerun. **The checkpoint is ready for the owner's merge decision, with the focus uncertainty explicitly available for that decision.** PR #71 is still draft; this review does not mark it ready or merge it. `actor-a`/owner acceptance and final integrated-head browser, AX, actual zoom, screen-reader and human checks remain separate post-merge obligations and are still pending.
