@@ -300,6 +300,8 @@ describe("O11 to O14: refusals and the unknown outcome", () => {
         expect(await within(card).findByText("That character or member is no longer available for a denial.")).toBeInTheDocument()
         expect(within(card).getByRole("button", { name: "Refresh access list" })).toBeInTheDocument()
         expect(within(card).queryByRole("button", { name: "Try again" })).not.toBeInTheDocument()
+        // S04-R1: no retry means the form cannot send it again, not only that no button says so.
+        expect(addButton(card)).toBeDisabled()
     })
 
     it("O13: for a group the 404 names the group", async () => {
@@ -308,6 +310,121 @@ describe("O11 to O14: refusals and the unknown outcome", () => {
         await fillDeny(card)
         fireEvent.click(addButton(card))
         expect(await within(card).findByText("That character or group is no longer available for a denial.")).toBeInTheDocument()
+        expect(addButton(card)).toBeDisabled()
+    })
+
+    // S04-R1: after a definitive 404 the same form cannot send the refused attempt again, for a member or a group.
+    it.each([
+        ["a member", "Pip Player"],
+        ["a group", "Night Watch"],
+    ])("O13 (S04-R1): after a 404 for %s Add is disabled and a repeated submit sends no second POST", async (_kind, name) => {
+        const { server } = setup({ post: () => ({ status: 404, body: {} }) })
+        const card = await cardOf(name)
+        await fillDeny(card)
+        fireEvent.click(addButton(card))
+        await within(card).findByText(/is no longer available for a denial\./)
+        expect(posts(server)).toHaveLength(1)
+        expect(addButton(card)).toBeDisabled()
+        // A click on the disabled button, and a submit of the form itself (Enter in a field), both send nothing.
+        fireEvent.click(addButton(card))
+        fireEvent.submit(addButton(card).closest("form") as HTMLFormElement)
+        await act(async () => {
+            await Promise.resolve()
+        })
+        expect(posts(server)).toHaveLength(1)
+        // Changing the selections does not unlock it either: only a refresh or cancelling does.
+        fireEvent.change(characterSelect(card), { target: { value: BRAM } })
+        fireEvent.change(permissionSelect(card), { target: { value: "canon.edit" } })
+        expect(addButton(card)).toBeDisabled()
+        fireEvent.submit(addButton(card).closest("form") as HTMLFormElement)
+        expect(posts(server)).toHaveLength(1)
+    })
+
+    it.each([
+        ["a member", "Pip Player"],
+        ["a group", "Night Watch"],
+    ])("O13 (S04-R1): after a 404 for %s a successful refresh gives a fresh form that can send a new attempt", async (_kind, name) => {
+        let refused = true
+        const { server } = setup({
+            post: () => (refused ? { status: 404, body: {} } : { status: 201, body: { resource_grant_id: "new-grant" } }),
+        })
+        const card = await cardOf(name)
+        await fillDeny(card)
+        fireEvent.click(addButton(card))
+        await within(card).findByText(/is no longer available for a denial\./)
+        expect(addButton(card)).toBeDisabled()
+        const before = reads(server).length
+        fireEvent.click(within(card).getByRole("button", { name: "Refresh access list" }))
+        await vi.waitFor(() => expect(reads(server).length).toBeGreaterThan(before))
+        expect(posts(server)).toHaveLength(1)
+        // The list re-read unmounts the refused form: the card comes back with the add trigger and nothing carried.
+        const fresh = await cardOf(name)
+        refused = false
+        await fillDeny(fresh)
+        expect(addButton(fresh)).toBeEnabled()
+        fireEvent.click(addButton(fresh))
+        await vi.waitFor(() => expect(posts(server)).toHaveLength(2))
+        expect(posts(server)[1]!.headers["Idempotency-Key"]).not.toBe(posts(server)[0]!.headers["Idempotency-Key"])
+    })
+
+    it.each([
+        ["a member", "Pip Player"],
+        ["a group", "Night Watch"],
+    ])("O13 (S04-R1): after a 404 for %s a failed refresh does not unlock the refused attempt", async (_kind, name) => {
+        const { server } = setup({ post: () => ({ status: 404, body: {} }) })
+        const card = await cardOf(name)
+        await fillDeny(card)
+        fireEvent.click(addButton(card))
+        await within(card).findByText(/is no longer available for a denial\./)
+        // The re-read now fails.
+        server.on("GET", "/campaigns/c1/access-overview", { status: 500, body: {} })
+        fireEvent.click(within(card).getByRole("button", { name: "Refresh access list" }))
+        expect(await screen.findByRole("heading", { name: "Access information unavailable" })).toBeInTheDocument()
+        // No form of this attempt is left to submit, and nothing was sent.
+        expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument()
+        expect(posts(server)).toHaveLength(1)
+    })
+
+    it.each([
+        ["a member", "Pip Player"],
+        ["a group", "Night Watch"],
+    ])("O13 (S04-R1): after a 404 for %s Cancel discards the attempt and reopening follows fresh-selection rules", async (_kind, name) => {
+        const { server } = setup({ post: () => ({ status: 404, body: {} }) })
+        const card = await cardOf(name)
+        await fillDeny(card)
+        fireEvent.click(addButton(card))
+        await within(card).findByText(/is no longer available for a denial\./)
+        fireEvent.click(within(card).getByRole("button", { name: "Cancel" }))
+        await chooseDenyKind(card)
+        // Nothing chosen, nothing confirmed, no leftover refusal text; Add stays disabled until filled in.
+        expect(characterSelect(card)).toHaveValue("")
+        expect(addButton(card)).toBeDisabled()
+        expect(within(card).queryByText(/is no longer available for a denial\./)).not.toBeInTheDocument()
+        fireEvent.change(characterSelect(card), { target: { value: ARIA } })
+        fireEvent.change(permissionSelect(card), { target: { value: "canon.edit" } })
+        fireEvent.click(confirmBox(card))
+        expect(addButton(card)).toBeEnabled()
+        fireEvent.click(addButton(card))
+        await vi.waitFor(() => expect(posts(server)).toHaveLength(2))
+    })
+
+    it.each([
+        ["a member", "Pip Player"],
+        ["a group", "Night Watch"],
+    ])("O13 (S04-R1): a network failure for %s still retries with the same key and body", async (_kind, name) => {
+        let n = 0
+        const { server } = setup({
+            post: () => (++n === 1 ? { status: 500, body: {} } : { status: 201, body: { resource_grant_id: "g" } }),
+        })
+        const card = await cardOf(name)
+        await fillDeny(card)
+        fireEvent.click(addButton(card))
+        await within(card).findByText(/We couldn't confirm whether the denial was added/)
+        expect(within(card).getByRole("button", { name: "Try again" })).toBeEnabled()
+        fireEvent.click(within(card).getByRole("button", { name: "Try again" }))
+        await vi.waitFor(() => expect(posts(server)).toHaveLength(2))
+        expect(posts(server)[1]!.headers["Idempotency-Key"]).toBe(posts(server)[0]!.headers["Idempotency-Key"])
+        expect(posts(server)[1]!.body).toEqual(posts(server)[0]!.body)
     })
 
     it("O14: a 403 says access can no longer be managed and offers no retry (the in-place session re-read is asserted by R13, R18 and the hook tests)", async () => {

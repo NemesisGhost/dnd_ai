@@ -191,8 +191,12 @@ export function AddGroupResourceGrant({
         )
     }
 
+    // A definitive 404 on a character deny (the character or grantee is gone) ends this attempt: the form
+    // cannot send it again. Only Cancel (then reopening) or a re-read of the list, which unmounts the
+    // form and so starts it afresh, clears this; a failed re-read leaves it locked (O13, S04-R1).
+    const attemptRefused = isCharacterDeny && status.kind === "denied" && failureStatus === 404
     const canSubmit = isCharacterDeny
-        ? denyCharacterId !== "" && denyChosen && denyConfirmed
+        ? denyCharacterId !== "" && denyChosen && denyConfirmed && !attemptRefused
         : selectedTargetType !== "" &&
           selectedResourceId !== "" &&
           selectedCapabilityCode !== "" &&
