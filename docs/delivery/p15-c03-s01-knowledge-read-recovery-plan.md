@@ -397,7 +397,7 @@ Baseline `dc14b4bb3c9b82b566c1187047a196a778a42af1` (HEAD and `origin/phase15/co
 
 #### T02 (DV-5 to DV-9)
 
-- **Commit:** `P15-C03-S01-T02: retry only outstanding Knowledge reads across refusal, party change, navigation and superseded answers`, a child of `9d43579`. Its SHA, and the CI position for it, are in the final record line below (a commit cannot name its own SHA).
+- **Commit:** `P15-C03-S01-T02: retry only outstanding Knowledge reads across refusal, party change, navigation and superseded answers`, a child of `9d43579`. SHA `e550c8b28366dbf6dd6fbddd7c5ec8aa14fe9a4f` (`e550c8b`), recorded by a docs-only follow-up commit because a commit cannot name its own SHA. Pushed to `origin/phase15/completion`.
 - **What changed (portal only):**
   - the tracker gains `pending` (superseded, waiting for the newer read), `closed` (a refusal), `observe`, `outstanding`, a scope token that makes a late answer from another record, perspective or user settle nothing, and the claim save's own announcements (done once, or "saved, but" once), none after unmount;
   - `useKnowledgeDetail.refresh` returns a Knowledge-local `closed` for a 403/404 (the shared `RefetchOutcome` is unchanged), rechecks a party-scoped 404 against the bootstrap once per refresh, and reports `refusedAfterWrite`;
@@ -425,4 +425,5 @@ Baseline `dc14b4bb3c9b82b566c1187047a196a778a42af1` (HEAD and `origin/phase15/co
   - a lifecycle step is announced by the shared lifecycle panel: when its authoring read is refused, or its detail read is superseded, the panel still says "saved, but" before the step's done message, because the panel reads the combined outcome and is not changed here;
   - the T01 limit on a draft typed back to an old value stays;
   - the C02 focus uncertainty (`usePageArrival`) is not touched.
-- **CI for the exact head:** none runs for a push to this branch (see T01). **CI pending checkpoint PR.**
+- **CI for the exact head:** none ran for `e550c8b` (`scripts/wait_for_ci.py --sha e550c8b` found no workflow run; `ci.yml` runs only for pushes to `main` and pull requests to `main`). **CI pending checkpoint PR.** No older run is cited.
+- **Review ranges for Luna:** T01 is `dc14b4b..9d43579`; T02 is `9d43579..e550c8b`; combined S01 is `dc14b4b..e550c8b`. The final head is the docs-only record commit that follows `e550c8b` (it changes no source).
