@@ -47,6 +47,7 @@ from tests.database.test_character_public_profile_api import (
     release,
     release_rows,
     save,
+    url,
 )
 from tests.database.test_character_public_profile_grant_denies import post_grant
 from tests.database.test_character_public_profile_restrictions import npc  # noqa: F401 - fixture
@@ -840,39 +841,104 @@ def test_r01_a_role_that_expires_during_the_copys_lock_wait_must_refuse_the_copy
     transaction's *start*, so the early checks cannot see a lapse during the wait. Since R01 S2 the
     route's plan re-judges the decision after the last statement, in one snapshot at a fresh
     instant, so the copy is refused and nothing is written. This test was a strict `xfail` (observed:
-    201) until S2 migrated the route; its assertions are unchanged."""
-    with postgres_engine.begin() as connection:
-        connection.execute(
-            text(
-                "UPDATE security.membership_roles SET expires_at = now() + interval '3 seconds' "
-                "WHERE membership_role_id = :r"
-            ),
-            {"r": m.gm_role},
-        )
-    with postgres_engine.connect() as holder:
-        transaction = holder.begin()
-        holder.execute(
-            text("SELECT 1 FROM core.entities WHERE entity_id = :e FOR UPDATE"), {"e": npc}
-        )
-        pid = int(holder.execute(text("SELECT pg_backend_pid()")).scalar_one())
-        copying = run_in_thread("copy", copier(client_factory, g, npc, m.gm_user_id))
-        wait_until_pid_blocks(postgres_engine, pid)  # past the role check, waiting on the entity
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            with postgres_engine.connect() as probe:
-                if probe.execute(
-                    text(
-                        "SELECT expires_at <= now() FROM security.membership_roles "
-                        "WHERE membership_role_id = :r"
-                    ),
-                    {"r": m.gm_role},
-                ).scalar_one():
-                    break
-            threading.Event().wait(0.2)
-        assert not copying.finished()
-        transaction.commit()
+    201) until S2 migrated the route; its assertions are unchanged.
+
+    The role's expiry is armed *before* the request starts and cannot be moved afterwards: the
+    request takes the caller's role rows `FOR SHARE` before it waits, and an UPDATE of
+    `expires_at` would itself wait behind that lock. So the expiry is a wall-clock deadline, and the
+    request has to reach the entity lock before it. Everything that is not the request's own work
+    is therefore done first, outside the window: the app and its client are built and entered, and
+    the route is warmed with a read, before the expiry is armed (building the app inside the
+    copying thread after arming it let CI's start-up cost use the three seconds up, so the role
+    lapsed before the request ever blocked and it was refused early). If the window is nevertheless
+    missed, the failure says so instead of reporting a bare missing wait."""
+    client = client_factory(m.gm_user_id)
+    with client:
+        # Outside the window: the route's first-use cost (imports, pool connection, validation).
+        read_pp = client.get(url(g, npc))
+        assert read_pp.status_code in (200, 404), read_pp.text
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE security.membership_roles "
+                    "SET expires_at = clock_timestamp() + interval '3 seconds' "
+                    "WHERE membership_role_id = :r"
+                ),
+                {"r": m.gm_role},
+            )
+        with postgres_engine.connect() as holder:
+            transaction = holder.begin()
+            holder.execute(
+                text("SELECT 1 FROM core.entities WHERE entity_id = :e FOR UPDATE"), {"e": npc}
+            )
+            pid = int(holder.execute(text("SELECT pg_backend_pid()")).scalar_one())
+            copying = run_in_thread("copy", copier(_entered(client), g, npc, m.gm_user_id))
+            try:
+                # past the role check, waiting on the entity
+                wait_until_pid_blocks(postgres_engine, pid)
+            except AssertionError:
+                with postgres_engine.connect() as probe:
+                    lapsed = probe.execute(
+                        text(
+                            "SELECT clock_timestamp() > expires_at FROM security.membership_roles "
+                            "WHERE membership_role_id = :r"
+                        ),
+                        {"r": m.gm_role},
+                    ).scalar_one()
+                if lapsed:
+                    transaction.rollback()
+                    pytest.fail(
+                        "the role lapsed before the copy reached the entity lock: the request's "
+                        "own latency exceeded the 3 s expiry window, so no lock wait was "
+                        "observed. This is not an authorization result."
+                    )
+                transaction.rollback()
+                raise
+            _expire_then_release(postgres_engine, m, copying, transaction)
     response = copying.wait("copy")
-    with postgres_engine.connect() as connection:
+    _assert_refused_after_expiry(postgres_engine, g, m, npc, response)
+
+
+class _entered:  # noqa: N801 - a context-manager adapter, used like a factory result
+    """An already-entered client, handed to `copy_pp` as `factory(user)` so the thread does not
+    build (and start) a second app inside the expiry window."""
+
+    def __init__(self, client: TestClient) -> None:
+        self._client = client
+
+    def __call__(self, _user: uuid.UUID) -> "_entered":
+        return self
+
+    def __enter__(self) -> TestClient:
+        return self._client
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def _expire_then_release(engine: Engine, m: Members, copying: Any, transaction: Any) -> None:
+    """The request is parked on the entity: let the role lapse, check the request is still parked,
+    then release it."""
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        with engine.connect() as probe:
+            if probe.execute(
+                text(
+                    "SELECT expires_at <= clock_timestamp() FROM security.membership_roles "
+                    "WHERE membership_role_id = :r"
+                ),
+                {"r": m.gm_role},
+            ).scalar_one():
+                break
+        threading.Event().wait(0.2)
+    assert not copying.finished()
+    transaction.commit()
+
+
+def _assert_refused_after_expiry(
+    engine: Engine, g: Gate, m: Members, npc: uuid.UUID, response: Any
+) -> None:
+    with engine.connect() as connection:
         expired = connection.execute(
             text(
                 "SELECT expires_at <= now() FROM security.membership_roles "
@@ -882,4 +948,4 @@ def test_r01_a_role_that_expires_during_the_copys_lock_wait_must_refuse_the_copy
         ).scalar_one()
     assert expired, "the role must have lapsed before the copy committed"
     assert is_refusal(response), (code(response), "the copy committed after the role expired")
-    assert draft(postgres_engine, g, npc) is None
+    assert draft(engine, g, npc) is None
