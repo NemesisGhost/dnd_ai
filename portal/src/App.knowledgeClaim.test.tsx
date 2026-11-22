@@ -1871,4 +1871,326 @@ describe("selection ownership on the real claim page", () => {
       expect(router.state.historyAction).toBe("REPLACE")
     })
   })
+
+  describe("P15-C03-S01 T01: each read-back is tracked separately for the save that owns it", () => {
+    const FAIL = { status: 500, body: { error: { code: "internal_error", message: "m", correlation_id: "c" } } }
+    const SAVED_BUT = "Saved, but the latest data could not be loaded."
+    const DONE = "Knowledge claim saved"
+    const NOTICE = /Claim saved\. The latest claim could not be loaded/
+
+    // Every distinct announcement the shared live region makes, in order (one per commit).
+    function recordAnnouncements() {
+      const all: string[] = []
+      const region = screen.getByTestId("authoring-announcer")
+      const observer = new MutationObserver(() => {
+        const text = region.textContent ?? ""
+        if (text !== "") all.push(text)
+      })
+      observer.observe(region, { childList: true, subtree: true, characterData: true })
+      return { all, count: (text: string) => all.filter((heard) => heard === text).length, stop: () => observer.disconnect() }
+    }
+
+    // A claim save whose authoring and/or detail read-back fails.
+    function claimSaveWith(failing: { authoring?: boolean; detail?: boolean }) {
+      const rendered = setup()
+      server.on("POST", UPDATE, () => {
+        current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+        if (failing.authoring) server.on("GET", VIEW_PATH, FAIL)
+        if (failing.detail) server.on("GET", DETAIL, FAIL)
+        return { body: RECEIPT }
+      })
+      return rendered
+    }
+    const recoverAuthoring = () => server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+    const recoverDetail = () => server.on("GET", DETAIL, () => ({ body: current.detail }))
+    const saveTruth = async () => {
+      await claimBox()
+      fireEvent.change(screen.getByRole("combobox", { name: /Truth/ }), { target: { value: "false" } })
+      fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
+    }
+    const saveButton = () => screen.getByRole("button", { name: "Save claim" })
+    const loadLatest = () => fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+    const noticeGone = () => waitFor(() => expect(screen.queryByText(/The latest claim could not be loaded/)).toBeNull())
+
+    // A lifecycle step (Submit for review) whose reads are all answered by what the handlers say now.
+    function submitStepSetup(onPost?: () => void) {
+      let submitted = false
+      server.on("GET", LIFECYCLE, () => ({
+        body: submitted
+          ? lifecycle({ canon_status: "proposed", row_version: 3, available_actions: ["approve", "return_to_draft", "reject"] })
+          : lifecycle(),
+      }))
+      server.on("POST", `${LIFECYCLE}/submit-for-review`, () => {
+        submitted = true
+        onPost?.()
+        return { body: { entity_id: "k1", canon_status: "proposed", row_version: 3, changed: true } }
+      })
+    }
+    const clickSubmitForReview = async () => {
+      fireEvent.click(stageLink(2))
+      fireEvent.click(screen.getByRole("link", { name: "Publication" }))
+      fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+    }
+
+    it("A1: a failed detail read-back names the details, keeps Save available, and sends one POST", async () => {
+      claimSaveWith({ detail: true })
+      const heard = recordAnnouncements()
+      await saveTruth()
+      expect(await screen.findByText(NOTICE)).toBeInTheDocument()
+      expect(screen.getByText(/Out of date: the claim's details\./)).toBeInTheDocument()
+      expect(screen.queryByText(/editor and version/)).toBeNull()
+      fireEvent.change(await claimBox(), { target: { value: "A newer edit" } })
+      expect(saveButton()).toBeEnabled()
+      expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+      expect(heard.count(SAVED_BUT)).toBe(1)
+      expect(heard.count(DONE)).toBe(0)
+      heard.stop()
+    })
+
+    it("A2: a new save after a failed detail read-back carries the recovered authoring row version", async () => {
+      claimSaveWith({ detail: true })
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      fireEvent.change(await claimBox(), { target: { value: "A newer edit" } })
+      fireEvent.click(saveButton())
+      await waitFor(() => expect(server.callsTo("POST", UPDATE)).toHaveLength(2))
+      expect(server.callsTo("POST", UPDATE)[1]!.body).toMatchObject({ expected_row_version: 2, statement: "A newer edit" })
+    })
+
+    it("A3: a failed authoring read-back names the editor and version, holds Save and keeps the typed edit", async () => {
+      claimSaveWith({ authoring: true })
+      await saveTruth()
+      expect(await screen.findByText(NOTICE)).toBeInTheDocument()
+      expect(screen.getByText(/Out of date: the claim's editor and version\./)).toBeInTheDocument()
+      fireEvent.change(await claimBox(), { target: { value: "Typed meanwhile" } })
+      expect(saveButton()).toBeDisabled()
+      expect(screen.getByText("Unsaved changes to the claim")).toBeInTheDocument()
+      expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+    })
+
+    it("A4: both read-backs failing names both parts and holds Save", async () => {
+      claimSaveWith({ authoring: true, detail: true })
+      await saveTruth()
+      expect(await screen.findByText(NOTICE)).toBeInTheDocument()
+      expect(screen.getByText(/Out of date: the claim's editor and version; the claim's details\./)).toBeInTheDocument()
+      fireEvent.change(await claimBox(), { target: { value: "Typed meanwhile" } })
+      expect(saveButton()).toBeDisabled()
+    })
+
+    it("A5: a recovered detail read announces the save as done exactly once and sends no second POST", async () => {
+      claimSaveWith({ detail: true })
+      const heard = recordAnnouncements()
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      recoverDetail()
+      loadLatest()
+      await noticeGone()
+      await waitFor(() => expect(heard.count(DONE)).toBe(1))
+      // Nothing else makes it a second time.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(heard.count(DONE)).toBe(1)
+      expect(heard.count(SAVED_BUT)).toBe(1)
+      expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+      heard.stop()
+    })
+
+    it("A6: a recovered authoring read enables Save, announces done once and keeps the edit typed meanwhile", async () => {
+      claimSaveWith({ authoring: true })
+      const heard = recordAnnouncements()
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      fireEvent.change(await claimBox(), { target: { value: "Typed meanwhile" } })
+      expect(saveButton()).toBeDisabled()
+      recoverAuthoring()
+      loadLatest()
+      await noticeGone()
+      expect(await claimBox()).toHaveValue("Typed meanwhile")
+      expect(saveButton()).toBeEnabled()
+      await waitFor(() => expect(heard.count(DONE)).toBe(1))
+      heard.stop()
+    })
+
+    it("A7: the authoring read recovering alone enables Save, names only the details and does not announce done", async () => {
+      claimSaveWith({ authoring: true, detail: true })
+      const heard = recordAnnouncements()
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      fireEvent.change(await claimBox(), { target: { value: "Typed meanwhile" } })
+      recoverAuthoring()
+      loadLatest()
+      await waitFor(() => expect(saveButton()).toBeEnabled())
+      expect(screen.getByText(/Out of date: the claim's details\./)).toBeInTheDocument()
+      expect(screen.queryByText(/editor and version/)).toBeNull()
+      expect(heard.count(DONE)).toBe(0)
+      heard.stop()
+    })
+
+    it("A8: a lifecycle step whose detail read fails names the details and announces its own done once on recovery", async () => {
+      submitStepSetup(() => server.on("GET", DETAIL, FAIL))
+      setup()
+      await claimBox()
+      const heard = recordAnnouncements()
+      await clickSubmitForReview()
+      expect(await screen.findByText(/Saved\. The latest claim could not be loaded/)).toBeInTheDocument()
+      expect(screen.getByText(/Out of date: the claim's details\./)).toBeInTheDocument()
+      expect(heard.count("Submitted for review")).toBe(0)
+      recoverDetail()
+      loadLatest()
+      await noticeGone()
+      await waitFor(() => expect(heard.count("Submitted for review")).toBe(1))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(heard.count("Submitted for review")).toBe(1)
+      expect(server.callsTo("POST", /./)).toHaveLength(1)
+      heard.stop()
+    })
+
+    it("A9: a lifecycle step whose authoring read fails holds claim Save while steps come from the fresh lifecycle read", async () => {
+      submitStepSetup(() => server.on("GET", VIEW_PATH, FAIL))
+      setup()
+      await claimBox()
+      await clickSubmitForReview()
+      expect(await screen.findByText(/Saved\. The latest claim could not be loaded/)).toBeInTheDocument()
+      expect(screen.getByText(/Out of date: the claim's editor and version\./)).toBeInTheDocument()
+      // Steps are offered from the lifecycle read that worked.
+      expect(await screen.findByRole("button", { name: "Approve" })).toBeInTheDocument()
+      fireEvent.click(stageLink(1))
+      fireEvent.change(await claimBox(), { target: { value: "Typed meanwhile" } })
+      expect(saveButton()).toBeDisabled()
+    })
+
+    it("A10: text typed while the save is pending survives the confirmation as an unsaved draft", async () => {
+      setup()
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      server.on("POST", UPDATE, async () => {
+        await gate
+        current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+        return { body: RECEIPT }
+      })
+      await saveTruth()
+      fireEvent.change(await claimBox(), { target: { value: "Newer text" } })
+      release()
+      await waitFor(() => expect(screen.getByText("Unsaved changes to the claim")).toBeInTheDocument())
+      await waitFor(() => expect(server.callsTo("GET", VIEW_PATH).length).toBeGreaterThan(1))
+      await waitFor(() => expect(screen.getByRole("combobox", { name: /Truth/ })).toHaveValue("false"))
+      expect(await claimBox()).toHaveValue("Newer text")
+      expect(screen.getByText("Unsaved changes to the claim")).toBeInTheDocument()
+      expect(saveButton()).toBeEnabled()
+      // What was saved now equals the server: discarding returns to it, not to the old claim.
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }))
+      expect(await claimBox()).toHaveValue("The duke is a vampire.")
+      expect(screen.getByRole("combobox", { name: /Truth/ })).toHaveValue("false")
+      expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+    })
+
+    it("A11: text typed while the read-back is in flight survives it as an unsaved draft", async () => {
+      setup()
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      server.on("POST", UPDATE, () => {
+        current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+        server.on("GET", VIEW_PATH, async () => {
+          await gate
+          return { body: current.view }
+        })
+        return { body: RECEIPT }
+      })
+      await saveTruth()
+      await waitFor(() => expect(server.callsTo("GET", VIEW_PATH).length).toBeGreaterThan(1))
+      fireEvent.change(await claimBox(), { target: { value: "Newer text" } })
+      release()
+      await waitFor(() => expect(screen.getByRole("combobox", { name: /Truth/ })).toHaveValue("false"))
+      await waitFor(() => expect(saveButton()).toBeEnabled())
+      expect(await claimBox()).toHaveValue("Newer text")
+      expect(screen.getByText("Unsaved changes to the claim")).toBeInTheDocument()
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }))
+      expect(await claimBox()).toHaveValue("The duke is a vampire.")
+      expect(screen.getByRole("combobox", { name: /Truth/ })).toHaveValue("false")
+    })
+
+    describe("A12: the change note", () => {
+      async function publishedEditWithNote(afterSubmit?: () => void) {
+        setupPublished()
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        server.on("POST", UPDATE, async () => {
+          await gate
+          current = { detail: detail({ statement: "Edited" }), view: view({ statement: "Edited", canon_status: "canon", row_version: 2 }) }
+          return { body: RECEIPT }
+        })
+        await claimBox()
+        await screen.findByRole("textbox", { name: /Change note/ })
+        fireEvent.change(screen.getByRole("textbox", { name: /^Claim/ }), { target: { value: "Edited" } })
+        fireEvent.change(screen.getByRole("textbox", { name: /Change note/ }), { target: { value: "typo" } })
+        fireEvent.click(saveButton())
+        const dialog = await screen.findByRole("dialog", { name: "Save changes to a published claim?" })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }))
+        await waitFor(() => expect(server.callsTo("POST", UPDATE)).toHaveLength(1))
+        afterSubmit?.()
+        release()
+      }
+
+      it("is cleared when it still equals the confirmed note", async () => {
+        await publishedEditWithNote()
+        await waitFor(() => expect(screen.getByRole("textbox", { name: /^Claim/ })).toHaveValue("Edited"))
+        await waitFor(() => expect(screen.getByRole("textbox", { name: /Change note/ })).toHaveValue(""))
+        expect(screen.getByText("Claim saved")).toBeInTheDocument()
+      })
+
+      it("is kept when it was edited after the submit", async () => {
+        await publishedEditWithNote(() =>
+          fireEvent.change(screen.getByRole("textbox", { name: /Change note/ }), { target: { value: "typo, again" } }),
+        )
+        await waitFor(() => expect(server.callsTo("GET", VIEW_PATH).length).toBeGreaterThan(1))
+        await waitFor(() => expect(screen.getByRole("textbox", { name: /^Claim/ })).toHaveValue("Edited"))
+        await waitFor(() => expect(saveButton()).toBeEnabled())
+        expect(screen.getByRole("textbox", { name: /Change note/ })).toHaveValue("typo, again")
+        expect(screen.getByText("Unsaved changes to the claim")).toBeInTheDocument()
+      })
+    })
+
+    it("A13: an authoring read this episode did not start recovers it", async () => {
+      submitStepSetup()
+      claimSaveWith({ authoring: true })
+      const heard = recordAnnouncements()
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      expect(heard.count(DONE)).toBe(0)
+      // The lifecycle step's own read-back reads the authoring view again, and it now works.
+      recoverAuthoring()
+      await clickSubmitForReview()
+      await noticeGone()
+      await waitFor(() => expect(heard.count(DONE)).toBe(1))
+      fireEvent.click(stageLink(1))
+      fireEvent.change(await claimBox(), { target: { value: "Typed after" } })
+      expect(saveButton()).toBeEnabled()
+      expect(heard.count(DONE)).toBe(1)
+      heard.stop()
+    })
+
+    it("A14: two episodes in one mount each announce done once", async () => {
+      submitStepSetup()
+      claimSaveWith({ detail: true })
+      const heard = recordAnnouncements()
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      // The step's reads all work, including the detail the claim save could not read.
+      recoverDetail()
+      await clickSubmitForReview()
+      await noticeGone()
+      await waitFor(() => expect(heard.count("Submitted for review")).toBe(1))
+      await waitFor(() => expect(heard.count(DONE)).toBe(1))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(heard.count("Submitted for review")).toBe(1)
+      expect(heard.count(DONE)).toBe(1)
+      expect(server.callsTo("POST", /./)).toHaveLength(2)
+      heard.stop()
+    })
+  })
 })

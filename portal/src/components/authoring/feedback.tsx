@@ -238,6 +238,8 @@ interface SavedRefreshFailedNoticeProps {
     retrying?: boolean
     // Text only, not a live region: another notice is already announcing the failed read.
     quiet?: boolean
+    // Which parts of the page are behind, when the page can tell (one read out of several failed).
+    behind?: string
 }
 
 // Shown when the server confirmed a write but re-reading afterwards failed. The change is saved;
@@ -249,6 +251,7 @@ export function SavedRefreshFailedNotice({
     onRetry,
     retrying = false,
     quiet = false,
+    behind,
 }: SavedRefreshFailedNoticeProps) {
     return (
         <div className="authoring-message authoring-message--warning" role={quiet ? undefined : "status"}>
@@ -257,6 +260,7 @@ export function SavedRefreshFailedNotice({
                 <p>
                     {done} The latest {what} could not be loaded, so what is shown may be out of date.
                 </p>
+                {behind !== undefined ? <p>{behind}</p> : null}
                 {onRetry !== undefined ? (
                     <button
                         type="button"

@@ -367,12 +367,34 @@ The reviewer re-runs §7.1 and the probes. They check §2.4 for regressions and 
 
 The verdict covers S01 only. C03's merge is judged separately (§7.2).
 
-### 11.3 Implementation record (Sonnet; pending)
+### 11.3 Implementation record (Sonnet)
 
-Pending. Sonnet records, for each task:
-- the SHA;
-- the test-first failures;
-- the first and any rerun results, kept separate;
-- the mutation-probe results;
-- lint, build and documentation checks;
-- the CI run id and its exact head.
+Baseline `dc14b4bb3c9b82b566c1187047a196a778a42af1` (HEAD and `origin/phase15/completion`, worktree clean at the start).
+
+#### T01 (DV-1 to DV-4)
+
+- **Commit:** `P15-C03-S01-T01: track each Knowledge read-back separately for the save that owns it`. A commit cannot name its own SHA, so the T02 commit records it here.
+- **What changed (portal only):**
+  - new `useKnowledgeSaveReads` (per-save, per-read tracker, states `applied` and `outstanding`; a later applied read of the same resource recovers every open save; done announced once; scope reset);
+  - `KnowledgeClaimPage` (Save held only for the authoring read, notice names the parts, draft cleared only where it equals the confirmed body, lifecycle step recorded with its done message);
+  - two additive optional props with no default behavior change: `SavedRefreshFailedNotice.behind` (an extra line naming the parts) and `EntityLifecyclePanel.onStepConfirmed` (hands the page the step's done message; `onChanged`'s signature is unchanged, so its other callers are untouched).
+  - No shared hook, backend or API change.
+- **Test-first (new cases run against the unmodified baseline, before the fix):** 14 of the 15 new T01 tests failed: A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12 (note kept after a later edit), A13 and A14. A12 (note cleared when it equals the confirmed note) already passed at the baseline, as the plan marks it. Failures were the missing part names (A1, A3, A4, A8, A9), a disabled Save (A1, A2, A7), no done announcement after recovery (A5, A6), the discarded newer draft (A10, A11, A12) and the notice not recovered by an unrelated authoring read (A13, A14).
+- **Focused runs after the fix:** the 15 new cases and the five tracker unit tests pass; `App.knowledgeClaim.test.tsx`, `useKnowledgeDetail.test.ts`, `src/components/authoring` and the lifecycle panel tests pass (306 tests). No existing test changed.
+- **Full `npm test`:**
+  - first run: 1 failed of 5547, `src/pages/CampaignSettingsPage.test.tsx` "treats the saved values as saved, but guards navigation for anything typed after them" (an 8 s timeout, unrelated to Knowledge; that file passed alone, 13/13);
+  - second run: 442 files and 5547 tests passed.
+  The first run is not reported as a pass.
+- **`npm run lint`:** clean (a first lint run flagged a `setState` inside an effect in the tracker; fixed, then clean). `npm run build`: passed.
+- **Documentation:** `scripts/check_documentation.py` agrees; `git diff --check` clean.
+- **Mutation probes (each temporary, each reverted):**
+  - M1 (hold Save on any outstanding read): fails A1, A2, A7;
+  - M2 (restore the unconditional draft clear): fails A10, A11 and the A12 kept-note case;
+  - M3 (announce done on every applied read, no once-guard): fails A1, A5, A6, A7, A8, A13, A14.
+  Run on the final T01 code.
+- **Known limit:** the draft is kept as a difference from the saved version (the page's existing model). A field the person changes back to its old value while a save of a different value is in flight is not told apart from an unchanged field, so it follows the saved value after the save.
+- **CI for the exact head:** recorded after the push (see the register row).
+
+#### T02
+
+Pending.
