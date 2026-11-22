@@ -4,7 +4,7 @@ import {
     revokeResourceGrant,
 } from "../api/revokeResourceGrant"
 import { useSession } from "../context/SessionContext"
-import { useAccessWriteCompletion } from "./useAccessWriteCompletion"
+import { useAccessAuthorityRecheck, useAccessWriteCompletion } from "./useAccessWriteCompletion"
 
 export type RevokeResourceGrantStatus =
     | { kind: "idle" }
@@ -16,6 +16,8 @@ export type RevokeResourceGrantStatus =
 
 export interface UseRevokeResourceGrantResult {
     status: RevokeResourceGrantStatus
+    // The HTTP status behind a `denied` outcome (403 or 404), for a form that tells the two apart; null otherwise.
+    failureStatus: number | null
     submit: (resourceGrantId: string) => void
     reset: () => void
 }
@@ -23,6 +25,7 @@ export interface UseRevokeResourceGrantResult {
 interface Snapshot {
     campaignId: string
     status: RevokeResourceGrantStatus
+    failureStatus?: number
 }
 
 interface IdempotencyReservation {
@@ -49,6 +52,8 @@ export function useRevokeResourceGrant(
     // Confirmed write: reload the session, or re-read it in place when the write cannot affect the caller
     // (hooks/useAccessWriteCompletion).
     const completeWrite = useAccessWriteCompletion()
+    // A 403 may mean access.manage is gone: the session is read again in place so the page can unmount (D-4).
+    const recheckAuthority = useAccessAuthorityRecheck()
     const controllerRef = useRef<AbortController | null>(null)
     const idempotencyRef = useRef<IdempotencyReservation | null>(null)
 
@@ -139,7 +144,11 @@ export function useRevokeResourceGrant(
                             setSnapshot({
                                 campaignId: requestCampaignId,
                                 status: { kind: "denied" },
+                                failureStatus: cause.status,
                             })
+                            if (cause.status === 403) {
+                                recheckAuthority()
+                            }
                             return
                         }
                         if (cause.status === 409) {
@@ -157,12 +166,17 @@ export function useRevokeResourceGrant(
                     })
                 })
         },
-        [status.kind, sessionState, campaignId, onSuccess, reload, completeWrite, resolveIdempotencyKey],
+        [status.kind, sessionState, campaignId, onSuccess, reload, completeWrite, recheckAuthority, resolveIdempotencyKey],
     )
 
     const reset = useCallback(() => {
         setSnapshot({ campaignId, status: idleStatus })
     }, [campaignId])
 
-    return { status, submit, reset }
+    const failureStatus =
+        snapshot.campaignId === campaignId && status.kind === "denied"
+            ? (snapshot.failureStatus ?? null)
+            : null
+
+    return { status, failureStatus, submit, reset }
 }

@@ -8,6 +8,7 @@ import type {
     DeniableCharacterCapability,
     GrantableResourceCapability,
 } from "../types/accessOverview"
+import type { WriteNotice } from "../types/accessWrite"
 import type { ResourceGrantEffect, ResourceGrantTargetField } from "../types/resourceGrantTarget"
 import {
     CHARACTER_DENY_KIND,
@@ -28,7 +29,7 @@ interface AddGroupResourceGrantProps {
     deniableCapabilities?: DeniableCharacterCapability[]
     // A read of the access list (sends nothing): the one recovery offered after a 404 or 409 on a character denial.
     onRefreshAccess?: () => void
-    onChanged: (message: string) => void
+    onChanged: (message: string, notice?: WriteNotice) => void
     onMutationStart: () => void
 }
 
@@ -110,15 +111,14 @@ export function AddGroupResourceGrant({
 
     const isCharacterDeny = selectedTargetType === CHARACTER_DENY_KIND
 
-    const { status, failureStatus, submit, reset } = useAddGroupResourceGrant(campaignId, () =>
-        onChanged(
-            isCharacterDeny
-                ? "Denial added."
-                : selectedEffect === "deny"
-                  ? "Resource denial added."
-                  : "Resource access added.",
-        ),
-    )
+    const { status, failureStatus, submit, reset } = useAddGroupResourceGrant(campaignId, () => {
+        if (isCharacterDeny) {
+            // Focus, if the re-read displaces it, returns to this card's grants heading (D-5).
+            onChanged("Denial added.", { focusGrantsOf: accessGroupId })
+            return
+        }
+        onChanged(selectedEffect === "deny" ? "Resource denial added." : "Resource access added.")
+    })
 
     const isPending = status.kind === "pending"
 

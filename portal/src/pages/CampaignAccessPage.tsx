@@ -7,6 +7,7 @@ import { useSession } from "../context/SessionContext"
 import { useAccessDisclosure } from "../hooks/useAccessDisclosure"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import type { AccessDisclosure } from "../hooks/useAccessDisclosure"
+import type { WriteNotice } from "../types/accessWrite"
 import { canPreviewAudience as canPreviewAudienceFor } from "../utils/canPreviewAudience"
 import { AccessPage } from "./AccessPage"
 import PlaceholderPage from "./PlaceholderPage"
@@ -35,16 +36,28 @@ interface RefreshIntent {
     episode: number
 }
 
+// A character-denial write confirmed and not yet followed by a successful overview read: whose grants
+// heading takes focus if the re-read displaced it (D-5).
+interface FocusIntent {
+    campaignId: string
+    ownerId: string
+    episode: number
+}
+
 function OverviewSettled({
     memberIds,
     disclosure,
     refresh,
     onRefreshSettled,
+    focus,
+    onFocusSettled,
 }: {
     memberIds: string[]
     disclosure: AccessDisclosure
     refresh: RefreshIntent | null
     onRefreshSettled: (refresh: RefreshIntent) => void
+    focus: FocusIntent | null
+    onFocusSettled: (focus: FocusIntent) => void
 }) {
     const key = memberIds.join("|")
     useEffect(() => {
@@ -53,6 +66,7 @@ function OverviewSettled({
     }, [key])
     useEffect(() => {
         if (refresh !== null) onRefreshSettled(refresh)
+        if (focus !== null) onFocusSettled(focus)
         // Only on mount: a read that succeeded is what confirms a refresh.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
@@ -91,6 +105,9 @@ export function CampaignAccessPage() {
         useState<RefreshIntent | null>(null)
     // Counts refreshes asked for on this page. A completion acts only if it still belongs to the latest.
     const refreshEpisode = useRef(0)
+    // The same for a confirmed character-denial write whose grants heading should take focus (D-5).
+    const [pendingFocus, setPendingFocus] = useState<FocusIntent | null>(null)
+    const focusEpisode = useRef(0)
 
     // The mounted Access content is bound to what the applied session says THIS campaign grants: the
     // existing capability resolver (the bootstrap's per-campaign capabilities), read on every render. A
@@ -107,6 +124,7 @@ export function CampaignAccessPage() {
             prune(new Set())
             // A refresh asked for before the loss no longer belongs to anything: its completion is ignored.
             refreshEpisode.current += 1
+            focusEpisode.current += 1
         }
     }, [canManageAccess, prune])
 
@@ -140,12 +158,23 @@ export function CampaignAccessPage() {
     function handleRoleChanged(
         retry: () => void,
         message: string,
+        notice?: WriteNotice,
     ): void {
         // Starting (or completing) another operation always replaces
         // whatever announcement was showing — a fresh call here, whatever
         // its text, is never merged with or appended to a stale one.
         // A mutation supersedes a refresh that has not been answered: its completion must not act.
         setPendingRefresh(null)
+        focusEpisode.current += 1
+        setPendingFocus(
+            notice?.focusGrantsOf === undefined
+                ? null
+                : {
+                      campaignId: activeCampaignId,
+                      ownerId: notice.focusGrantsOf,
+                      episode: focusEpisode.current,
+                  },
+        )
         setAnnouncement({
             campaignId: activeCampaignId,
             message,
@@ -165,6 +194,8 @@ export function CampaignAccessPage() {
     // the user is now watching.
     function handleMutationStart(): void {
         setPendingRefresh(null)
+        focusEpisode.current += 1
+        setPendingFocus(null)
         setAnnouncement(null)
     }
 
@@ -194,6 +225,24 @@ export function CampaignAccessPage() {
         )
         ;(toggle ?? announcementRef.current)?.focus()
     }
+
+    // Called once the list has been read again after a confirmed character-denial write. The intent is always
+    // consumed; it acts only if it is still the latest and focus was displaced to the page body by the re-read
+    // (a manager who has moved to another control keeps that focus). Then the same card's grants heading, or the
+    // persistent status line when that card is gone.
+    function handleFocusSettled(intent: FocusIntent): void {
+        setPendingFocus(null)
+        if (intent.episode !== focusEpisode.current || intent.campaignId !== activeCampaignId) return
+        const active = document.activeElement
+        if (active !== null && active !== document.body && active.isConnected) return
+        const heading = Array.from(document.querySelectorAll<HTMLElement>("[data-grants-heading]")).find(
+            (element) => element.dataset.grantsHeading === intent.ownerId,
+        )
+        ;(heading ?? announcementRef.current)?.focus()
+    }
+
+    const focusForThisCampaign =
+        pendingFocus !== null && pendingFocus.campaignId === activeCampaignId ? pendingFocus : null
 
     const refreshForThisCampaign =
         pendingRefresh !== null && pendingRefresh.campaignId === activeCampaignId ? pendingRefresh : null
@@ -226,13 +275,15 @@ export function CampaignAccessPage() {
                             disclosure={disclosure}
                             refresh={refreshForThisCampaign}
                             onRefreshSettled={handleRefreshSettled}
+                            focus={focusForThisCampaign}
+                            onFocusSettled={handleFocusSettled}
                         />
                         <AccessPage
                             campaignId={activeCampaignId}
                             overview={overview}
                             preselectCharacterId={preselectCharacterId}
-                            onChanged={(message) =>
-                                handleRoleChanged(retry, message)
+                            onChanged={(message, notice) =>
+                                handleRoleChanged(retry, message, notice)
                             }
                             onMutationStart={handleMutationStart}
                             disclosure={disclosure}

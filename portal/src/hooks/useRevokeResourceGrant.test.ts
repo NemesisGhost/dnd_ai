@@ -154,6 +154,21 @@ describe("useRevokeResourceGrant", () => {
         },
     )
 
+    it.each([403, 404])("tells a form which of the two a denied outcome was (%s)", async (status) => {
+        revokeResourceGrantMock.mockRejectedValue(new RevokeResourceGrantRequestError(status))
+
+        const { result } = renderHook(() => useRevokeResourceGrant("campaign-a", vi.fn()))
+        expect(result.current.failureStatus).toBeNull()
+
+        act(() => {
+            result.current.submit("grant-a")
+        })
+
+        await waitFor(() => {
+            expect(result.current.failureStatus).toBe(status)
+        })
+    })
+
     it("reports a conflict status for a 409 response", async () => {
         revokeResourceGrantMock.mockRejectedValue(
             new RevokeResourceGrantRequestError(409),

@@ -78,3 +78,30 @@ export function availableDenyCapabilities(
     )
     return deniable.filter((capability) => !taken.has(capability.code))
 }
+
+// A grant is a character deny only when it is a `deny`, its target is an `entity`, its code is in the server's
+// deniable list AND its target is one of the overview's own characters: all three come from one server read
+// (D-6). A non-null `target_display_name` alone proves nothing, so it is never the test.
+export interface CharacterDenyInfo {
+    code: string
+    characterName: string
+}
+
+export function characterDenyOf(
+    grant: AccessResourceGrantSummary,
+    deniable: DeniableCharacterCapability[] | undefined,
+    characters: AssignableCharacter[],
+): CharacterDenyInfo | null {
+    if (grant.effect !== "deny" || grant.target_type !== "entity") return null
+    if (!(deniable ?? []).some((capability) => capability.code === grant.capability_code)) return null
+    const character = characters.find((candidate) => candidate.character_id === grant.target_id)
+    if (character === undefined) return null
+    return { code: grant.capability_code, characterName: character.display_name }
+}
+
+// What the denial is, in the words the card, the removal confirmation and the control's name share.
+export function denyDescription(info: CharacterDenyInfo, capabilityDisplayName: string): string {
+    if (info.code === "campaign.view") return `everything about ${info.characterName}`
+    if (info.code === "canon.edit") return `editing ${info.characterName}'s profiles`
+    return `${capabilityDisplayName} on ${info.characterName}`
+}

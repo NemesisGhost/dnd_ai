@@ -1,169 +1,34 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
-import { useSession } from "../context/SessionContext"
-import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
-import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
-import type { MockResponse, MockServer } from "../test/authoringHarness"
-import type { AccessResourceGrantSummary, CampaignAccessOverview } from "../types/accessOverview"
-import { CampaignAccessPage } from "./CampaignAccessPage"
+import type { MockResponse } from "../test/authoringHarness"
+import type { CampaignAccessOverview } from "../types/accessOverview"
+import {
+    ARIA,
+    BRAM,
+    DENIABLE,
+    addButton,
+    cardOf,
+    characterSelect,
+    chooseDenyKind,
+    confirmBox,
+    denyGrant,
+    fillDeny,
+    member,
+    openForm,
+    optionTexts,
+    overviewWith,
+    permissionSelect,
+    posts,
+    reads,
+    setup,
+    typeOptions,
+    bootstrap,
+} from "../test/characterDenyHarness"
 
 vi.mock("../components/InvitationsSection", () => ({ InvitationsSection: () => null }))
 
 // Acceptance cases O1 to O16 of docs/delivery/p15-c02-s04-character-denies-plan.md (T01: the offer), through the
 // real Access page, overview boundary, forms and hooks. Only the network and the session context are replaced.
-
-const OVERVIEW = "/campaigns/c1/access-overview"
-const GRANTS = "/campaigns/c1/resource-grants"
-const ARIA = "ch-aria"
-const BRAM = "ch-bram"
-
-const DENIABLE = [
-    { capability_id: "cap-view", code: "campaign.view", display_name: "View Campaign" },
-    { capability_id: "cap-edit", code: "canon.edit", display_name: "Edit Canon" },
-]
-const GRANTABLE = [
-    { capability_id: "cap-full", code: "character.view_full", display_name: "View Character Full Detail", target_type: "character" },
-    { capability_id: "cap-ctl", code: "character.control", display_name: "Control Character", target_type: "character" },
-    { capability_id: "cap-ent", code: "campaign.view", display_name: "View Campaign", target_type: "entity" },
-    { capability_id: "cap-ent2", code: "canon.edit", display_name: "Edit Canon", target_type: "entity" },
-]
-
-function member(id: string, name: string, grants: AccessResourceGrantSummary[] = []) {
-    return {
-        campaign_membership_id: id,
-        user_id: id === "m1" ? sessionBootstrapFixture.user.user_id : `user-${id}`,
-        display_name: name,
-        status_code: "active",
-        status_display_name: "Active",
-        joined_at: "2026-01-01T00:00:00Z",
-        account_is_active: true,
-        roles: [],
-        character_relationships: [],
-        grants,
-    }
-}
-
-function group(id: string, name: string, status: "active" | "archived" = "active", grants: AccessResourceGrantSummary[] = []) {
-    return {
-        access_group_id: id,
-        name,
-        description: null,
-        status_code: status,
-        status_display_name: status === "active" ? "Active" : "Archived",
-        created_at: "2026-01-01T00:00:00Z",
-        members: [],
-        grants,
-    }
-}
-
-function denyGrant(id: string, code: string, character: string): AccessResourceGrantSummary {
-    return {
-        resource_grant_id: id,
-        capability_code: code,
-        capability_display_name: code === "canon.edit" ? "Edit Canon" : "View Campaign",
-        effect: "deny",
-        target_type: "entity",
-        target_id: character,
-        target_display_name: character === ARIA ? "Aria" : "Bram",
-        reason: null,
-        granted_at: "2026-02-01T00:00:00Z",
-        expires_at: null,
-    }
-}
-
-function overviewWith(over: Partial<CampaignAccessOverview> = {}): CampaignAccessOverview {
-    return {
-        members: [member("m1", "Olga Owner"), member("m2", "Pip Player")],
-        assignable_roles: [],
-        assignable_characters: [
-            { character_id: ARIA, display_name: "Aria" },
-            { character_id: BRAM, display_name: "Bram" },
-        ],
-        assignable_relationship_types: [],
-        grantable_resource_capabilities: GRANTABLE,
-        deniable_character_capabilities: DENIABLE,
-        access_groups: [group("g1", "Night Watch"), group("g2", "Old Guard", "archived")],
-        ...over,
-    }
-}
-
-const bootstrap = (caps: string[] = ["access.manage"]) =>
-    bootstrapWith({
-        campaigns: [{ ...sessionBootstrapFixture.campaigns[0]!, campaign_id: "c1", capabilities: caps }],
-    })
-
-interface SetupOptions {
-    overview?: () => CampaignAccessOverview
-    post?: (body: unknown) => MockResponse | Promise<MockResponse>
-    onRefresh?: () => Promise<ReturnType<typeof bootstrap> | null>
-}
-
-// A control that asks the shell for the authoritative session, as the app does after a write.
-function Host() {
-    const { refresh } = useSession()
-    return (
-        <>
-            <CampaignAccessPage />
-            <button type="button" onClick={() => void refresh()}>
-                Refresh session
-            </button>
-        </>
-    )
-}
-
-function setup(options: SetupOptions = {}) {
-    const state = { overview: options.overview ?? (() => overviewWith()) }
-    const server = installMockServer()
-    server.on("GET", OVERVIEW, () => ({ body: state.overview() }))
-    server.on("POST", GRANTS, (call) => options.post?.(call.body) ?? { status: 201, body: { resource_grant_id: "new-grant" } })
-    const rendered = renderAuthoringRoutes({
-        initialEntry: "/app/c1/access",
-        bootstrap: bootstrap(),
-        routes: [
-            { path: "/app/:campaignId/access", element: <Host /> },
-            { path: "/app/:campaignId/elsewhere", element: <p>Elsewhere</p> },
-        ],
-        onRefresh: options.onRefresh,
-    })
-    return { server, state, ...rendered }
-}
-
-const posts = (server: MockServer) => server.callsTo("POST", GRANTS)
-const reads = (server: MockServer) => server.callsTo("GET", OVERVIEW)
-
-async function cardOf(name: string): Promise<HTMLElement> {
-    const heading = await screen.findByText(name, { selector: "summary strong" })
-    return heading.closest("details") as HTMLElement
-}
-
-async function openForm(card: HTMLElement) {
-    fireEvent.click(within(card).getByRole("button", { name: /^Add (direct )?resource access$/ }))
-    return within(card).getByRole("combobox", { name: /^Add (direct )?resource access for/ })
-}
-
-async function chooseDenyKind(card: HTMLElement) {
-    const typeSelect = await openForm(card)
-    fireEvent.change(typeSelect, { target: { value: "character_deny" } })
-}
-
-const characterSelect = (card: HTMLElement) => within(card).getByRole("combobox", { name: "Character" })
-const permissionSelect = (card: HTMLElement) => within(card).getByRole("combobox", { name: "What to deny" })
-const confirmBox = (card: HTMLElement) => within(card).getByRole("checkbox", { name: /I understand this explicitly denies/ })
-const addButton = (card: HTMLElement) => within(card).getByRole("button", { name: "Add" })
-
-async function fillDeny(card: HTMLElement, character = ARIA, code = "canon.edit") {
-    await chooseDenyKind(card)
-    fireEvent.change(characterSelect(card), { target: { value: character } })
-    fireEvent.change(permissionSelect(card), { target: { value: code } })
-    fireEvent.click(confirmBox(card))
-}
-
-const optionTexts = (select: HTMLElement) =>
-    within(select).getAllByRole("option").map((option) => option.textContent)
-
-async function typeOptions(card: HTMLElement) {
-    return optionTexts(await openForm(card))
-}
 
 describe("O1 to O3: when the kind is offered and what it leaves alone", () => {
     it("O1: a member form lists Character (deny only) only with a non-empty server list and a character", async () => {
@@ -374,8 +239,7 @@ describe("O9 and O10: pending and success", () => {
         await vi.waitFor(() => expect(container.querySelector(".campaign-access-page__announcement")).toHaveTextContent("Denial added."))
         await vi.waitFor(() => expect(reads(server).length).toBeGreaterThan(before))
         const fresh = await cardOf("Pip Player")
-        await vi.waitFor(() => expect(within(fresh).getByText(/Edit Canon/)).toBeInTheDocument())
-        expect(within(fresh).getByText(/on Aria/)).toBeInTheDocument()
+        await vi.waitFor(() => expect(within(fresh).getByText("Denied: editing Aria's profiles")).toBeInTheDocument())
     })
 })
 
@@ -446,7 +310,7 @@ describe("O11 to O14: refusals and the unknown outcome", () => {
         expect(await within(card).findByText("That character or group is no longer available for a denial.")).toBeInTheDocument()
     })
 
-    it("O14: a 403 says access can no longer be managed and offers no retry (the session re-read is T02's R13/R18)", async () => {
+    it("O14: a 403 says access can no longer be managed and offers no retry (the in-place session re-read is asserted by R13, R18 and the hook tests)", async () => {
         setup({ post: () => ({ status: 403, body: {} }) })
         const card = await cardOf("Pip Player")
         await fillDeny(card)

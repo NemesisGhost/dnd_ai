@@ -1,13 +1,23 @@
 import { useEffect, useId, useRef, useState } from "react"
 import { useRevokeResourceGrant } from "../hooks/useRevokeResourceGrant"
 import type { AccessResourceGrantSummary } from "../types/accessOverview"
+import type { WriteNotice } from "../types/accessWrite"
+import { denyDescription, denyReturns } from "../utils/characterDenies"
+import type { CharacterDenyInfo } from "../utils/characterDenies"
 import { humanizeCode } from "../utils/humanize"
 
 interface RevokeResourceGrantProps {
     campaignId: string
     memberDisplayName: string
     grant: AccessResourceGrantSummary
-    onChanged: (message: string) => void
+    // Set by the page when the grant is a character denial (P15-C02-S04, D-6). Null or absent: the grant is
+    // described and removed exactly as before.
+    denyInfo?: CharacterDenyInfo | null
+    // The member or group whose "Direct resource access" heading takes focus after a confirmed removal.
+    grantsOwnerId?: string
+    // A read of the access list (sends nothing): the recovery offered after a 404 of a character denial.
+    onRefreshAccess?: () => void
+    onChanged: (message: string, notice?: WriteNotice) => void
     onMutationStart: () => void
 }
 
@@ -80,6 +90,36 @@ function statusMessage(
     }
 }
 
+// The removal of a character denial (P15-C02-S04): says which denial, and what may come back. The words for
+// what may come back are the portal's approved copy for the two known permissions (utils/characterDenies).
+function characterDenyConfirmText(
+    grant: AccessResourceGrantSummary,
+    denyInfo: CharacterDenyInfo,
+    memberDisplayName: string,
+): string {
+    const returns =
+        denyReturns(denyInfo.code, denyInfo.characterName) ??
+        "Access may be restored from another role, relationship, group, or allow grant."
+    return `Remove ${memberDisplayName}'s denial of ${denyDescription(denyInfo, grant.capability_display_name)}? ${returns}`
+}
+
+function characterDenyStatusMessage(
+    kind: "pending" | "success" | "denied" | "conflict" | "error",
+    failureStatus: number | null,
+    grant: AccessResourceGrantSummary,
+): string {
+    switch (kind) {
+        case "denied":
+            return failureStatus === 403
+                ? "You no longer have permission to manage access."
+                : "This denial is no longer available."
+        case "error":
+            return "We couldn't confirm whether the denial was removed. Trying again sends the same request."
+        default:
+            return statusMessage(kind, grant)
+    }
+}
+
 // One control per currently active resource grant (mirrors
 // RevokeCharacterRelationship's own per-row shape, never per-member) — a
 // deliberate confirmation step naming the member, the resource, and the
@@ -90,6 +130,9 @@ export function RevokeResourceGrant({
     campaignId,
     memberDisplayName,
     grant,
+    denyInfo = null,
+    grantsOwnerId,
+    onRefreshAccess,
     onChanged,
     onMutationStart,
 }: RevokeResourceGrantProps) {
@@ -100,9 +143,10 @@ export function RevokeResourceGrant({
     const confirmButtonRef = useRef<HTMLButtonElement>(null)
     const wasConfirmingRef = useRef(false)
 
-    const { status, submit, reset } = useRevokeResourceGrant(
-        campaignId,
-        () => onChanged(successMessage(grant)),
+    const { status, failureStatus, submit, reset } = useRevokeResourceGrant(campaignId, () =>
+        denyInfo === null
+            ? onChanged(successMessage(grant))
+            : onChanged("Denial removed.", { focusGrantsOf: grantsOwnerId }),
     )
 
     const isPending = status.kind === "pending"
@@ -140,10 +184,16 @@ export function RevokeResourceGrant({
         <span
             className="access-role-editor"
             role="group"
-            aria-label={triggerAriaLabel(grant, memberDisplayName)}
+            aria-label={
+                denyInfo === null
+                    ? triggerAriaLabel(grant, memberDisplayName)
+                    : `Remove denial of ${denyDescription(denyInfo, grant.capability_display_name)} from ${memberDisplayName}`
+            }
         >
             <span className="access-role-editor__confirm-text">
-                {confirmText(grant, memberDisplayName)}
+                {denyInfo === null
+                    ? confirmText(grant, memberDisplayName)
+                    : characterDenyConfirmText(grant, denyInfo, memberDisplayName)}
             </span>
 
             <div className="access-role-editor__actions">
@@ -161,7 +211,9 @@ export function RevokeResourceGrant({
                         ? isDenyEffect(grant)
                             ? "Removing…"
                             : "Revoking…"
-                        : "Confirm"}
+                        : denyInfo !== null && status.kind === "error"
+                          ? "Try again"
+                          : "Confirm"}
                 </button>
 
                 <button
@@ -188,8 +240,17 @@ export function RevokeResourceGrant({
                 role="status"
                 aria-live="polite"
             >
-                {status.kind === "idle" ? "" : statusMessage(status.kind, grant)}
+                {status.kind === "idle"
+                    ? ""
+                    : denyInfo === null
+                      ? statusMessage(status.kind, grant)
+                      : characterDenyStatusMessage(status.kind, failureStatus, grant)}
             </p>
+            {denyInfo !== null && status.kind === "denied" && failureStatus === 404 && (
+                <button type="button" onClick={() => onRefreshAccess?.()}>
+                    Refresh access list
+                </button>
+            )}
         </span>
     )
 }
