@@ -1,6 +1,6 @@
 # D/P15-C02-S04 implementation plan: manage approved character-scoped denies
 
-**Status:** Opus plan prepared 2026-11-21; **owner decisions recorded 2026-11-21** (OD-S04-1 = A, OD-S04-2 = A; [§10.1](#101-owner-decisions-recorded-2026-11-21)) and the contract refined from the code ([§10.2](#102-verified-effects-and-refinements-sonnet-2026-11-21)). T01 and T02 are unblocked. Nothing is implemented at this commit. Work-register row: [D/P15-C02-S04](work-register.md#p15-c02-s04), tasks [T01](work-register.md#p15-c02-s04-t01) and [T02](work-register.md#p15-c02-s04-t02). Parent checkpoint: [D/P15-C02](work-register.md#p15-c02).
+**Status:** Opus plan prepared 2026-11-21; **owner decisions recorded 2026-11-21** (OD-S04-1 = A, OD-S04-2 = A; [§10.1](#101-owner-decisions-recorded-2026-11-21)) and the contract refined from the code ([§10.2](#102-verified-effects-and-refinements-sonnet-2026-11-21)). T01 and T02 are implemented ([§11.3](#113-implementation-record-sonnet-2026-11-21-independent-review-pending)); independent review is pending. Work-register row: [D/P15-C02-S04](work-register.md#p15-c02-s04), tasks [T01](work-register.md#p15-c02-s04-t01) and [T02](work-register.md#p15-c02-s04-t02). Parent checkpoint: [D/P15-C02](work-register.md#p15-c02).
 
 **Baseline.** Read at `0d8d494fcf7535c6cbaf77be425ce8661e16e4cc` ("docs: record P15-C02-S03 independent review (11.4); T01, T02 and S03 pass with verification limits"), the finalized S03 records commit.
 - It is the head of `phase15/completion` and equals `origin/phase15/completion`. The worktree was clean. No repository-path `AGENTS.md` exists.
@@ -488,6 +488,55 @@ Read in code at `0d8d494` (domain `public_profiles.py` and `player_profiles.py`,
   - the S03 × S04 backend proof (BD6–BD8).
 - **Not in the review verdict:** C02 merge readiness (§7.2), and every §7.3 event.
 
-### 11.3 Implementation record (pending)
+### 11.3 Implementation record (Sonnet, 2026-11-21; independent review pending)
 
-Not started. The planning baseline is the commit that records this plan with the owner decisions; its SHA is recorded in the implementation records and the report.
+**Commits.** Planning baseline (plan with OD-S04-1 = A, OD-S04-2 = A, code-verified effects): `94edf035a2051046493268d6af61beb18989d627`. T01: `3dcd13bb85ca3ddb698ded1575903ca1cb90f9a4`. T02: `daf7a8413f89f36dc434bfc09db44da3cbc6d1d1`. The records commit that adds this section follows T02 and changes only documents.
+
+**Review ranges for the independent reviewer (Luna).** T01: `94edf035a2051046493268d6af61beb18989d627..3dcd13bb85ca3ddb698ded1575903ca1cb90f9a4`. T02: `3dcd13bb85ca3ddb698ded1575903ca1cb90f9a4..daf7a8413f89f36dc434bfc09db44da3cbc6d1d1`. Combined implementation: `94edf035a2051046493268d6af61beb18989d627..daf7a8413f89f36dc434bfc09db44da3cbc6d1d1` (the records commit after `daf7a8413f89f36dc434bfc09db44da3cbc6d1d1` is documents only).
+
+**What was built.**
+- T01, backend: `CHARACTER_DENY_CAPABILITY_CODES` (the `entity_id` row of the grant catalog, the only capability test the command applies once a character deny target is admitted), `list_deniable_character_capabilities`, and `deniable_character_capabilities` on `GET …/access-overview`. `grantable_resource_capabilities` and every route, lock, write and authorization rule are unchanged.
+- T01, portal: an optional `deniable_character_capabilities` type field, `utils/characterDenies.ts` (words, hints, duplicate filter, the D-6 test), `CharacterDenyFields` and the **Character (deny only)** kind in the member and group forms (nothing chosen for the manager, fixed Deny effect, the confirmation, `entity_id` + `deny`, unknown-outcome and refusal copy with **Try again** and **Refresh access list**), and `failureStatus` on the two add hooks.
+- T02: plain-word labels on member and group cards (D-6 classification), the removal confirmation and its copy, `failureStatus` on the revoke hook, `useAccessAuthorityRecheck` (a 403 from any of the three resource-grant write hooks reads the session in place, falling back to reload), the optional `WriteNotice` on `onChanged`, and focus return to the card's grants heading in `CampaignAccessPage` (only if the re-read displaced focus to the body).
+
+**Acceptance coverage.**
+| Cases | Where |
+|---|---|
+| BD1–BD5 | `tests/database/test_api_access_overview.py` (7 new tests; BD3 runs per character, npc and player character and drives the route with every listed code) |
+| BD6–BD9 | `tests/database/test_character_denies_and_reveal_authority.py` (4 tests) |
+| O1–O16 | `portal/src/pages/CampaignAccessPage.characterDeny.integration.test.tsx` (22), `utils/characterDenies.test.ts`, and the two add-hook `failureStatus` tests |
+| R1–R18 | `portal/src/pages/CampaignAccessPage.characterDenyDisplay.integration.test.tsx` (19) and `hooks/useAccessAuthorityRecheck.test.ts` (9, three hooks) |
+
+**Verification, with first runs and reruns kept apart.**
+- Backend focused (T01 tree): the four S04 backend files plus the Phase 15 guard file, 78 passed; `ruff format --check`, `ruff check`, `mypy src` clean; `git diff --check` clean.
+- **Shard run on T01 (`3dcd13bb85ca3ddb698ded1575903ca1cb90f9a4`), first and only run: PASSED**, 11335 passed, 6 skipped, 11341 collected and executed, 32m14s. No rerun was needed. T02 changes no backend file, so no second shard run was made.
+- Portal on the T01 tree: 439 files, 5487 tests passed; lint and build clean.
+- **Portal on the T02 tree, four full runs, recorded separately:**
+  1. default concurrency: 2 failed (`App.readRecovery.test.tsx` "keeps focus on the retry button while it reads, and on repeated failure"; `EncounterPages.test.tsx` "reports a confirmed start whose re-read fails…");
+  2. default concurrency: 1 failed (`ItemDefinitionPages.save.test.tsx` "shows a persistent saved status…");
+  3. default concurrency: 1 failed (`App.knowledgeMemberPreview.test.tsx` "resets the character, party and page…", an 8.4 s test);
+  4. `--maxWorkers=4`: 441 files, 5517 tests, all passed.
+  The two files of run 1 passed together in isolation (45/45). None of the failing tests touches Access code, each failure differed, and no default-concurrency full run passed on the T02 tree. The isolated rerun and run 4 are not presented as default-concurrency passes. The timing sensitivity of the suite under concurrency is pre-existing and unproven to be unrelated beyond that evidence.
+- Lint and build clean on the T02 tree; documentation check and `git diff --check` clean.
+
+**Mutation probes (restored; SHA-256 prefixes before and after equal).** Backend: adding `character.view_full` to the deniable codes fails BD3 (`domain/access.py` `14fe03746bc58670`). T01 portal: writing `character_id` fails O7, O9 and O11; auto-selecting the first character fails O4/O5 (`AddResourceGrant.tsx` `2D45E2A47577`, `CharacterDenyFields.tsx` `78E5C17EEA4C`). T02: classifying a denial by display name alone fails R1; dropping the 403 session read fails R13 and R18; dropping the focus return fails R4 (`characterDenies.ts` `B525774CBF30`, `useRevokeResourceGrant.ts` `E01B3163F626`, `CampaignAccessPage.tsx` `BFB2C179B32F`). One probe attempt applied `git checkout` to an uncommitted file and discarded the constant; it was restored from the pre-probe copy and the hash matched.
+
+**Hint copy against the backend (task 4).** Each sentence of the two hints rests on a test: the whole-character deny (404 on character detail, profile, revelations and release for owners and delegates, `test_character_public_profile_grant_denies.py`, BD7); the `canon.edit` deny's save refusal, GM public-profile read loss, player-profile 404 and unchanged character detail (BD6, BD9, DEF-016); release and reveal unaffected (BD6, `test_a_release_still_succeeds_for_an_owner_with_a_canon_edit_deny`); and copied player-profile text withheld from the denied person, so a draft containing it is not releasable by them (`test_player_profile_provenance_restrictions.py::test_edit_release_coverage_noop_clear_and_recopy_of_player_profile_text`: can_release false, 403 `public_profile_field_withheld`, nothing written). DEF-016 keeps its separate open disposition: nothing in S04 widens the deny.
+
+**Deviations from the plan, with reasons.**
+1. O14's session re-read and O10's focus clause are implemented and tested in T02, as the plan's §4 and §9 place them; O14 and O10 in T01 assert the message and the announcement.
+2. The planned per-component test files are replaced by two page-level integration files over a shared harness (`test/characterDenyHarness.tsx`), which exercise the real forms, hooks and page; the hooks have their own tests.
+3. The permission select also starts unchosen (the plan required that for the character only); a denial is never defaulted.
+4. The add and revoke hooks gained `failureStatus` (additive; existing `status` shapes unchanged) so the new copy can tell 403 from 404.
+5. `onChanged` takes an optional second argument; only the character-denial controls send it.
+6. A group card has no member toggle, so its **Refresh access list** returns focus to the status line.
+7. BD9 was added to pin the facts the hint states; the plan's draft hint wording was corrected (§10.2).
+
+**CI failure `44951144761` investigated (not an S04 defect, not fixed here).**
+- Evidence: the job log shows `CharacterPublicProfilePage.test.tsx` "Cancel still returns focus to Release" failing with focus on `h1#public-profile-heading` where the Release button was expected; the next run on a later head passed.
+- Mechanism in code: `usePageArrival` focuses the page heading once, in a passive effect, when the page becomes ready, without checking where focus is. `ConfirmDialog` records `document.activeElement` as the opener when it opens, and on close keeps focus that already sits on something outside the dialog.
+- Delayed-heading probe: deferring that focus by one timer tick reproduces the CI symptom exactly (expected `public-profile-release`, received `public-profile-heading`) and fails 8 tests of that file.
+- Natural reproduction, which the delayed probe does not prove: an instrumented scratch copy of the test (not committed) recorded the active element when the test found the Release button, then ran 36 times (12 idle, 24 under parallel load). It passed 34 times, and in all 34 the heading already held focus at that point. It failed 2 times, both under load, with the identical symptom, and in both the active element was still the body at that point: the test focused Release and clicked before arrival focus had settled; arrival focus then took focus, the dialog recorded the heading as its opener and Cancel returned there.
+- Diagnosis (provisional): the test interacts before page-arrival focus settles. That is established as the trigger. It is not established that product focus cannot override a real interaction: arrival focus does not check whether focus moved since the commit, so a person acting within the gap between the ready commit and the passive-effect flush could have focus taken, though that window is a fraction of a frame and no such case was observed. The candidate fixes (a test that waits for arrival focus to settle by observing it, or an arrival rule that yields to focus already moved by the person) are owner/S01 decisions; neither is made here and no assertion was weakened or sleep added. Recorded for the C02 checkpoint (§7.2).
+
+**Limitations.** Independent review is pending. The persona, browser and assistive-technology checks of §7.3, human acceptance and `actor-a`/owner acceptance are not performed. No default-concurrency full portal run passed on the T02 tree (above). C02 merge readiness is not established by this record.
