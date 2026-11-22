@@ -76,6 +76,7 @@
 
 | Method and API path | Request → success | Entry checks / receipt |
 |---|---|---|
+| `GET /campaigns/{campaign_id}/reveal-delegations` | — → 200 RevealDelegationStateResponse | access.manage |
 | `POST /campaigns/{campaign_id}/reveal-delegations` | GrantCharacterRevealDelegationRequest → 200 GrantCharacterRevealDelegationResponse | access.manage |
 | `POST /campaigns/{campaign_id}/reveal-delegations/{grantee_campaign_membership_id}/revoke` | RevokeCharacterRevealDelegationRequest → 200 RevokeCharacterRevealDelegationResponse | access.manage |
 

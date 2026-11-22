@@ -13,14 +13,16 @@ Each case asserts the status codes, the draft row (version, text, origin, proven
 the release rows, the audit-row and receipt counts, and that a loser wrote nothing.
 
 C-tests (unkeyed or independent keys) are deterministic and must serialise without a deadlock.
-KA-tests run the keyed copy (or release) in the interleaving that realises DEF-019's reservation cycle
-(the competitor holds its membership or role row and has not yet taken the campaign row; the keyed
-request has already reserved its key, which holds the campaign row `FOR KEY SHARE`). They accept either
-valid serialised outcome or the documented deadlock loser (SQLSTATE 40P01, proved through the
-database's deadlock counter, never any other 5xx), record which occurred, and require the same
-invariants whichever happens: a copy never commits after the authority loss committed, every 2xx
-matches committed state, and a non-2xx loser leaves no draft change, audit row or receipt. They never
-require a deadlock.
+KA-tests run the keyed copy (or release) in the interleaving that used to realise DEF-019's reservation
+cycle (the competitor holds its membership or role row and has not yet taken the campaign row; the keyed
+request has already reserved its key). Since R01 O-2 defers the reservation's campaign foreign key for
+these post-write routes, the KA-tests require the `serialized` outcome in every arrival they run: no 5xx
+and the database's deadlock counter unchanged. They no longer accept a deadlock loser (SQLSTATE 40P01).
+The shared `_classify` helper still recognises a 40P01 loser, so a regression is named precisely before
+the `serialized` assertion fails. In each arrival the invariants hold as well: a copy or release never
+commits after the authority loss committed, every 2xx matches committed state, and a non-2xx loser
+leaves no draft change, release, audit row or receipt. The observed deadlocks of the original A5c run
+are kept as dated history in the design's A5c implementation record, not here.
 """
 
 import threading
@@ -45,6 +47,7 @@ from tests.database.test_character_public_profile_api import (
     release,
     release_rows,
     save,
+    url,
 )
 from tests.database.test_character_public_profile_grant_denies import post_grant
 from tests.database.test_character_public_profile_restrictions import npc  # noqa: F401 - fixture
@@ -484,7 +487,12 @@ def test_c6_a_keyed_release_first_both_commit_and_the_release_holds_the_pre_copy
     assert code(released) == 201, body(released)
     assert code(copied) == 200, body(copied)
     rows = release_rows(postgres_engine, g, npc)
-    assert [(r["version_number"], r["public_background"]) for r in rows] == [(1, None)]
+    assert [(r["version_number"], r["from_draft_row_version"]) for r in rows] == [(1, 1)]
+    # Exactly draft version n (the authored text, no copied text), not the post-copy draft.
+    assert (rows[0]["public_appearance"], rows[0]["public_background"]) == (
+        "AUTHORED-FACE-9090",
+        None,
+    )
     row = draft(postgres_engine, g, npc)
     assert row is not None and row["row_version"] == 2 and row["b_mark"] == 2
     assert row["public_background"] == source["personality"]  # copied, restricted and uncovered
@@ -496,10 +504,11 @@ def test_c6_a_keyed_release_first_both_commit_and_the_release_holds_the_pre_copy
 def test_c6_a_keyed_copy_first_the_release_of_the_earlier_version_is_stale_and_writes_nothing(
     client_factory: Factory, postgres_engine: Engine, g: Gate, npc: uuid.UUID, source: dict[str, str]
 ) -> None:  # fmt: skip
-    """Deviation from the design's table (it says both commit in either order): once the copy holds
-    the draft and commits, the draft is at version n+1, so a release of version n is a stale write,
-    exactly as for the A2b legacy copy (`test_a_copy_holding_the_draft_makes_a_release_of_the_earlier_
-    version_stale`). The copy's field is restricted and uncovered."""
+    """Approved C6 outcome (owner decision, A5c-R1): once the copy commits first, the draft is at
+    version n+1, so a keyed release that expected version n is `409 stale_write` and creates no release
+    row, receipt or audit row (optimistic concurrency, as for the A2b legacy copy; see
+    `test_a_copy_holding_the_draft_makes_a_release_of_the_earlier_version_stale`). The copy's field is
+    restricted and uncovered. Both operations need not commit in both orders."""
     _a_draft(client_factory, g, npc)
     release_key, copy_key = new_key(), new_key()
     releasing = lambda: release(client_factory, g.o1_user_id, g, npc, 1, key=release_key)  # noqa: E731
@@ -512,6 +521,10 @@ def test_c6_a_keyed_copy_first_the_release_of_the_earlier_version_is_stale_and_w
     assert release_rows(postgres_engine, g, npc) == []
     row = draft(postgres_engine, g, npc)
     assert row is not None and row["row_version"] == 2 and row["b_mark"] == 2
+    assert row["public_appearance"] == "AUTHORED-FACE-9090"
+    assert (
+        row["public_background"] == source["personality"]
+    )  # the copy committed and nothing was released
     assert (completed_receipts_for(postgres_engine, copy_key), receipts_for(postgres_engine, release_key)) == (1, 0)  # fmt: skip
     assert deadlock_count(postgres_engine) == baseline
 
@@ -828,39 +841,104 @@ def test_r01_a_role_that_expires_during_the_copys_lock_wait_must_refuse_the_copy
     transaction's *start*, so the early checks cannot see a lapse during the wait. Since R01 S2 the
     route's plan re-judges the decision after the last statement, in one snapshot at a fresh
     instant, so the copy is refused and nothing is written. This test was a strict `xfail` (observed:
-    201) until S2 migrated the route; its assertions are unchanged."""
-    with postgres_engine.begin() as connection:
-        connection.execute(
-            text(
-                "UPDATE security.membership_roles SET expires_at = now() + interval '3 seconds' "
-                "WHERE membership_role_id = :r"
-            ),
-            {"r": m.gm_role},
-        )
-    with postgres_engine.connect() as holder:
-        transaction = holder.begin()
-        holder.execute(
-            text("SELECT 1 FROM core.entities WHERE entity_id = :e FOR UPDATE"), {"e": npc}
-        )
-        pid = int(holder.execute(text("SELECT pg_backend_pid()")).scalar_one())
-        copying = run_in_thread("copy", copier(client_factory, g, npc, m.gm_user_id))
-        wait_until_pid_blocks(postgres_engine, pid)  # past the role check, waiting on the entity
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            with postgres_engine.connect() as probe:
-                if probe.execute(
-                    text(
-                        "SELECT expires_at <= now() FROM security.membership_roles "
-                        "WHERE membership_role_id = :r"
-                    ),
-                    {"r": m.gm_role},
-                ).scalar_one():
-                    break
-            threading.Event().wait(0.2)
-        assert not copying.finished()
-        transaction.commit()
+    201) until S2 migrated the route; its assertions are unchanged.
+
+    The role's expiry is armed *before* the request starts and cannot be moved afterwards: the
+    request takes the caller's role rows `FOR SHARE` before it waits, and an UPDATE of
+    `expires_at` would itself wait behind that lock. So the expiry is a wall-clock deadline, and the
+    request has to reach the entity lock before it. Everything that is not the request's own work
+    is therefore done first, outside the window: the app and its client are built and entered, and
+    the route is warmed with a read, before the expiry is armed (building the app inside the
+    copying thread after arming it let CI's start-up cost use the three seconds up, so the role
+    lapsed before the request ever blocked and it was refused early). If the window is nevertheless
+    missed, the failure says so instead of reporting a bare missing wait."""
+    client = client_factory(m.gm_user_id)
+    with client:
+        # Outside the window: the route's first-use cost (imports, pool connection, validation).
+        read_pp = client.get(url(g, npc))
+        assert read_pp.status_code in (200, 404), read_pp.text
+        with postgres_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE security.membership_roles "
+                    "SET expires_at = clock_timestamp() + interval '3 seconds' "
+                    "WHERE membership_role_id = :r"
+                ),
+                {"r": m.gm_role},
+            )
+        with postgres_engine.connect() as holder:
+            transaction = holder.begin()
+            holder.execute(
+                text("SELECT 1 FROM core.entities WHERE entity_id = :e FOR UPDATE"), {"e": npc}
+            )
+            pid = int(holder.execute(text("SELECT pg_backend_pid()")).scalar_one())
+            copying = run_in_thread("copy", copier(_entered(client), g, npc, m.gm_user_id))
+            try:
+                # past the role check, waiting on the entity
+                wait_until_pid_blocks(postgres_engine, pid)
+            except AssertionError:
+                with postgres_engine.connect() as probe:
+                    lapsed = probe.execute(
+                        text(
+                            "SELECT clock_timestamp() > expires_at FROM security.membership_roles "
+                            "WHERE membership_role_id = :r"
+                        ),
+                        {"r": m.gm_role},
+                    ).scalar_one()
+                if lapsed:
+                    transaction.rollback()
+                    pytest.fail(
+                        "the role lapsed before the copy reached the entity lock: the request's "
+                        "own latency exceeded the 3 s expiry window, so no lock wait was "
+                        "observed. This is not an authorization result."
+                    )
+                transaction.rollback()
+                raise
+            _expire_then_release(postgres_engine, m, copying, transaction)
     response = copying.wait("copy")
-    with postgres_engine.connect() as connection:
+    _assert_refused_after_expiry(postgres_engine, g, m, npc, response)
+
+
+class _entered:  # noqa: N801 - a context-manager adapter, used like a factory result
+    """An already-entered client, handed to `copy_pp` as `factory(user)` so the thread does not
+    build (and start) a second app inside the expiry window."""
+
+    def __init__(self, client: TestClient) -> None:
+        self._client = client
+
+    def __call__(self, _user: uuid.UUID) -> "_entered":
+        return self
+
+    def __enter__(self) -> TestClient:
+        return self._client
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def _expire_then_release(engine: Engine, m: Members, copying: Any, transaction: Any) -> None:
+    """The request is parked on the entity: let the role lapse, check the request is still parked,
+    then release it."""
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        with engine.connect() as probe:
+            if probe.execute(
+                text(
+                    "SELECT expires_at <= clock_timestamp() FROM security.membership_roles "
+                    "WHERE membership_role_id = :r"
+                ),
+                {"r": m.gm_role},
+            ).scalar_one():
+                break
+        threading.Event().wait(0.2)
+    assert not copying.finished()
+    transaction.commit()
+
+
+def _assert_refused_after_expiry(
+    engine: Engine, g: Gate, m: Members, npc: uuid.UUID, response: Any
+) -> None:
+    with engine.connect() as connection:
         expired = connection.execute(
             text(
                 "SELECT expires_at <= now() FROM security.membership_roles "
@@ -870,4 +948,4 @@ def test_r01_a_role_that_expires_during_the_copys_lock_wait_must_refuse_the_copy
         ).scalar_one()
     assert expired, "the role must have lapsed before the copy committed"
     assert is_refusal(response), (code(response), "the copy committed after the role expired")
-    assert draft(postgres_engine, g, npc) is None
+    assert draft(engine, g, npc) is None

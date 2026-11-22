@@ -242,6 +242,12 @@ RESOURCE_GRANT_CAPABILITY_CATALOG: dict[str, frozenset[str]] = {
     "event_id": GENERIC_TARGET_CAPABILITY_CODES,
 }
 
+# The codes a character (character, npc or player character) may be denied under `entity_id`
+# (P03-A A2a-R, DEF-018; offered by P15-C02-S04). Not a second policy: it is the `entity_id` row of
+# the catalog above, which is the only test `create_resource_grant` applies to the capability once
+# the character-deny exception has admitted the target.
+CHARACTER_DENY_CAPABILITY_CODES: frozenset[str] = RESOURCE_GRANT_CAPABILITY_CATALOG["entity_id"]
+
 _GrantKey = tuple[str, uuid.UUID]
 
 # What a live revelation confers on its one character, and nothing else (P03-A A3b, plan

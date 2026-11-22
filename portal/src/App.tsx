@@ -48,6 +48,7 @@ import { ItemDefinitionFormPage, ItemDefinitionsPage } from "./pages/ItemDefinit
 import { CreateItemPage, EditItemPage, ItemsPage } from "./pages/ItemPages"
 import { ItemWorkspacePage } from "./pages/ItemWorkspacePage"
 import { NpcPortrayalPage } from "./pages/NpcPortrayalPage"
+import { CharacterPublicProfilePage } from "./pages/CharacterPublicProfilePage"
 import { QuestSectionRedirect } from "./pages/QuestSectionRedirect"
 import { CreatePartyPage, EditPartyPage, PartiesPage } from "./pages/PartyPages"
 import {
@@ -63,6 +64,7 @@ import { CampaignKnowledgeDetailPage } from "./pages/CampaignKnowledgeDetailPage
 import { CampaignAccessPage } from "./pages/CampaignAccessPage"
 import { CampaignInvitationsPage } from "./pages/CampaignInvitationsPage"
 import { CampaignAccessAuditPage } from "./pages/CampaignAccessAuditPage"
+import { CampaignRevealAuthorityPage } from "./pages/CampaignRevealAuthorityPage"
 import { AcceptCampaignInvitationPage } from "./pages/AcceptCampaignInvitationPage"
 import { AdminAccountsPage } from "./pages/AdminAccountsPage"
 import { ActivateAccountPage } from "./pages/ActivateAccountPage"
@@ -366,6 +368,11 @@ function App() {
               element={<NpcPortrayalPage />}
             />
 
+            <Route
+              path="characters/:characterId/public-profile"
+              element={<CharacterPublicProfilePage />}
+            />
+
             <Route path="items" element={<ItemsPage />} />
 
             <Route path="items/new" element={<CreateItemPage />} />
@@ -563,6 +570,11 @@ function App() {
             <Route
               path="access/audit"
               element={<CampaignAccessAuditPage />}
+            />
+
+            <Route
+              path="access/reveal-authority"
+              element={<CampaignRevealAuthorityPage />}
             />
 
             <Route

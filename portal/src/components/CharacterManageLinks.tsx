@@ -63,6 +63,12 @@ export function CharacterManageLinks({
                 </Link>
             ) : null}
             <BuildsLink campaignId={campaignId} characterId={characterId} linkState={taskState} />
+            {/* For every kind, and not conditioned on the record's own eligibility: whether the person may
+                edit the draft or release it is the page's read (`can_edit`, `can_release`), and a person who
+                may release but not edit still needs the way in. */}
+            <Link className="authoring-button" to={`${root}/characters/${id}/public-profile`} state={taskState}>
+                Public profile
+            </Link>
             {kind === "npc" ? (
                 <>
                     <Link className="authoring-button" to={`${root}/world/character/${id}?section=run`} state={taskState}>

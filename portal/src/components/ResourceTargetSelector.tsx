@@ -39,6 +39,8 @@ interface PickerProps {
 // deliberately excludes character/event/quest/knowledge_item categories
 // from world/search, since each of those has its own dedicated target
 // column and the backend now rejects an entity_id write for any of them.
+// A character is an entity_id target for a DENY of two permissions only (A2a-R); that is not offered here but
+// by the forms' separate "Character (deny only)" kind, from the server's deniable_character_capabilities.
 function optionsFromIds<T>(
     items: T[],
     idOf: (item: T) => string,

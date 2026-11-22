@@ -36,20 +36,39 @@ export function useAccessWriteCompletion(): () => void {
             reload()
             return
         }
-        let read: Promise<boolean>
-        try {
-            read = Promise.resolve(refresh(new AbortController().signal))
-        } catch {
-            reload()
-            return
-        }
-        void read.then(
-            (applied) => {
-                if (applied !== true) {
-                    reload()
-                }
-            },
-            () => reload(),
-        )
+        readSessionInPlace(refresh, reload)
     }, [affectsCaller, refresh, reload])
+}
+
+// Reads the authoritative session again in place, falling back to the full reload when that read was not
+// applied (see above). Shared by the confirmed-write path and the permission-refusal path.
+function readSessionInPlace(
+    refresh: (signal?: AbortSignal) => Promise<boolean> | boolean,
+    reload: () => void,
+): void {
+    let read: Promise<boolean>
+    try {
+        read = Promise.resolve(refresh(new AbortController().signal))
+    } catch {
+        reload()
+        return
+    }
+    void read.then(
+        (applied) => {
+            if (applied !== true) {
+                reload()
+            }
+        },
+        () => reload(),
+    )
+}
+
+// Called by an Access write hook when the server refused a write with 403 (D-4, P15-C02-S04). A 403 may mean
+// the caller no longer holds `access.manage`; the page is bound to the applied session, so it can only learn
+// that from a session read. The read is in place (the page stays mounted unless the fresh session no longer
+// grants the capability, in which case the page's own binding unmounts everything), never a guess made from
+// the status code, and it is made for any write kind. It changes no status the hook reports.
+export function useAccessAuthorityRecheck(): () => void {
+    const { refresh, reload } = useSession()
+    return useCallback(() => readSessionInPlace(refresh, reload), [refresh, reload])
 }

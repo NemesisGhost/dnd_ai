@@ -55,6 +55,18 @@ export function AccessTabNav({ campaignId }: AccessTabNavProps) {
                         Audit history
                     </NavLink>
                 </li>
+                <li>
+                    <NavLink
+                        to={`${accessPath}/reveal-authority`}
+                        className={({ isActive }) =>
+                            isActive
+                                ? "access-tab-nav__link access-tab-nav__link--active"
+                                : "access-tab-nav__link"
+                        }
+                    >
+                        Reveal authority
+                    </NavLink>
+                </li>
             </ul>
         </nav>
     )

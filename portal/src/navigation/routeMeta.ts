@@ -245,6 +245,15 @@ export const ROUTE_METAS: readonly RouteMeta[] = [
         { parent: "characters.detail" },
     ),
     campaign(
+        "characters.publicProfile",
+        "characters/:characterId/public-profile",
+        "characters",
+        CHARACTER_ROOTS,
+        "section",
+        "Public profile",
+        { parent: "characters.detail" },
+    ),
+    campaign(
         "characters.edit",
         "characters/:characterId/edit",
         "characters",
@@ -413,6 +422,9 @@ export const ROUTE_METAS: readonly RouteMeta[] = [
         parent: "access.overview",
     }),
     campaign("access.audit", "access/audit", "access", ["access"], "section", "Access audit", {
+        parent: "access.overview",
+    }),
+    campaign("access.revealAuthority", "access/reveal-authority", "access", ["access"], "section", "Reveal authority", {
         parent: "access.overview",
     }),
     campaign("campaign.notFound", "*", null, [], "other", "Campaign page not found"),

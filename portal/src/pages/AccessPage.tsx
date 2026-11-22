@@ -21,16 +21,41 @@ import { useSession } from "../context/SessionContext"
 import { useAccessDisclosure } from "../hooks/useAccessDisclosure"
 import { AccessWriteScopeContext } from "../hooks/useAccessWriteCompletion"
 import type { AccessDisclosure } from "../hooks/useAccessDisclosure"
+import { characterDenyOf, denyDescription } from "../utils/characterDenies"
+import type { CharacterDenyInfo } from "../utils/characterDenies"
 import { humanizeCode } from "../utils/humanize"
+import type { WriteNotice } from "../types/accessWrite"
 import type {
     AccessGroupSummary,
+    AccessResourceGrantSummary,
     AssignableCharacter,
     AssignableCharacterRelationshipType,
     AssignableRole,
     CampaignAccessMember,
     CampaignAccessOverview,
+    DeniableCharacterCapability,
     GrantableResourceCapability,
 } from "../types/accessOverview"
+
+// One grant's line. A character denial (D-6: a deny, an entity target, a code in the server's deniable list, a
+// character of this overview) reads "Denied: everything about Aria"; every other grant keeps its exact wording.
+function GrantText({
+    grant,
+    denyInfo,
+}: {
+    grant: AccessResourceGrantSummary
+    denyInfo: CharacterDenyInfo | null
+}) {
+    if (denyInfo !== null) {
+        return <strong>Denied: {denyDescription(denyInfo, grant.capability_display_name)}</strong>
+    }
+    return (
+        <>
+            <strong>{grant.capability_display_name}</strong> ({humanizeCode(grant.effect)}) on{" "}
+            {grant.target_display_name ?? humanizeCode(grant.target_type)}
+        </>
+    )
+}
 
 // A scope for controls whose write cannot change the caller's own authority.
 const NOT_THE_CALLER = { affectsCaller: false }
@@ -50,8 +75,9 @@ interface MemberAccessCardProps {
     assignableCharacters: AssignableCharacter[]
     assignableRelationshipTypes: AssignableCharacterRelationshipType[]
     grantableResourceCapabilities: GrantableResourceCapability[]
+    deniableCharacterCapabilities: DeniableCharacterCapability[] | undefined
     preselectCharacterId: string | null
-    onChanged: (message: string) => void
+    onChanged: (message: string, notice?: WriteNotice) => void
     onMutationStart: () => void
     disclosure: AccessDisclosure
     onRefreshAccess: (campaignMembershipId: string) => void
@@ -68,6 +94,7 @@ function MemberAccessCard({
     assignableCharacters,
     assignableRelationshipTypes,
     grantableResourceCapabilities,
+    deniableCharacterCapabilities,
     preselectCharacterId,
     onChanged,
     onMutationStart,
@@ -233,18 +260,22 @@ function MemberAccessCard({
                 </section>
 
                 <section aria-labelledby={grantsHeadingId}>
-                    <h3 id={grantsHeadingId}>Direct resource access</h3>
+                    <h3 id={grantsHeadingId} tabIndex={-1} data-grants-heading={membershipId}>
+                        Direct resource access
+                    </h3>
 
                     {member.grants.length > 0 ? (
                         <ul>
                             {member.grants.map((grant) => (
                                 <li key={grant.resource_grant_id}>
-                                    <strong>
-                                        {grant.capability_display_name}
-                                    </strong>{" "}
-                                    ({humanizeCode(grant.effect)}) on{" "}
-                                    {grant.target_display_name ??
-                                        humanizeCode(grant.target_type)}
+                                    <GrantText
+                                        grant={grant}
+                                        denyInfo={characterDenyOf(
+                                            grant,
+                                            deniableCharacterCapabilities,
+                                            assignableCharacters,
+                                        )}
+                                    />
                                     {grant.reason !== null &&
                                         ` · ${grant.reason}`}
                                     <RevokeResourceGrant
@@ -253,6 +284,13 @@ function MemberAccessCard({
                                             member.display_name
                                         }
                                         grant={grant}
+                                        denyInfo={characterDenyOf(
+                                            grant,
+                                            deniableCharacterCapabilities,
+                                            assignableCharacters,
+                                        )}
+                                        grantsOwnerId={membershipId}
+                                        onRefreshAccess={() => onRefreshAccess(membershipId)}
                                         onChanged={onChanged}
                                         onMutationStart={onMutationStart}
                                     />
@@ -275,6 +313,8 @@ function MemberAccessCard({
                             grantableResourceCapabilities
                         }
                         existingGrants={member.grants}
+                        deniableCapabilities={deniableCharacterCapabilities}
+                        onRefreshAccess={() => onRefreshAccess(membershipId)}
                         onChanged={onChanged}
                         onMutationStart={onMutationStart}
                     />
@@ -334,8 +374,10 @@ interface AccessGroupCardProps {
     activeMembers: CampaignAccessMember[]
     assignableCharacters: AssignableCharacter[]
     grantableResourceCapabilities: GrantableResourceCapability[]
-    onChanged: (message: string) => void
+    deniableCharacterCapabilities: DeniableCharacterCapability[] | undefined
+    onChanged: (message: string, notice?: WriteNotice) => void
     onMutationStart: () => void
+    onRefreshAccess: (campaignMembershipId: string) => void
     // The caller is in this group (or is not known to be a member at all): a write to the group can change
     // the caller's own capabilities. Adding a member can, too, if the caller is one of the members offered.
     callerAffectedByGroup: boolean
@@ -351,8 +393,10 @@ function AccessGroupCard({
     activeMembers,
     assignableCharacters,
     grantableResourceCapabilities,
+    deniableCharacterCapabilities,
     onChanged,
     onMutationStart,
+    onRefreshAccess,
     callerAffectedByGroup,
     callerOfferedToAdd,
 }: AccessGroupCardProps) {
@@ -474,22 +518,37 @@ function AccessGroupCard({
                 </section>
 
                 <section aria-labelledby={grantsHeadingId}>
-                    <h3 id={grantsHeadingId}>Resource access</h3>
+                    <h3
+                        id={grantsHeadingId}
+                        tabIndex={-1}
+                        data-grants-heading={group.access_group_id}
+                    >
+                        Resource access
+                    </h3>
 
                     {group.grants.length > 0 ? (
                         <ul>
                             {group.grants.map((grant) => (
                                 <li key={grant.resource_grant_id}>
-                                    <strong>
-                                        {grant.capability_display_name}
-                                    </strong>{" "}
-                                    ({humanizeCode(grant.effect)}) on{" "}
-                                    {grant.target_display_name ??
-                                        humanizeCode(grant.target_type)}
+                                    <GrantText
+                                        grant={grant}
+                                        denyInfo={characterDenyOf(
+                                            grant,
+                                            deniableCharacterCapabilities,
+                                            assignableCharacters,
+                                        )}
+                                    />
                                     <RevokeResourceGrant
                                         campaignId={campaignId}
                                         memberDisplayName={group.name}
                                         grant={grant}
+                                        denyInfo={characterDenyOf(
+                                            grant,
+                                            deniableCharacterCapabilities,
+                                            assignableCharacters,
+                                        )}
+                                        grantsOwnerId={group.access_group_id}
+                                        onRefreshAccess={() => onRefreshAccess(group.access_group_id)}
                                         onChanged={onChanged}
                                         onMutationStart={onMutationStart}
                                     />
@@ -508,6 +567,9 @@ function AccessGroupCard({
                             assignableCharacters={assignableCharacters}
                             grantableCapabilities={grantableResourceCapabilities}
                             existingGrants={group.grants}
+                            deniableCapabilities={deniableCharacterCapabilities}
+                            // A group has no member toggle to return focus to: the page's status line takes it.
+                            onRefreshAccess={() => onRefreshAccess(group.access_group_id)}
                             onChanged={onChanged}
                             onMutationStart={onMutationStart}
                         />
@@ -525,7 +587,7 @@ interface AccessPageProps {
     // A character the relationship control starts on (from `?character=<id>` on
     // a player character's page); the server still validates everything.
     preselectCharacterId?: string | null
-    onChanged: (message: string) => void
+    onChanged: (message: string, notice?: WriteNotice) => void
     onMutationStart: () => void
     // Which member cards and explanations are open, held above the overview boundary so they survive
     // a reload of this list. A page rendered without them (a test) keeps its own.
@@ -603,6 +665,9 @@ export function AccessPage({
                                 grantableResourceCapabilities={
                                     overview.grantable_resource_capabilities
                                 }
+                                deniableCharacterCapabilities={
+                                    overview.deniable_character_capabilities
+                                }
                                 preselectCharacterId={preselectCharacterId}
                                 onChanged={onChanged}
                                 onMutationStart={onMutationStart}
@@ -654,8 +719,12 @@ export function AccessPage({
                                     grantableResourceCapabilities={
                                         overview.grantable_resource_capabilities
                                     }
+                                    deniableCharacterCapabilities={
+                                        overview.deniable_character_capabilities
+                                    }
                                     onChanged={onChanged}
                                     onMutationStart={onMutationStart}
+                                    onRefreshAccess={refreshAccess}
                                     callerAffectedByGroup={
                                         callerMembershipId === null ||
                                         group.members.some(
