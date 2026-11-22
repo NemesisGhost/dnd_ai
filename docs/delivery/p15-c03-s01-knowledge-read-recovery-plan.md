@@ -427,3 +427,75 @@ Baseline `dc14b4bb3c9b82b566c1187047a196a778a42af1` (HEAD and `origin/phase15/co
   - the C02 focus uncertainty (`usePageArrival`) is not touched.
 - **CI for the exact head:** none ran for `e550c8b` (`scripts/wait_for_ci.py --sha e550c8b` found no workflow run; `ci.yml` runs only for pushes to `main` and pull requests to `main`). **CI pending checkpoint PR.** No older run is cited.
 - **Review ranges for Luna:** T01 is `dc14b4b..9d43579`; T02 is `9d43579..e550c8b`; combined S01 is `dc14b4b..e550c8b`. The final head is the docs-only record commit that follows `e550c8b` (it changes no source).
+
+### 11.4 Independent review of T01, T02 and combined S01 (Codex, 2026-11-22)
+
+**Boundary and ancestry.** Initial checkout: branch `phase15/completion`, clean worktree, HEAD `3c3846112209a6934f7c0e8d21bc5c22772c56b7`. Resolved ranges and ancestry:
+
+| Boundary | Full SHA |
+|---|---|
+| Planning baseline | `dc14b4bb3c9b82b566c1187047a196a778a42af1` |
+| T01 | `dc14b4bb3c9b82b566c1187047a196a778a42af1..9d43579cd124657f7189553881860eaf72a755ee` |
+| T02 | `9d43579cd124657f7189553881860eaf72a755ee..e550c8b28366dbf6dd6fbddd7c5ec8aa14fe9a4f` |
+| Combined implementation | `dc14b4bb3c9b82b566c1187047a196a778a42af1..e550c8b28366dbf6dd6fbddd7c5ec8aa14fe9a4f` |
+| Final records head | `3c3846112209a6934f7c0e8d21bc5c22772c56b7` |
+
+The ranges are a direct ancestry chain. The final records head is a descendant of T02; `git diff e550c8b..3c38461 -- portal` is empty, so the records head adds no portal changes. No applicable `AGENTS.md` was found; repository `CLAUDE.md`, the current grading rubric, this plan, the maintained register and portal behavior §5.11 were read. The scope is the stated three ranges; CI remains pending the C03 checkpoint PR.
+
+**T01 verdict: CHANGES REQUIRED.** The separate authoring/detail outcomes, PD-1 hold, named notices, read-back recovery, one-time completion, and the A1–A14 boundary are implemented and covered. A1–A9 and A13–A14 exercise the corresponding holds, read ownership and recovery; A10–A11 prove preservation when the new field value differs from both the sent body and the updated server base. The test-first and M1–M3 records are retained. However, the saved-as-difference draft model loses a newer deliberate edit when a field is changed back to its pre-save value while the save is pending.
+
+**R1 — post-submit draft reverting to its old value is discarded.** `portal/src/pages/KnowledgeClaimPage.tsx:1104–1116` computes `remaining` only from keys present in `now.changes`. `setValues` derives that map against the old base, so reverting a field to its pre-save value removes the key before the confirmed response advances the base. `keepNewerDraft` then treats it as unchanged and the field follows the just-saved server value. I added a temporary app-level regression probe: save statement `Submitted`, change the field back to `The duke is a vampire.` while POST is pending, then settle a successful write and authoring read. The probe failed as expected: the displayed value was `Submitted`, and the unsaved-draft status was absent. The probe test was removed by restoring the exact saved bytes; `git hash-object` for the test file was `e42a2874dd6be1d4ae346cd004f742ce478d6728` before and after.
+
+Rubric: application track; supported caller is an authenticated `canon.edit` Knowledge editor. Exposure 2 (ordinary save/edit workflow with a pending request); impact 2 (a user-entered unsaved value is silently lost, though the user can retype it); triggerability 1 (the edit must occur before confirmation/read-back); detection/recovery 1 (the form instead shows the saved value, with no indication that the newer input was discarded); blast radius 0. **Score 6, Medium.** It fails the S01 acceptance promise that a newer draft survives. Bounded correction: preserve edit intent/version per field independently of whether it currently differs from the old base; reconcile the confirmed response against edits made after the submitted snapshot, including a deliberate revert to the pre-save value. Add a regression for edit-to-submitted → submit → edit-back-to-old → successful response, and retain A10–A12 behavior. Re-run affected page/tracker tests and M2.
+
+**T02 verdict: CHANGES REQUIRED.** The tracker distinguishes applied, outstanding, pending/superseded and closed outcomes; Load latest selects outstanding reads; the detail refresh performs the party recheck; scope and owner changes prevent stale publication; retry focus uses the optional focus handoff. B1–B18, M4–M8, and the updated detail-hook refusal contract were inspected. The changed “fails closed” test now expects the Knowledge-local `closed` result and still asserts the non-disclosing unavailable outcome; companion cases cover 403/404, party recheck, retained data on failed bootstrap refresh and no recheck without party scope. Shared `RefetchOutcome` is unchanged.
+
+**R2 — lifecycle page reports closed/superseded read-back outcomes as a recoverable failure.** `portal/src/components/EntityLifecyclePanel.tsx:276–283` announces “Saved, but the latest data could not be loaded” for every `readBack()` result other than `ok`. With `pageReportsRefresh`, the Knowledge page also owns the read episode: `reportOutcome` treats a superseded read as non-ok, while the tracker later announces the completed step; a refusal from `useAuthoringResource.refetch` is surfaced as `failed` to this panel even though the tracker closes the episode when the page sees `denied`/`unavailable`. I added a temporary app-level probe with a confirmed submit-for-review followed by an authoring GET 403. It observed the final “Submitted for review” and also one “Saved, but the latest data could not be loaded” announcement; the expected count for the latter (zero) failed. The test file was restored exactly to Git blob `e42a2874dd6be1d4ae346cd004f742ce478d6728`.
+
+The refusal is an authoritative answer, not a recoverable read failure; the extra announcement contradicts §8 and the refusal feedback rule, and duplicates/confuses the final completion feedback. The superseded path also labels a read as failed while its newer answer is pending (B15 says superseded alone is not a failure). Rubric: application/interaction track; exposure 1 (a confirmed lifecycle write whose follow-up read is denied or superseded); impact 1 (misleading, redundant spoken status before the correct completion); triggerability 1 (requires the read outcome transition); detection/recovery 0 (the later done message corrects the state); blast radius 0. **Score 3, Low.** It still fails the explicit refusal/supersession feedback contract, so it requires correction for this slice. Bounded correction: keep the page-owned lifecycle episode as the authority for announcement classification; announce “Saved, but…” only for an actual recoverable `failed` read, not `closed` or `superseded`, and announce the lifecycle done message once when the authoritative outcome closes/completes. Add App-level refusal and superseded lifecycle cases that assert the full announcement sequence and one POST, while preserving generic `EntityLifecyclePanel` callers and genuine failed-read recovery.
+
+**Combined S01 verdict: CHANGES REQUIRED.** R1 is inherited from T01 and persists unchanged through T02; R2 is introduced by the T02 lifecycle/page integration. These are distinct corrections. No other material issue was established in this pass.
+
+**Other acceptance and compatibility review.** The plan's acceptance map and test bodies were checked across A1–A14, B1–B18 and M1–M8. Read completion is per resource and per save, authoring alone controls row-version Save availability, newer applied reads recover outstanding episodes, read retry does not issue a second write, and stale scope/owner/unmounted responses cannot announce into a new page. Detail refusal removes the claim content and leaves only the safe saved confirmation; party-scoped 404 rechecks bootstrap once per refresh and distinguishes revoked, still-authorized and failed-recheck cases. Focus-on-retry is conditional on the retry control having owned focus and focus otherwise being lost; the “moved elsewhere” assertion is present. The C02 `usePageArrival` focus uncertainty is inherited and unaffected.
+
+The shared-component changes are additive: `SavedRefreshFailedNotice.behind` and `retryFocus` are optional; callers omitting them retain the former output and focus behavior. `EntityLifecyclePanel.onStepConfirmed` is optional and `onChanged`'s signature is unchanged; other production consumers do not need the new prop. Focused feedback and lifecycle tests passed. The compatibility check does not excuse R2 on the one caller that opts into page-owned lifecycle refresh.
+
+**Independent verification (PowerShell).** From the documented uppercase `C:\Users\nemes\dnd_ai\portal` path:
+
+| Command | Result |
+|---|---|
+| `npx vitest run src/App.knowledgeClaim.test.tsx src/hooks/useKnowledgeSaveReads.test.tsx src/hooks/useKnowledgeDetail.test.ts src/components/authoring/feedback.test.tsx src/components/EntityLifecyclePanel.test.tsx src/pages/KnowledgeClaimPage.test.tsx` | 6 files, 214 tests passed |
+| `npm test` | 442 files, 5576 tests passed on this independent run |
+| `npm run lint` | passed |
+| `npm run build` | passed; Vite emitted its existing >500 kB chunk-size advisory |
+| `uv run python scripts/check_documentation.py` | passed after the review record edit |
+| `git diff --check` | passed after the review record edit |
+
+The independent full-suite pass is a separate run from the recorded T01 first-run CampaignSettings timeout and rerun, and T02's two distinct failed runs followed by its successful third run. Those historical failures remain recorded and are not overwritten. The two temporary probes above were not committed; each target test source matched its original Git blob after restoration. No browser/AT, human or owner acceptance is claimed. No exact-head CI exists for this branch work; it remains pending the checkpoint PR.
+
+### 11.5 Correction of R1 and R2 (Sonnet, 2026-11-22)
+
+The §11.4 review above is kept as the history of the finding. Baseline for the correction: `3c3846112209a6934f7c0e8d21bc5c22772c56b7`. **R1 and R2 are corrected, pending independent confirmation.** No acceptance of any kind is claimed.
+
+| Finding | Commit | Range |
+|---|---|---|
+| R1 | `b27316d1076fe57acf2e1a4a0e48da2331f92f90` | `3c3846112209a6934f7c0e8d21bc5c22772c56b7..b27316d1076fe57acf2e1a4a0e48da2331f92f90` |
+| R2 | `018a3a1629ae875a048e2a698bb0aa6606198969` | `b27316d1076fe57acf2e1a4a0e48da2331f92f90..018a3a1629ae875a048e2a698bb0aa6606198969` |
+| Both | | `3c3846112209a6934f7c0e8d21bc5c22772c56b7..018a3a1629ae875a048e2a698bb0aa6606198969` |
+
+The final records head is the docs-only commit that follows `018a3a1` (it names no source change). Luna's uncommitted §11.4 and register edits were preserved and are committed with it unchanged.
+
+**R1.** `ClaimForm` now records, per field, the value typed since the last submit (`editedSince`, reset at each submit) apart from the `changes` map, which is relative to the saved claim. `keepNewerDraft` reconciles only those fields against the confirmed body: an edit that differs from what was saved stays an unsaved draft, including an edit back to the pre-save value; submitted input that was left alone, or edited and put back to the saved value, is not kept.
+- Test-first (R1 regressions, run on `3c38461`'s source): "survives the confirmation when typed while the save is pending" and "survives the read-back when typed while it is in flight" failed (Save disabled, no unsaved-draft status: the old value was replaced by the saved one). The control "keeps no draft for submitted input that was left alone, or edited and put back" passed, as it must.
+- Probe M9 (stop recording the per-field edit): fails the two R1 cases (the control passes), then restored byte-for-byte.
+
+**R2.** A page that sets `pageReportsRefresh` **and** passes `onStepConfirmed` now owns the whole announcement of a confirmed lifecycle step: `EntityLifecyclePanel` returns the read-back outcome without announcing "saved, but" or the done message. A page that sets `pageReportsRefresh` without `onStepConfirmed`, and every other caller, behave as before. `useKnowledgeSaveReads` now announces a lifecycle step like a claim save: done once when its reads resolve (including a refused detail), "saved, but" once and only for an `outstanding` (failed) read, nothing for `closed` or `pending` (superseded) reads until the newer answer resolves it.
+- Test-first (run on `3c38461`'s source, the new tests kept): app-level "an authoring read refused with 403/404 is a result" and "a step's detail read superseded by a newer read defers to it" failed (an extra "Saved, but…" announcement); shared-panel cases "announces nothing itself when the page reports the read-back" (ok, failed, superseded) failed; tracker cases "announces a complete lifecycle step once", "says saved-but only for a failed read", "authoring read is refused is done once" and the refused-detail case failed. 10 failed in all. The default-caller panel cases (saved-but for a non-ok read; done on ok; fallback without `onStepConfirmed`) passed, as the compatibility guard.
+- One existing assertion changed for timing only: "says a confirmed lifecycle step is saved but behind when the detail read fails…" read the live region synchronously after the notice appeared; the page now announces together with its notice, so the assertion waits for the announcement (same text). One tracker test was renamed and its expectation changed from "a step is left to its panel" to "a step is announced once", as the correction requires.
+- Probes (each temporary, restored byte-for-byte): M10 (panel announces again for a page-owned step) fails the three app R2 cases and the three shared-panel cases; M11 (superseded counts as a failure to announce) fails the R2 supersession cases, two tracker cases and B15; M12 (a refused detail is not announced) fails B7, B8, B11 and the tracker refusal case; M13 (a refusal is not closed) fails B9, the R2 403/404 cases and three tracker cases; M14 (superseded treated as outstanding) fails the supersession cases, two tracker cases and B15.
+
+**Verification (portal, PowerShell, `C:\Users\nemes\dnd_ai\portal`).**
+- Focused: `App.knowledgeClaim`, `useKnowledgeSaveReads`, `EntityLifecyclePanel`, `KnowledgeClaimPage`, `useKnowledgeDetail`, `authoring/feedback`: 6 files, 228 tests passed (before the R2 commit; the same after).
+- Full `npm test`, kept separate: run 1 failed 1 of 5590 (`AuditHistory.test.tsx` "loads more rows via the Load more button and appends them", an 8 s timeout under load; the file passed alone, 14/14); run 2: 442 files and 5590 tests passed. Neither touches the Knowledge files.
+- `npm run lint` clean; `tsc -b` clean; `npm run build` passed (existing chunk-size advisory); `scripts/check_documentation.py` and `git diff --check` pass at the final head.
+- No backend, API or unrelated focus change. CI: none ran for these commits; **CI pending checkpoint PR.**
