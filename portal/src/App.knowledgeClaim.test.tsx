@@ -1672,6 +1672,66 @@ describe("unified knowledge claim page", () => {
   })
 })
 
+// Shared by the C03-S01 cases below.
+const FAIL = { status: 500, body: { error: { code: "internal_error", message: "m", correlation_id: "c" } } }
+const SAVED_BUT = "Saved, but the latest data could not be loaded."
+const DONE = "Knowledge claim saved"
+const NOTICE = /Claim saved\. The latest claim could not be loaded/
+
+// Every distinct announcement the shared live region makes, in order (one per commit).
+function recordAnnouncements() {
+  const all: string[] = []
+  const region = screen.getByTestId("authoring-announcer")
+  const observer = new MutationObserver(() => {
+    const text = region.textContent ?? ""
+    if (text !== "") all.push(text)
+  })
+  observer.observe(region, { childList: true, subtree: true, characterData: true })
+  return { all, count: (text: string) => all.filter((heard) => heard === text).length, stop: () => observer.disconnect() }
+}
+
+// A claim save whose authoring and/or detail read-back fails.
+function claimSaveWith(failing: { authoring?: boolean; detail?: boolean }) {
+  const rendered = setup()
+  server.on("POST", UPDATE, () => {
+    current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+    if (failing.authoring) server.on("GET", VIEW_PATH, FAIL)
+    if (failing.detail) server.on("GET", DETAIL, FAIL)
+    return { body: RECEIPT }
+  })
+  return rendered
+}
+const recoverAuthoring = () => server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+const recoverDetail = () => server.on("GET", DETAIL, () => ({ body: current.detail }))
+const saveTruth = async () => {
+  await claimBox()
+  fireEvent.change(screen.getByRole("combobox", { name: /Truth/ }), { target: { value: "false" } })
+  fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
+}
+const saveButton = () => screen.getByRole("button", { name: "Save claim" })
+const loadLatest = () => fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
+const noticeGone = () => waitFor(() => expect(screen.queryByText(/The latest claim could not be loaded/)).toBeNull())
+
+// A lifecycle step (Submit for review) whose reads are all answered by what the handlers say now.
+function submitStepSetup(onPost?: () => void) {
+  let submitted = false
+  server.on("GET", LIFECYCLE, () => ({
+    body: submitted
+      ? lifecycle({ canon_status: "proposed", row_version: 3, available_actions: ["approve", "return_to_draft", "reject"] })
+      : lifecycle(),
+  }))
+  server.on("POST", `${LIFECYCLE}/submit-for-review`, () => {
+    submitted = true
+    onPost?.()
+    return { body: { entity_id: "k1", canon_status: "proposed", row_version: 3, changed: true } }
+  })
+}
+const clickSubmitForReview = async () => {
+  fireEvent.click(stageLink(2))
+  fireEvent.click(screen.getByRole("link", { name: "Publication" }))
+  fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+}
+
 // P02-0a selection ownership on the real page: the answer that revokes the selected perspective and
 // the accepted selection of another one are published in the same React batch (from the router's own
 // location notification). Only the session bootstrap is faked; the shell, layout, perspective state,
@@ -1873,65 +1933,6 @@ describe("selection ownership on the real claim page", () => {
   })
 
   describe("P15-C03-S01 T01: each read-back is tracked separately for the save that owns it", () => {
-    const FAIL = { status: 500, body: { error: { code: "internal_error", message: "m", correlation_id: "c" } } }
-    const SAVED_BUT = "Saved, but the latest data could not be loaded."
-    const DONE = "Knowledge claim saved"
-    const NOTICE = /Claim saved\. The latest claim could not be loaded/
-
-    // Every distinct announcement the shared live region makes, in order (one per commit).
-    function recordAnnouncements() {
-      const all: string[] = []
-      const region = screen.getByTestId("authoring-announcer")
-      const observer = new MutationObserver(() => {
-        const text = region.textContent ?? ""
-        if (text !== "") all.push(text)
-      })
-      observer.observe(region, { childList: true, subtree: true, characterData: true })
-      return { all, count: (text: string) => all.filter((heard) => heard === text).length, stop: () => observer.disconnect() }
-    }
-
-    // A claim save whose authoring and/or detail read-back fails.
-    function claimSaveWith(failing: { authoring?: boolean; detail?: boolean }) {
-      const rendered = setup()
-      server.on("POST", UPDATE, () => {
-        current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
-        if (failing.authoring) server.on("GET", VIEW_PATH, FAIL)
-        if (failing.detail) server.on("GET", DETAIL, FAIL)
-        return { body: RECEIPT }
-      })
-      return rendered
-    }
-    const recoverAuthoring = () => server.on("GET", VIEW_PATH, () => ({ body: current.view }))
-    const recoverDetail = () => server.on("GET", DETAIL, () => ({ body: current.detail }))
-    const saveTruth = async () => {
-      await claimBox()
-      fireEvent.change(screen.getByRole("combobox", { name: /Truth/ }), { target: { value: "false" } })
-      fireEvent.click(screen.getByRole("button", { name: "Save claim" }))
-    }
-    const saveButton = () => screen.getByRole("button", { name: "Save claim" })
-    const loadLatest = () => fireEvent.click(screen.getByRole("button", { name: "Load latest" }))
-    const noticeGone = () => waitFor(() => expect(screen.queryByText(/The latest claim could not be loaded/)).toBeNull())
-
-    // A lifecycle step (Submit for review) whose reads are all answered by what the handlers say now.
-    function submitStepSetup(onPost?: () => void) {
-      let submitted = false
-      server.on("GET", LIFECYCLE, () => ({
-        body: submitted
-          ? lifecycle({ canon_status: "proposed", row_version: 3, available_actions: ["approve", "return_to_draft", "reject"] })
-          : lifecycle(),
-      }))
-      server.on("POST", `${LIFECYCLE}/submit-for-review`, () => {
-        submitted = true
-        onPost?.()
-        return { body: { entity_id: "k1", canon_status: "proposed", row_version: 3, changed: true } }
-      })
-    }
-    const clickSubmitForReview = async () => {
-      fireEvent.click(stageLink(2))
-      fireEvent.click(screen.getByRole("link", { name: "Publication" }))
-      fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
-    }
-
     it("A1: a failed detail read-back names the details, keeps Save available, and sends one POST", async () => {
       claimSaveWith({ detail: true })
       const heard = recordAnnouncements()
@@ -2191,6 +2192,385 @@ describe("selection ownership on the real claim page", () => {
       expect(heard.count(DONE)).toBe(1)
       expect(server.callsTo("POST", /./)).toHaveLength(2)
       heard.stop()
+    })
+  })
+
+  describe("P15-C03-S01 T02: retry only outstanding reads; refusals, party recheck, navigation", () => {
+    const DENIED = { status: 403, body: { error: { code: "forbidden", message: "m", correlation_id: "c" } } }
+    const GONE = { status: 404 }
+    const reads = (path: string | RegExp) => server.callsTo("GET", path).length
+    const claimHeading = () => document.getElementById("knowledge-claim-heading")!
+    const gated = () => {
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return { gate, release }
+    }
+
+    it("B1: Load latest after a failed detail read sends only the detail read", async () => {
+      claimSaveWith({ detail: true })
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      recoverDetail()
+      const authoring = reads(VIEW_PATH)
+      const details = reads(DETAIL)
+      loadLatest()
+      await noticeGone()
+      expect(reads(VIEW_PATH)).toBe(authoring)
+      expect(reads(DETAIL)).toBe(details + 1)
+      expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+    })
+
+    it("B2: Load latest after a failed authoring read sends only the authoring read", async () => {
+      claimSaveWith({ authoring: true })
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      recoverAuthoring()
+      const authoring = reads(VIEW_PATH)
+      const details = reads(DETAIL)
+      loadLatest()
+      await noticeGone()
+      expect(reads(DETAIL)).toBe(details)
+      expect(reads(VIEW_PATH)).toBe(authoring + 1)
+    })
+
+    it("B3: Load latest after a lifecycle step whose detail read failed re-reads only the detail", async () => {
+      submitStepSetup(() => server.on("GET", DETAIL, FAIL))
+      setup()
+      await claimBox()
+      await clickSubmitForReview()
+      await screen.findByText(/Saved\. The latest claim could not be loaded/)
+      recoverDetail()
+      const lifecycleReads = reads(LIFECYCLE)
+      const authoring = reads(VIEW_PATH)
+      const details = reads(DETAIL)
+      loadLatest()
+      await noticeGone()
+      expect(reads(LIFECYCLE)).toBe(lifecycleReads)
+      expect(reads(VIEW_PATH)).toBe(authoring)
+      expect(reads(DETAIL)).toBe(details + 1)
+      expect(server.callsTo("POST", /./)).toHaveLength(1)
+    })
+
+    it("B4: Load latest clicked twice quickly sends one read per outstanding resource, and is busy", async () => {
+      claimSaveWith({ detail: true })
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      const { gate, release } = gated()
+      server.on("GET", DETAIL, async () => {
+        await gate
+        return { body: current.detail }
+      })
+      const details = reads(DETAIL)
+      const authoring = reads(VIEW_PATH)
+      const button = screen.getByRole("button", { name: "Load latest" })
+      fireEvent.click(button)
+      fireEvent.click(button)
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute("aria-busy", "true")
+      release()
+      await noticeGone()
+      expect(reads(DETAIL)).toBe(details + 1)
+      expect(reads(VIEW_PATH)).toBe(authoring)
+    })
+
+    it("B5: a Load latest that fails again keeps the notice and the focus, and announces nothing again", async () => {
+      claimSaveWith({ detail: true })
+      const heard = recordAnnouncements()
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      const before = heard.all.length
+      const button = screen.getByRole("button", { name: "Load latest" })
+      button.focus()
+      const details = reads(DETAIL)
+      fireEvent.click(button)
+      await waitFor(() => expect(reads(DETAIL)).toBe(details + 1))
+      await waitFor(() => expect(screen.getByRole("button", { name: "Load latest" })).toBeEnabled())
+      expect(screen.getByText(NOTICE)).toBeInTheDocument()
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Load latest" }))
+      expect(heard.all.length).toBe(before)
+      heard.stop()
+    })
+
+    it("B6: a Load latest that succeeds hands focus to the page heading, once", async () => {
+      claimSaveWith({ detail: true })
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      recoverDetail()
+      screen.getByRole("button", { name: "Load latest" }).focus()
+      loadLatest()
+      await noticeGone()
+      await waitFor(() => expect(document.activeElement).toBe(claimHeading()))
+    })
+
+    it("B6: focus the person moved elsewhere before the read answered stays where it is", async () => {
+      claimSaveWith({ detail: true })
+      await saveTruth()
+      await screen.findByText(NOTICE)
+      const { gate, release } = gated()
+      server.on("GET", DETAIL, async () => {
+        await gate
+        return { body: current.detail }
+      })
+      screen.getByRole("button", { name: "Load latest" }).focus()
+      loadLatest()
+      const box = await claimBox()
+      box.focus()
+      release()
+      await noticeGone()
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(document.activeElement).toBe(box)
+    })
+
+    describe("a refusal on a read-back is a result, not a failure", () => {
+      function saveRefusedBy(which: "detail" | "authoring", answer: object) {
+        setup()
+        server.on("POST", UPDATE, () => {
+          current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+          server.on("GET", which === "detail" ? DETAIL : VIEW_PATH, answer)
+          return { body: RECEIPT }
+        })
+      }
+
+      it.each([
+        ["B7", 403, DENIED],
+        ["B8", 404, GONE],
+      ])("%s: a %i on the detail read-back drops the claim, confirms the save safely and announces it once", async (_id, _status, answer) => {
+        saveRefusedBy("detail", answer)
+        const heard = recordAnnouncements()
+        await saveTruth()
+        const heading = await screen.findByRole("heading", { level: 1, name: "Knowledge unavailable" })
+        expect(screen.getByText("Your change was saved.")).toBeInTheDocument()
+        // The same presentation whatever the status, and nothing about the claim.
+        expect(heading.closest("section")!.textContent).toBe(
+          "Knowledge unavailableThe requested knowledge is not available.Your change was saved.",
+        )
+        expect(document.body.textContent).not.toContain("The duke is a vampire.")
+        await waitFor(() => expect(heard.count(DONE)).toBe(1))
+        expect(heard.count(SAVED_BUT)).toBe(0)
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        await waitFor(() => expect(document.activeElement).toBe(heading))
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+        heard.stop()
+      })
+
+      it("B9: a 403 on the authoring read-back removes the editor, confirms the save and announces it once", async () => {
+        saveRefusedBy("authoring", DENIED)
+        const heard = recordAnnouncements()
+        await saveTruth()
+        expect(await screen.findByText(/If you just saved, the save went through/)).toBeInTheDocument()
+        expect(screen.queryByRole("form", { name: "Knowledge claim" })).toBeNull()
+        await waitFor(() => expect(heard.count(DONE)).toBe(1))
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(heard.count(DONE)).toBe(1)
+        expect(heard.count(SAVED_BUT)).toBe(0)
+        expect(screen.queryByText(/The latest claim could not be loaded/)).toBeNull()
+        // Nothing is held, and leaving is not guarded.
+        fireEvent.click(breadcrumbKnowledge())
+        await waitFor(() => expect(screen.queryByRole("textbox", { name: /^Claim/ })).toBeNull())
+        expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull()
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+        heard.stop()
+      })
+    })
+
+    describe("after a save, a party-scoped 404 is rechecked like the first read", () => {
+      const PARTY_URL = `${CLAIM}?character_id=character-a&party_id=party-x`
+      let router: DataRouter
+      let refreshCalls = 0
+      let afterRefresh: "revoked" | "authorized" | "fails" = "revoked"
+      let saved = false
+
+      const partySession = (parties: string[]): SessionBootstrap =>
+        bootstrapFor(["access.manage", "canon.edit"], {
+          character_perspectives: [
+            {
+              character_id: "character-a",
+              character_name: "Name character-a",
+              authorized_parties: parties.map((id) => ({ party_id: id, party_name: id })),
+            },
+          ],
+          selected_character_id: null,
+        })
+
+      function useStatefulParties() {
+        const [bootstrap, setBootstrap] = useState(() => partySession(["party-x"]))
+        const reload = useCallback(() => undefined, [])
+        const refresh = useCallback(async () => {
+          refreshCalls += 1
+          if (afterRefresh === "fails") return false
+          setBootstrap(partySession(afterRefresh === "revoked" ? [] : ["party-x"]))
+          return true
+        }, [])
+        return { state: { status: "authenticated" as const, bootstrap }, reload, refresh }
+      }
+
+      function mountParty() {
+        refreshCalls = 0
+        saved = false
+        withLifecycle(lifecycle())
+        current = { detail: detail(), view: view() }
+        // Under the party the claim reads fine until the save, then the server says 404; without it, always fine.
+        server.on("GET", DETAIL, (call) =>
+          saved && /party_id=party-x/.test(call.path) ? GONE : { body: current.detail },
+        )
+        server.on("GET", VIEW_PATH, () => ({ body: current.view }))
+        server.on("POST", UPDATE, () => {
+          saved = true
+          current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+          return { body: RECEIPT }
+        })
+        vi.mocked(useSessionBootstrap).mockImplementation(useStatefulParties)
+        router = createMemoryRouter(
+          [
+            {
+              path: "*",
+              element: (
+                <ThemeProvider>
+                  <RouteSessionProvider>
+                    <App />
+                  </RouteSessionProvider>
+                </ThemeProvider>
+              ),
+            },
+          ],
+          { initialEntries: [PARTY_URL] },
+        )
+        return render(<RouterProvider router={router} />)
+      }
+      const address = () => {
+        const params = new URLSearchParams(router.state.location.search)
+        params.delete("section")
+        return `${router.state.location.pathname}${params.size === 0 ? "" : `?${params.toString()}`}`
+      }
+
+      it("B11: a party the change revoked is dropped from the address, the claim is read again, and the save is announced once", async () => {
+        afterRefresh = "revoked"
+        mountParty()
+        const heard = recordAnnouncements()
+        await saveTruth()
+        await waitFor(() => expect(address()).toBe(`${CLAIM}?character_id=character-a`))
+        expect(router.state.historyAction).toBe("REPLACE")
+        expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull()
+        expect(await claimBox()).toBeInTheDocument()
+        expect(refreshCalls).toBe(1)
+        await waitFor(() => expect(heard.count(DONE)).toBe(1))
+        expect(heard.count(SAVED_BUT)).toBe(0)
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+        heard.stop()
+      })
+
+      it("B12: a party that is still authorized is a genuine unavailable result, with no address change", async () => {
+        afterRefresh = "authorized"
+        mountParty()
+        await saveTruth()
+        expect(await screen.findByRole("heading", { level: 1, name: "Knowledge unavailable" })).toBeInTheDocument()
+        expect(screen.getByText("Your change was saved.")).toBeInTheDocument()
+        expect(address()).toBe(`${CLAIM}?character_id=character-a&party_id=party-x`)
+        expect(refreshCalls).toBe(1)
+      })
+
+      it("B13: a bootstrap refresh that fails is a recoverable read failure: the notice appears and nothing is dropped", async () => {
+        afterRefresh = "fails"
+        mountParty()
+        const heard = recordAnnouncements()
+        await saveTruth()
+        expect(await screen.findByText(NOTICE)).toBeInTheDocument()
+        expect(screen.getByText(/Out of date: the claim's details\./)).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Load latest" })).toBeInTheDocument()
+        expect(address()).toBe(`${CLAIM}?character_id=character-a&party_id=party-x`)
+        expect(screen.queryByRole("heading", { name: "Knowledge unavailable" })).toBeNull()
+        expect(heard.count(SAVED_BUT)).toBe(1)
+        heard.stop()
+      })
+    })
+
+    it("B15: a read-back answer that a newer read superseded is not shown as behind, and the save is announced once", async () => {
+      submitStepSetup()
+      setup()
+      let detailCalls = 0
+      const first = gated()
+      const second = gated()
+      server.on("GET", DETAIL, async () => {
+        const n = (detailCalls += 1)
+        if (n === 1) await first.gate
+        if (n === 2) await second.gate
+        return { body: current.detail }
+      })
+      server.on("POST", UPDATE, () => {
+        current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+        return { body: RECEIPT }
+      })
+      const heard = recordAnnouncements()
+      await saveTruth()
+      // The claim's own detail read-back is in flight; a lifecycle step now reads the detail again.
+      await waitFor(() => expect(detailCalls).toBe(1))
+      await clickSubmitForReview()
+      await waitFor(() => expect(detailCalls).toBe(2))
+      // The first read is superseded and answers; the newer one has not.
+      first.release()
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      expect(screen.queryByText(NOTICE)).toBeNull()
+      expect(heard.count(SAVED_BUT)).toBe(0)
+      second.release()
+      await waitFor(() => expect(heard.count(DONE)).toBe(1))
+      await waitFor(() => expect(heard.count("Submitted for review")).toBe(1))
+      expect(screen.queryByText(/could not be loaded/)).toBeNull()
+      heard.stop()
+    })
+
+    describe("a read-back outstanding when the page is left", () => {
+      async function saveWithDetailInFlight() {
+        const rendered = setup()
+        const { gate, release } = gated()
+        let detailCalls = 0
+        server.on("GET", DETAIL, async () => {
+          const n = (detailCalls += 1)
+          if (n === 1) await gate
+          return { body: current.detail }
+        })
+        server.on("POST", UPDATE, () => {
+          current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+          return { body: RECEIPT }
+        })
+        const heard = recordAnnouncements()
+        await saveTruth()
+        await waitFor(() => expect(detailCalls).toBe(1))
+        return { ...rendered, heard, release }
+      }
+      it("B16: a deliberate perspective change while a read-back is outstanding: the late answer announces nothing", async () => {
+        const { router, heard, release } = await saveWithDetailInFlight()
+        void router.navigate({ pathname: CLAIM, search: "?character_id=character-b" })
+        // The old page is replaced by the new perspective's read before the old answer arrives.
+        await waitFor(() =>
+          expect(server.callsTo("GET", DETAIL).some((call) => /character_id=character-b/.test(call.path))).toBe(true),
+        )
+        release()
+        expect(await screen.findByRole("textbox", { name: /^Claim/ })).toBeInTheDocument()
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        expect(heard.count(DONE)).toBe(0)
+        expect(heard.count(SAVED_BUT)).toBe(0)
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+        // The new perspective shows the claim it read itself.
+        expect(screen.getByRole("textbox", { name: /^Claim/ })).toHaveValue("The duke is a vampire.")
+        heard.stop()
+      })
+
+      it("B17: leaving for the Knowledge list while a read-back is in flight: nothing is announced after unmount", async () => {
+        const errors = vi.spyOn(console, "error").mockImplementation(() => undefined)
+        const { router, heard, release } = await saveWithDetailInFlight()
+        fireEvent.click(breadcrumbKnowledge())
+        await waitFor(() => expect(router.state.location.pathname).toBe("/app/mundivita/knowledge"))
+        release()
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        expect(heard.count(DONE)).toBe(0)
+        expect(heard.count(SAVED_BUT)).toBe(0)
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+        expect(errors).not.toHaveBeenCalled()
+        errors.mockRestore()
+        heard.stop()
+      })
     })
   })
 })

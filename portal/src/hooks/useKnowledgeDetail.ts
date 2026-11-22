@@ -36,6 +36,11 @@ export type KnowledgeDetailState =
         error: unknown
     }
 
+// What a re-read of the detail did, for the Knowledge claim page. "closed" is a refusal (403 or 404): an
+// authoritative answer that the item is not available now, told apart from "failed", a recoverable failure
+// that keeps the item shown. The shared `RefetchOutcome` is not widened.
+export type KnowledgeRefreshOutcome = RefetchOutcome | "closed"
+
 export interface UseKnowledgeDetailResult {
     state: KnowledgeDetailState
     retry: () => void
@@ -45,10 +50,14 @@ export interface UseKnowledgeDetailResult {
     // Re-reads the detail in place: the current item stays on screen (nothing remounts)
     // until the new one arrives, unlike `retry`, which starts again from "loading". It resolves
     // with what the read did and never rejects. "failed": it was not applied; a recoverable
-    // failure keeps the item already shown (a caller that just saved reports it as behind), while
-    // a refused or missing answer makes the item unavailable. "superseded": a newer read, a change
-    // of record or perspective, or a sign-in boundary replaced it.
-    refresh: () => Promise<RefetchOutcome>
+    // failure keeps the item already shown (a caller that just saved reports it as behind). "closed":
+    // the answer was a refusal (403/404): the item is unavailable now, and a party-scoped 404 was
+    // rechecked against a refreshed bootstrap first, exactly as on the first read. "superseded": a
+    // newer read, a change of record or perspective, or a sign-in boundary replaced it.
+    refresh: () => Promise<KnowledgeRefreshOutcome>
+    // The item became unavailable because of a `refresh` (a re-read after a confirmed write), so the
+    // boundary can say the write was saved without saying anything about the record.
+    refusedAfterWrite: boolean
 }
 
 interface KnowledgeDetailSnapshot {
@@ -59,6 +68,8 @@ interface KnowledgeDetailSnapshot {
     requestVersion: number
     state: KnowledgeDetailState
     authority: LabelRegistry | null
+    // Set when `state` is an unavailable answer to a `refresh`.
+    refusedAfterWrite?: true
 }
 
 const initialState: KnowledgeDetailState = {
@@ -79,6 +90,9 @@ export function useKnowledgeDetail(
     const partyEpisode = usePartyNotFoundEpisodes()
     const [requestVersion, setRequestVersion] = useState(0)
     const refreshController = useRef<AbortController | null>(null)
+    // Each refresh is its own episode for the party recheck: it checks the bootstrap once, and a later
+    // refresh (the person's Load latest) is a new episode.
+    const refreshEpisode = useRef(0)
 
     const [snapshot, setSnapshot] =
         useState<KnowledgeDetailSnapshot>(() => ({
@@ -99,7 +113,7 @@ export function useKnowledgeDetail(
         currentAuthority.current = registry
     })
 
-    const refresh = useCallback(async (): Promise<RefetchOutcome> => {
+    const refresh = useCallback(async (): Promise<KnowledgeRefreshOutcome> => {
         refreshController.current?.abort()
         const controller = new AbortController()
         refreshController.current = controller
@@ -127,13 +141,28 @@ export function useKnowledgeDetail(
                 error instanceof KnowledgeRequestError &&
                 (error.status === 403 || error.status === 404)
             ) {
-                setSnapshot({ ...keys, state: { status: "unavailable" } })
-                return "failed"
+                if (error.status === 404 && characterId !== null && partyId !== null) {
+                    // The party may be the cause: ask the refreshed bootstrap, as the first read does. The item
+                    // stays shown meanwhile, and a recheck that did not apply is a recoverable failure.
+                    const recheck = await partyEpisode(
+                        ["refresh", ++refreshEpisode.current, campaignId, knowledgeItemId, characterId, partyId, requestVersion].join("|"),
+                    )
+                    if (controller.signal.aborted) return "superseded"
+                    if (recheck === "failed") return "failed"
+                    setSnapshot({
+                        ...keys,
+                        state: { status: "unavailable", recheckedPartyId: partyId },
+                        refusedAfterWrite: true,
+                    })
+                    return "closed"
+                }
+                setSnapshot({ ...keys, state: { status: "unavailable" }, refusedAfterWrite: true })
+                return "closed"
             }
             // Recoverable: the item already shown stays, and the caller says it may be behind.
             return "failed"
         }
-    }, [campaignId, knowledgeItemId, characterId, partyId, requestVersion, reload])
+    }, [campaignId, knowledgeItemId, characterId, partyId, requestVersion, reload, partyEpisode])
 
     const retry = useCallback(() => {
         setRequestVersion(
@@ -287,5 +316,6 @@ export function useKnowledgeDetail(
         retry,
         authority: snapshotMatchesRequest ? snapshot.authority : null,
         refresh,
+        refusedAfterWrite: snapshotMatchesRequest && snapshot.refusedAfterWrite === true,
     }
 }

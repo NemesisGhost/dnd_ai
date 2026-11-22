@@ -9,7 +9,6 @@ import {
 } from "../api/knowledgeAuthoring"
 import { entityLifecyclePath } from "../api/entityLifecycle"
 import { provenancePath } from "../api/sources"
-import { useAnnounce } from "../components/authoring/announcer"
 import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { SelectField, TextAreaField, TextField } from "../components/authoring/fields"
 import { ErrorSummary, MutationStatusMessage, SavedRefreshFailedNotice, StaleWriteNotice } from "../components/authoring/feedback"
@@ -48,7 +47,9 @@ import type { RefetchOutcome, UseAuthoringResourceResult } from "../hooks/useAut
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { useKeptData } from "../hooks/useKeptData"
 import { useKnowledgeSaveReads } from "../hooks/useKnowledgeSaveReads"
-import type { KnowledgeSaveReads, SaveReadKey } from "../hooks/useKnowledgeSaveReads"
+import { reportOutcome } from "../hooks/useKnowledgeSaveReads"
+import type { KnowledgeSaveReads, ReadOutcome, SaveReadKey } from "../hooks/useKnowledgeSaveReads"
+import type { KnowledgeRefreshOutcome } from "../hooks/useKnowledgeDetail"
 import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type { KnowledgeDetail } from "../types/knowledge"
 import type { EntityLifecycleView } from "../types/entityLifecycle"
@@ -56,7 +57,6 @@ import type { KnowledgeAuthoringView, KnowledgeOptions } from "../types/knowledg
 import type { Provenance } from "../types/provenance"
 import { ERROR_CODE_MESSAGE, REASON_MAX, fieldForErrorCode } from "../utils/authoringValidation"
 import { describeBlockedReason } from "../utils/blockedReason"
-import { combineRefetchOutcomes } from "../utils/refreshOutcome"
 import { KnowledgeDetailsPanel } from "../components/knowledge/KnowledgeDetailsPanel"
 import { characterKnowledgeOf } from "../utils/characterKnowledge"
 import { humanizeCode } from "../utils/humanize"
@@ -81,10 +81,12 @@ interface KnowledgeClaimPageProps {
     characterId: string | null
     partyId: string | null
     /** Re-reads the audience-safe detail in place after a claim save, and says what the read did. */
-    refreshDetail: () => Promise<RefetchOutcome>
+    refreshDetail: () => Promise<KnowledgeRefreshOutcome>
 }
 
 const DONE_MESSAGE = "Knowledge claim saved"
+// Where focus goes when a successful Load latest removes the button that held it.
+const pageHeading = () => document.getElementById("knowledge-claim-heading")
 const LOCK_REASON = "Someone already knows this claim, so this cannot change."
 
 // Stands in for the lifecycle read while it is unavailable, so the one set of lifecycle actions
@@ -152,6 +154,11 @@ export function KnowledgeClaimPage({
             detail: item,
             lifecycle: lifecycle.state.kind === "ready" ? lifecycle.startedSeq : null,
         },
+        // A refusal is an authoritative answer: what a save was waiting for from that read is resolved.
+        closed: {
+            authoring: view.state.kind === "denied" || view.state.kind === "unavailable",
+            lifecycle: lifecycle.state.kind === "denied" || lifecycle.state.kind === "unavailable",
+        },
     })
     const [rereading, setRereading] = useState(false)
     const lifecycleRead = useRef<RefetchOutcome>("ok")
@@ -160,12 +167,29 @@ export function KnowledgeClaimPage({
     const readBack = async (): Promise<RefreshOutcome> => {
         const done = stepDone.current
         stepDone.current = null
-        const outcomes: Partial<Record<SaveReadKey, RefetchOutcome>> = {}
+        const startedIn = saves.scope
+        const outcomes: Partial<Record<SaveReadKey, ReadOutcome>> = {}
         // A read that is not this caller's to make (withheld by the server's eligibility) is not part of the save.
         if (canPrepare) outcomes.lifecycle = lifecycleRead.current
         if (canPrepare) outcomes.authoring = await view.refetch()
         outcomes.detail = await refreshDetail()
-        return done === null ? combineRefetchOutcomes(Object.values(outcomes)) : saves.open("lifecycle", done, outcomes)
+        if (done !== null) return saves.open("lifecycle", done, outcomes, startedIn)
+        saves.observe(outcomes, startedIn)
+        return reportOutcome(outcomes)
+    }
+    // Reads again only what is outstanding, under the current record and perspective, and never sends a write.
+    // An answer that arrives after the page moved on settles nothing (`startedIn`).
+    const reread = async (keys: SaveReadKey[]): Promise<void> => {
+        const startedIn = saves.scope
+        const outcomes: Partial<Record<SaveReadKey, ReadOutcome>> = {}
+        await Promise.all(
+            keys.map(async (key) => {
+                if (key === "authoring") outcomes.authoring = await view.refetch()
+                else if (key === "detail") outcomes.detail = await refreshDetail()
+                else outcomes.lifecycle = lifecycleRead.current = await lifecycle.refetch()
+            }),
+        )
+        saves.observe(outcomes, startedIn)
     }
     // The unsaved claim edits live here, above the claim form, so the lifecycle controls can say
     // plainly that they are not part of a submit, approve or publish, and so they survive the form
@@ -364,6 +388,7 @@ export function KnowledgeClaimPage({
                 partyId={partyId}
                 refreshDetail={refreshDetail}
                 saves={saves}
+                reread={reread}
             />
         ),
         sources: (
@@ -433,12 +458,13 @@ export function KnowledgeClaimPage({
                     behind={saves.notice("lifecycle") ?? undefined}
                     quiet
                     retrying={rereading}
+                    retryFocus={pageHeading}
                     onRetry={() => {
+                        if (rereading) return
                         setRereading(true)
                         void (async () => {
                             try {
-                                lifecycleRead.current = await lifecycle.refetch()
-                                await readBack()
+                                await reread(saves.outstanding("lifecycle"))
                             } finally {
                                 setRereading(false)
                             }
@@ -597,6 +623,7 @@ function EditableClaim({
         publicationHref: string
         replacement: { name: string; href: string | null } | null
         saves: KnowledgeSaveReads
+        reread: (keys: SaveReadKey[]) => Promise<void>
     }) {
     const here = useLocation()
     const ownState = retainedState(here.pathname, here.state) ?? undefined
@@ -1009,9 +1036,11 @@ function ClaimForm({
     changeNote,
     setChangeNote,
     saves,
+    reread,
 }: KnowledgeClaimPageProps &
     DraftBindings & {
         saves: KnowledgeSaveReads
+        reread: (keys: SaveReadKey[]) => Promise<void>
         view: KnowledgeAuthoringView
         options: KnowledgeOptions
         refreshing: boolean
@@ -1020,7 +1049,6 @@ function ClaimForm({
         refetch: () => Promise<RefreshOutcome>
     }) {
     const { reload } = useSession()
-    const announce = useAnnounce()
     const base = fromView(view)
     // The unsaved claim edits (held by the page): only the fields the user changed. Everything else
     // follows the saved claim, so a refresh of it (or of a lifecycle change, a knowledge action or
@@ -1053,14 +1081,21 @@ function ClaimForm({
     >({
         scopeKey: `edit-knowledge-claim:${knowledgeItemId}:${view.row_version}`,
         request: (body, ctx) => updateKnowledgeItem(campaignId, knowledgeItemId, body, ctx),
+        // The page tracks the reads and announces the save (done, or saved-but-behind), so the mutation does not.
+        ownsRefreshNotice: true,
         onSuccess: async (_result, body) => {
             setConfirming(false)
+            const startedIn = saves.scope
             // Each read is tracked on its own: the save is shown as fully refreshed only when both were applied.
-            const outcome = saves.open("claim", DONE_MESSAGE, { authoring: await refetch(), detail: await refreshDetail() })
+            const outcome = saves.open(
+                "claim",
+                DONE_MESSAGE,
+                { authoring: await refetch(), detail: await refreshDetail() },
+                startedIn,
+            )
             keepNewerDraft(body)
             setErrors([])
             setSaved(true)
-            if (outcome === "ok") announce(DONE_MESSAGE)
             return outcome
         },
     })
@@ -1135,11 +1170,13 @@ function ClaimForm({
 
     // Reads again only; the save is confirmed and is never sent a second time.
     async function loadLatest() {
+        if (rereading) return
         setRereading(true)
         try {
-            // Each read that is applied recovers the saves waiting for it (`saves`).
-            await refetch()
-            await refreshDetail()
+            // Only the reads that are outstanding, and each one that is applied recovers the saves waiting for it.
+            const keys = saves.outstanding("claim")
+            if (stale && !keys.includes("authoring")) keys.push("authoring")
+            await reread(keys)
         } finally {
             setRereading(false)
         }
@@ -1153,6 +1190,7 @@ function ClaimForm({
                     what="claim"
                     done="Claim saved."
                     behind={claimNotice}
+                    retryFocus={pageHeading}
                     quiet
                     onRetry={() => void loadLatest()}
                     retrying={rereading}

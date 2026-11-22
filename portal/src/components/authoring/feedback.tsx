@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 import type { AuthoringError } from "../../types/apiError"
 import { ERROR_CODE_MESSAGE } from "../../utils/authoringValidation"
+import { useRetryFocus } from "../../hooks/useRetryFocus"
 import "./authoring.css"
 
 export interface FieldError {
@@ -240,6 +241,9 @@ interface SavedRefreshFailedNoticeProps {
     quiet?: boolean
     // Which parts of the page are behind, when the page can tell (one read out of several failed).
     behind?: string
+    // Where focus goes when the person used the button and the read then worked (the button is removed with the
+    // notice): the page's heading. Absent: the notice does not manage focus.
+    retryFocus?: () => HTMLElement | null
 }
 
 // Shown when the server confirmed a write but re-reading afterwards failed. The change is saved;
@@ -252,7 +256,9 @@ export function SavedRefreshFailedNotice({
     retrying = false,
     quiet = false,
     behind,
+    retryFocus,
 }: SavedRefreshFailedNoticeProps) {
+    const focus = useRetryFocus<HTMLButtonElement>(retryFocus === undefined ? undefined : () => retryFocus())
     return (
         <div className="authoring-message authoring-message--warning" role={quiet ? undefined : "status"}>
             <AlertTriangle aria-hidden="true" className="authoring-message__icon" />
@@ -265,7 +271,12 @@ export function SavedRefreshFailedNotice({
                     <button
                         type="button"
                         className="authoring-button"
-                        onClick={onRetry}
+                        ref={retryFocus === undefined ? undefined : focus.ref}
+                        onClick={() => {
+                            if (retryFocus !== undefined) focus.used()
+                            onRetry()
+                        }}
+                        onBlur={retryFocus === undefined ? undefined : focus.left}
                         disabled={retrying}
                         aria-busy={retrying}
                     >

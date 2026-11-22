@@ -373,7 +373,7 @@ Baseline `dc14b4bb3c9b82b566c1187047a196a778a42af1` (HEAD and `origin/phase15/co
 
 #### T01 (DV-1 to DV-4)
 
-- **Commit:** `P15-C03-S01-T01: track each Knowledge read-back separately for the save that owns it`. A commit cannot name its own SHA, so the T02 commit records it here.
+- **Commit:** `9d43579cd124657f7189553881860eaf72a755ee` (`9d43579`); subject `P15-C03-S01-T01: track each Knowledge read-back separately for the save that owns it`. Pushed to `origin/phase15/completion`.
 - **What changed (portal only):**
   - new `useKnowledgeSaveReads` (per-save, per-read tracker, states `applied` and `outstanding`; a later applied read of the same resource recovers every open save; done announced once; scope reset);
   - `KnowledgeClaimPage` (Save held only for the authoring read, notice names the parts, draft cleared only where it equals the confirmed body, lifecycle step recorded with its done message);
@@ -393,8 +393,36 @@ Baseline `dc14b4bb3c9b82b566c1187047a196a778a42af1` (HEAD and `origin/phase15/co
   - M3 (announce done on every applied read, no once-guard): fails A1, A5, A6, A7, A8, A13, A14.
   Run on the final T01 code.
 - **Known limit:** the draft is kept as a difference from the saved version (the page's existing model). A field the person changes back to its old value while a save of a different value is in flight is not told apart from an unchanged field, so it follows the saved value after the save.
-- **CI for the exact head:** recorded after the push (see the register row).
+- **CI for the exact head:** none ran. `ci.yml` triggers only on pushes to `main` and on pull requests to `main`, and `scripts/wait_for_ci.py --sha 9d43579` found no workflow run for this commit. **CI pending checkpoint PR.** No older run is cited.
 
-#### T02
+#### T02 (DV-5 to DV-9)
 
-Pending.
+- **Commit:** `P15-C03-S01-T02: retry only outstanding Knowledge reads across refusal, party change, navigation and superseded answers`, a child of `9d43579`. Its SHA, and the CI position for it, are in the final record line below (a commit cannot name its own SHA).
+- **What changed (portal only):**
+  - the tracker gains `pending` (superseded, waiting for the newer read), `closed` (a refusal), `observe`, `outstanding`, a scope token that makes a late answer from another record, perspective or user settle nothing, and the claim save's own announcements (done once, or "saved, but" once), none after unmount;
+  - `useKnowledgeDetail.refresh` returns a Knowledge-local `closed` for a 403/404 (the shared `RefetchOutcome` is unchanged), rechecks a party-scoped 404 against the bootstrap once per refresh, and reports `refusedAfterWrite`;
+  - `KnowledgeDetailBoundary` shows "Your change was saved." on the unavailable page after such a refusal and gives its heading focus once, only if focus was lost;
+  - `KnowledgeClaimPage`: Load latest (claim and lifecycle notices) reads only outstanding reads; the claim mutation sets `ownsRefreshNotice` because the page announces;
+  - `SavedRefreshFailedNotice` gains an optional `retryFocus` (default unchanged).
+  - No shared hook (`useAuthoringMutation`, `useAuthoringResource`, `retryFailedReads`, `useConfirmedRefresh`, `useKeptData`, `usePartyNotFoundEpisodes`), backend or API change.
+- **DV-8 and DV-9 proven first:** at the T01 head the new B15 failed (a superseded read-back is shown as the could-not-be-loaded notice) and B6 failed (focus falls to `body` after a successful Load latest), so both fixes were made. An early draft of B15 gated both reads on one shared counter and so did not exercise supersession; it was corrected before the recorded baseline run.
+- **Test-first (new T02 cases run against the T01 head, T02 source changes stashed):** 16 failed: app level B1, B2, B3, B4, B6, B7, B8, B9, B11, B12, B13 and B15; hook level the refusal outcome (the existing "fails closed" test), B10, B13, B14 and "never rechecks without a party". B5, the focus-elsewhere half of B6, B16 and B17 passed at the T01 head and stay as regression guards. B18 is a tracker-level test (a save or a read that started under another scope settles nothing).
+- **One existing assertion changed, as the plan's `closed` outcome requires:** `useKnowledgeDetail.test.ts` "fails closed when the read says the item is no longer available" now expects `"closed"` (it expected `"failed"`) and `refusedAfterWrite`; its `useSession` mock also supplies `refresh`. No `App.knowledgeClaim.test.tsx` assertion from Section 2.4 changed.
+- **Full `npm test`, three runs, kept separate:**
+  - first run: 1 failed of 5576, `CampaignRevealAuthorityPage.write.test.tsx` "M9: reveal_delegation_recipient_not_gm re-reads, closes the dialog and says nothing was changed" (that file passed alone, 23/23);
+  - second run: 1 failed of 5576, `CharacterPublicProfilePage.test.tsx` "Cancel still returns focus to Release" (the known unresolved C02 focus symptom, load-sensitive; that file passed alone, 58/58);
+  - third run: 442 files and 5576 tests passed.
+  Neither failure touches the Knowledge files. Neither is reported as a pass.
+- **During development:** one run of `App.knowledgeClaim.test.tsx` failed the existing "clears the draft when the retry says access is gone" test while other new tests were failing and timing out. It passed three times alone and in every later whole-file and full run, and was not reproduced.
+- **`npm run lint`:** clean. **`npm run build`:** passed. `scripts/check_documentation.py` agrees; `git diff --check` clean.
+- **Mutation probes (each temporary, each reverted), run on the final T02 code:**
+  - M4 (Load latest re-reads every read): fails B1, B2, B3, B4;
+  - M5 (treat `closed` as `failed`): fails B7, B8, B9, B11, the hook refusal cases and four tracker cases;
+  - M6 (no party recheck on refresh): fails B10, B11, B12, B13 and B14;
+  - M7 (treat `superseded` as failed): fails B15 and two tracker cases;
+  - M8 (drop the scope check on a late answer): fails the tracker B16/B18 case. The App-level B16 does not fail under it, because leaving the page already unmounts the tracker; the plan allows "B16 or B18".
+- **Known limits (not fixed, not hidden):**
+  - a lifecycle step is announced by the shared lifecycle panel: when its authoring read is refused, or its detail read is superseded, the panel still says "saved, but" before the step's done message, because the panel reads the combined outcome and is not changed here;
+  - the T01 limit on a draft typed back to an old value stays;
+  - the C02 focus uncertainty (`usePageArrival`) is not touched.
+- **CI for the exact head:** none runs for a push to this branch (see T01). **CI pending checkpoint PR.**
