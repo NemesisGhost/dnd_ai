@@ -1067,7 +1067,15 @@ function ClaimForm({
         latest.current = { base, changes, changeNote }
     })
     const values: KnowledgeFormValues = { ...base, ...changes }
-    const setValues = (next: KnowledgeFormValues) => setChanges(changedFields(base, next))
+    // Every field edited since the last submit, with the value typed: edit intent, kept apart from `changes`,
+    // which is relative to the saved claim and so forgets an edit back to the value the claim had before the save.
+    const editedSince = useRef<Partial<KnowledgeFormValues>>({})
+    const setValues = (next: KnowledgeFormValues) => {
+        for (const key of Object.keys(changedFields(values, next)) as (keyof KnowledgeFormValues)[]) {
+            ;(editedSince.current as Record<string, unknown>)[key] = next[key]
+        }
+        setChanges(changedFields(base, next))
+    }
     const dirty = !same(values, base) || changeNote.trim() !== ""
     const isCanon = view.canon_status === "canon"
     // A save from a record that may be behind would carry the old row version, so saving is held until the
@@ -1103,22 +1111,25 @@ function ClaimForm({
     // typed since the body was built (while the save or its read-back was in flight) is kept as a draft.
     function keepNewerDraft(body: ReturnType<typeof toBody> & { change_note: string | null }) {
         const now = latest.current
-        const typed = { ...now.base, ...now.changes }
-        const typedBody = toBody(typed)
+        // Only a field edited after the submit can be newer than the body; one edited back to the pre-save
+        // value is still an edit, and differs from what was just saved.
+        const edited = editedSince.current
+        const typedBody = toBody({ ...now.base, ...edited })
         const remaining: Partial<KnowledgeFormValues> = {}
-        if ("statement" in now.changes && typedBody.statement !== body.statement) remaining.statement = typed.statement
-        if ("knowledgeType" in now.changes && typedBody.knowledge_type !== body.knowledge_type) {
-            remaining.knowledgeType = typed.knowledgeType
+        if ("statement" in edited && typedBody.statement !== body.statement) remaining.statement = edited.statement
+        if ("knowledgeType" in edited && typedBody.knowledge_type !== body.knowledge_type) {
+            remaining.knowledgeType = edited.knowledgeType
         }
-        if ("truthStatus" in now.changes && typedBody.truth_status !== body.truth_status) {
-            remaining.truthStatus = typed.truthStatus
+        if ("truthStatus" in edited && typedBody.truth_status !== body.truth_status) {
+            remaining.truthStatus = edited.truthStatus
         }
-        if ("sensitivity" in now.changes && typedBody.sensitivity !== body.sensitivity) {
-            remaining.sensitivity = typed.sensitivity
+        if ("sensitivity" in edited && typedBody.sensitivity !== body.sensitivity) {
+            remaining.sensitivity = edited.sensitivity
         }
-        if ("subject" in now.changes && typedBody.subject_entity_id !== body.subject_entity_id) {
-            remaining.subject = typed.subject
+        if ("subject" in edited && typedBody.subject_entity_id !== body.subject_entity_id) {
+            remaining.subject = edited.subject
         }
+        editedSince.current = {}
         setChanges(remaining)
         if (now.changeNote.trim() === (body.change_note ?? "")) setChangeNote("")
     }
@@ -1138,6 +1149,7 @@ function ClaimForm({
 
     function submitNow() {
         const note = changeNote.trim()
+        editedSince.current = {}
         mutation.submit({
             ...toBody(values),
             expected_row_version: view.row_version,

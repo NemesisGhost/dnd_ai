@@ -2113,6 +2113,84 @@ describe("selection ownership on the real claim page", () => {
       expect(screen.getByRole("combobox", { name: /Truth/ })).toHaveValue("false")
     })
 
+    describe("R1: an edit back to the pre-save value is newer intent", () => {
+      const OLD = "The duke is a vampire."
+      const savedStatement = () => {
+        current = { detail: detail({ statement: "Submitted" }), view: view({ statement: "Submitted", row_version: 2 }) }
+      }
+      async function submitStatement() {
+        fireEvent.change(await claimBox(), { target: { value: "Submitted" } })
+        fireEvent.click(saveButton())
+        await waitFor(() => expect(server.callsTo("POST", UPDATE)).toHaveLength(1))
+      }
+      const gateOf = () => {
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return { gate, release }
+      }
+
+      it("survives the confirmation when typed while the save is pending", async () => {
+        setup()
+        const { gate, release } = gateOf()
+        server.on("POST", UPDATE, async () => {
+          await gate
+          savedStatement()
+          return { body: RECEIPT }
+        })
+        await submitStatement()
+        fireEvent.change(await claimBox(), { target: { value: OLD } })
+        release()
+        await waitFor(() => expect(server.callsTo("GET", VIEW_PATH).length).toBeGreaterThan(1))
+        await waitFor(() => expect(saveButton()).toBeEnabled())
+        expect(await claimBox()).toHaveValue(OLD)
+        expect(screen.getByText("Unsaved changes to the claim")).toBeInTheDocument()
+        // Discarding returns to what was saved, not to the old claim.
+        fireEvent.click(screen.getByRole("button", { name: "Discard changes" }))
+        expect(await claimBox()).toHaveValue("Submitted")
+        expect(server.callsTo("POST", UPDATE)).toHaveLength(1)
+      })
+
+      it("survives the read-back when typed while it is in flight", async () => {
+        setup()
+        const { gate, release } = gateOf()
+        server.on("POST", UPDATE, () => {
+          savedStatement()
+          server.on("GET", VIEW_PATH, async () => {
+            await gate
+            return { body: current.view }
+          })
+          return { body: RECEIPT }
+        })
+        await submitStatement()
+        await waitFor(() => expect(server.callsTo("GET", VIEW_PATH).length).toBeGreaterThan(1))
+        fireEvent.change(await claimBox(), { target: { value: OLD } })
+        release()
+        await waitFor(() => expect(saveButton()).toBeEnabled())
+        expect(await claimBox()).toHaveValue(OLD)
+        expect(screen.getByText("Unsaved changes to the claim")).toBeInTheDocument()
+      })
+
+      it("keeps no draft for submitted input that was left alone, or edited and put back", async () => {
+        setup()
+        const { gate, release } = gateOf()
+        server.on("POST", UPDATE, async () => {
+          await gate
+          savedStatement()
+          return { body: RECEIPT }
+        })
+        await submitStatement()
+        fireEvent.change(await claimBox(), { target: { value: "Something else" } })
+        fireEvent.change(await claimBox(), { target: { value: "Submitted" } })
+        release()
+        await waitFor(() => expect(screen.getByText("Claim saved")).toBeInTheDocument())
+        await waitFor(() => expect(server.callsTo("GET", VIEW_PATH).length).toBeGreaterThan(1))
+        expect(await claimBox()).toHaveValue("Submitted")
+        expect(screen.queryByText("Unsaved changes to the claim")).toBeNull()
+      })
+    })
+
     describe("A12: the change note", () => {
       async function publishedEditWithNote(afterSubmit?: () => void) {
         setupPublished()
