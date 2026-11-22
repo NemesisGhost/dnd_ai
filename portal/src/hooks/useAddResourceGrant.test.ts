@@ -125,6 +125,33 @@ describe("useAddResourceGrant", () => {
         })
     })
 
+    it.each([403, 404])("tells a form which of the two a denied outcome was (%s), and nothing else", async (status) => {
+        addResourceGrantMock.mockRejectedValue(new AddResourceGrantRequestError(status))
+
+        const { result } = renderHook(() => useAddResourceGrant("campaign-a", vi.fn()))
+        expect(result.current.failureStatus).toBeNull()
+
+        act(() => {
+            result.current.submit("membership-a", characterTarget, "character.view_full", "allow")
+        })
+
+        await waitFor(() => {
+            expect(result.current.failureStatus).toBe(status)
+        })
+        act(() => result.current.reset())
+        expect(result.current.failureStatus).toBeNull()
+    })
+
+    it("reports no failure status for a conflict or an unknown outcome", async () => {
+        addResourceGrantMock.mockRejectedValue(new TypeError("Failed to fetch"))
+        const { result } = renderHook(() => useAddResourceGrant("campaign-a", vi.fn()))
+        act(() => {
+            result.current.submit("membership-a", characterTarget, "character.view_full", "allow")
+        })
+        await waitFor(() => expect(result.current.status).toEqual({ kind: "error" }))
+        expect(result.current.failureStatus).toBeNull()
+    })
+
     it.each([400, 409])("reports a conflict status for a %s response", async (status) => {
         addResourceGrantMock.mockRejectedValue(new AddResourceGrantRequestError(status))
 

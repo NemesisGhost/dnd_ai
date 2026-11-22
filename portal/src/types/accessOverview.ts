@@ -121,11 +121,22 @@ export interface AccessGroupSummary {
     grants: AccessResourceGrantSummary[]
 }
 
+// A permission a character may be denied (the server's DeniableCharacterCapabilityResponse), derived from
+// the same rule the grant command enforces. The portal holds no target policy of its own.
+export interface DeniableCharacterCapability {
+    capability_id: string
+    code: string
+    display_name: string
+}
+
 export interface CampaignAccessOverview {
     members: CampaignAccessMember[]
     assignable_roles: AssignableRole[]
     assignable_characters: AssignableCharacter[]
     assignable_relationship_types: AssignableCharacterRelationshipType[]
     grantable_resource_capabilities: GrantableResourceCapability[]
+    // Optional only so fixtures that predate it compile: the server always sends it, and an absent value
+    // offers no character denial.
+    deniable_character_capabilities?: DeniableCharacterCapability[]
     access_groups: AccessGroupSummary[]
 }

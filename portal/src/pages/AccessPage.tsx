@@ -29,6 +29,7 @@ import type {
     AssignableRole,
     CampaignAccessMember,
     CampaignAccessOverview,
+    DeniableCharacterCapability,
     GrantableResourceCapability,
 } from "../types/accessOverview"
 
@@ -50,6 +51,7 @@ interface MemberAccessCardProps {
     assignableCharacters: AssignableCharacter[]
     assignableRelationshipTypes: AssignableCharacterRelationshipType[]
     grantableResourceCapabilities: GrantableResourceCapability[]
+    deniableCharacterCapabilities: DeniableCharacterCapability[] | undefined
     preselectCharacterId: string | null
     onChanged: (message: string) => void
     onMutationStart: () => void
@@ -68,6 +70,7 @@ function MemberAccessCard({
     assignableCharacters,
     assignableRelationshipTypes,
     grantableResourceCapabilities,
+    deniableCharacterCapabilities,
     preselectCharacterId,
     onChanged,
     onMutationStart,
@@ -275,6 +278,8 @@ function MemberAccessCard({
                             grantableResourceCapabilities
                         }
                         existingGrants={member.grants}
+                        deniableCapabilities={deniableCharacterCapabilities}
+                        onRefreshAccess={() => onRefreshAccess(membershipId)}
                         onChanged={onChanged}
                         onMutationStart={onMutationStart}
                     />
@@ -334,8 +339,10 @@ interface AccessGroupCardProps {
     activeMembers: CampaignAccessMember[]
     assignableCharacters: AssignableCharacter[]
     grantableResourceCapabilities: GrantableResourceCapability[]
+    deniableCharacterCapabilities: DeniableCharacterCapability[] | undefined
     onChanged: (message: string) => void
     onMutationStart: () => void
+    onRefreshAccess: (campaignMembershipId: string) => void
     // The caller is in this group (or is not known to be a member at all): a write to the group can change
     // the caller's own capabilities. Adding a member can, too, if the caller is one of the members offered.
     callerAffectedByGroup: boolean
@@ -351,8 +358,10 @@ function AccessGroupCard({
     activeMembers,
     assignableCharacters,
     grantableResourceCapabilities,
+    deniableCharacterCapabilities,
     onChanged,
     onMutationStart,
+    onRefreshAccess,
     callerAffectedByGroup,
     callerOfferedToAdd,
 }: AccessGroupCardProps) {
@@ -508,6 +517,9 @@ function AccessGroupCard({
                             assignableCharacters={assignableCharacters}
                             grantableCapabilities={grantableResourceCapabilities}
                             existingGrants={group.grants}
+                            deniableCapabilities={deniableCharacterCapabilities}
+                            // A group has no member toggle to return focus to: the page's status line takes it.
+                            onRefreshAccess={() => onRefreshAccess(group.access_group_id)}
                             onChanged={onChanged}
                             onMutationStart={onMutationStart}
                         />
@@ -603,6 +615,9 @@ export function AccessPage({
                                 grantableResourceCapabilities={
                                     overview.grantable_resource_capabilities
                                 }
+                                deniableCharacterCapabilities={
+                                    overview.deniable_character_capabilities
+                                }
                                 preselectCharacterId={preselectCharacterId}
                                 onChanged={onChanged}
                                 onMutationStart={onMutationStart}
@@ -654,8 +669,12 @@ export function AccessPage({
                                     grantableResourceCapabilities={
                                         overview.grantable_resource_capabilities
                                     }
+                                    deniableCharacterCapabilities={
+                                        overview.deniable_character_capabilities
+                                    }
                                     onChanged={onChanged}
                                     onMutationStart={onMutationStart}
+                                    onRefreshAccess={refreshAccess}
                                     callerAffectedByGroup={
                                         callerMembershipId === null ||
                                         group.members.some(

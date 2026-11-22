@@ -28,7 +28,7 @@ own pending implementation and review, not this reference's historical checkpoin
 
 | Endpoint | Module | Capability | Notes |
 |---|---|---|---|
-| `GET /campaigns/{campaign_id}/access-overview` | `dnd_ai.api.access_overview` | `access.manage` | New in 13E-A. **Extended, checkpoint 5**: `grantable_resource_capabilities` metadata and per-grant `target_id`/`target_display_name`. See §3/§3k. |
+| `GET /campaigns/{campaign_id}/access-overview` | `dnd_ai.api.access_overview` | `access.manage` | New in 13E-A. **Extended, checkpoint 5**: `grantable_resource_capabilities` metadata and per-grant `target_id`/`target_display_name`. **Extended, P15-C02-S04**: `deniable_character_capabilities` (§3k). See §3/§3k. |
 | `GET /campaigns/{campaign_id}/eligible-accounts` | `dnd_ai.api.access_overview` | `access.manage` | New in 13E-B checkpoint 3 — exact-match account lookup for "Add campaign member". See §3d. |
 | `GET /campaigns/{campaign_id}/invitations` | `dnd_ai.api.campaign_invitations` | `access.manage` | Delivered in checkpoint 7. Returns outstanding invitations only; never returns the raw token or token hash. See §3m. |
 
@@ -69,7 +69,7 @@ None of the campaign-scoped rows above pass `allow_foundry_access=True` to `requ
 - **Capability:** `access.manage`, resolved via the existing `dnd_ai.api.access.require_campaign_capability` dependency — the identical gate every mutation endpoint in §2 already uses for the same category of action.
 - **Boundary:** campaign-scoped, human principal only (local-session or OIDC — see §4; Foundry-adapter credentials are rejected).
 - **Request:** `campaign_id` path parameter (UUID) only. No query parameters, no request body.
-- **Response (`CampaignAccessOverviewResponse`):** `{ members: [CampaignMemberSummaryResponse], assignable_roles: [AssignableRoleResponse], assignable_characters: [AssignableCharacterResponse], assignable_relationship_types: [AssignableCharacterRelationshipTypeResponse], grantable_resource_capabilities: [GrantableResourceCapabilityResponse] }` (`assignable_characters`/`assignable_relationship_types` are character-relationship-management checkpoint — see §3g; `grantable_resource_capabilities` is checkpoint 5 — see §3k), one member entry per currently open (`ended_at IS NULL`) campaign membership:
+- **Response (`CampaignAccessOverviewResponse`):** `{ members: [CampaignMemberSummaryResponse], assignable_roles: [AssignableRoleResponse], assignable_characters: [AssignableCharacterResponse], assignable_relationship_types: [AssignableCharacterRelationshipTypeResponse], grantable_resource_capabilities: [GrantableResourceCapabilityResponse], deniable_character_capabilities: [DeniableCharacterCapabilityResponse], access_groups: [...] }` (`assignable_characters`/`assignable_relationship_types` are character-relationship-management checkpoint — see §3g; `grantable_resource_capabilities` is checkpoint 5 — see §3k), one member entry per currently open (`ended_at IS NULL`) campaign membership:
   - `campaign_membership_id` (UUID — identity only, never rendered as page text)
   - `display_name`, `status_code`, `status_display_name`, `joined_at`
   - `account_is_active` (checkpoint-6 correction) — a single derived boolean (`security.users.lifecycle_status_id -> core.lifecycle_statuses.code = 'active'`), never the raw status code, login name, email, or identity subject. Added so the portal's access-group "Add member" selector (§3l) can exclude a membership `add_access_group_member` would reject anyway (its owning account platform-disabled) instead of offering it and having the request always fail.
@@ -894,7 +894,7 @@ that already existed.
   campaign, applies on the campaign's own timeline (`timeline_id` null), needs an active
   character of the campaign's world, and is revoked like any grant; an identical active deny is a
   `409`. The access overview and the effective-access explanation name the character for such a
-  grant (`target_type` stays `entity`). The portal offers no control for it until A6. The
+  grant (`target_type` stays `entity`). The overview lists, as `deniable_character_capabilities` (`capability_id`, `code`, `display_name`, in code order, active capabilities only; P15-C02-S04), exactly the codes this exception admits: `CHARACTER_DENY_CAPABILITY_CODES`, the `entity_id` row of the catalog, which is the only test the command applies to the capability once a character target is admitted. It is campaign-independent, identical for every `access.manage` holder, and leaves `grantable_resource_capabilities` unchanged; a test drives the route with every listed code, so list and command cannot drift. The portal offers the deny from this list (a **Character (deny only)** target kind on the member and group forms) and holds no target policy of its own. The
   `canon.edit` deny's contract in this slice is the public-profile draft's edit and read path
   only: character view tiers, inventory and other character authoring do not consult it
   (DEF-016, unfixed).

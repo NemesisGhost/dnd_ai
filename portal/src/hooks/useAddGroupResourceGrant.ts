@@ -17,6 +17,8 @@ export type AddGroupResourceGrantStatus =
 
 export interface UseAddGroupResourceGrantResult {
     status: AddGroupResourceGrantStatus
+    // The HTTP status behind a `denied` outcome (403 or 404), for a form that tells the two apart; null otherwise.
+    failureStatus: number | null
     submit: (
         accessGroupId: string,
         target: ResourceGrantTarget,
@@ -29,6 +31,7 @@ export interface UseAddGroupResourceGrantResult {
 interface Snapshot {
     campaignId: string
     status: AddGroupResourceGrantStatus
+    failureStatus?: number
 }
 
 interface IdempotencyReservation {
@@ -158,7 +161,11 @@ export function useAddGroupResourceGrant(
                             return
                         }
                         if (cause.status === 403 || cause.status === 404) {
-                            setSnapshot({ campaignId: requestCampaignId, status: { kind: "denied" } })
+                            setSnapshot({
+                                campaignId: requestCampaignId,
+                                status: { kind: "denied" },
+                                failureStatus: cause.status,
+                            })
                             return
                         }
                         if (cause.status === 409 || cause.status === 400) {
@@ -180,5 +187,10 @@ export function useAddGroupResourceGrant(
         setSnapshot({ campaignId, status: idleStatus })
     }, [campaignId])
 
-    return { status, submit, reset }
+    const failureStatus =
+        snapshot.campaignId === campaignId && status.kind === "denied"
+            ? (snapshot.failureStatus ?? null)
+            : null
+
+    return { status, failureStatus, submit, reset }
 }

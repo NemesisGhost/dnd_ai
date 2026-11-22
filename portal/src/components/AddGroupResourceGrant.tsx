@@ -1,12 +1,20 @@
 import { useId, useState } from "react"
+import { CharacterDenyFeedback, CharacterDenyFields } from "./CharacterDenyFields"
 import { ResourceTargetSelector } from "./ResourceTargetSelector"
 import { useAddGroupResourceGrant } from "../hooks/useAddGroupResourceGrant"
 import type {
     AccessResourceGrantSummary,
     AssignableCharacter,
+    DeniableCharacterCapability,
     GrantableResourceCapability,
 } from "../types/accessOverview"
 import type { ResourceGrantEffect, ResourceGrantTargetField } from "../types/resourceGrantTarget"
+import {
+    CHARACTER_DENY_KIND,
+    CHARACTER_DENY_KIND_LABEL,
+    availableDenyCapabilities,
+    canOfferCharacterDeny,
+} from "../utils/characterDenies"
 import { humanizeCode } from "../utils/humanize"
 
 interface AddGroupResourceGrantProps {
@@ -16,6 +24,10 @@ interface AddGroupResourceGrantProps {
     assignableCharacters: AssignableCharacter[]
     grantableCapabilities: GrantableResourceCapability[]
     existingGrants: AccessResourceGrantSummary[]
+    // The server's list of permissions a character may be denied. Absent or empty: no character denial is offered.
+    deniableCapabilities?: DeniableCharacterCapability[]
+    // A read of the access list (sends nothing): the one recovery offered after a 404 or 409 on a character denial.
+    onRefreshAccess?: () => void
     onChanged: (message: string) => void
     onMutationStart: () => void
 }
@@ -50,6 +62,8 @@ export function AddGroupResourceGrant({
     assignableCharacters,
     grantableCapabilities,
     existingGrants,
+    deniableCapabilities,
+    onRefreshAccess,
     onChanged,
     onMutationStart,
 }: AddGroupResourceGrantProps) {
@@ -68,9 +82,15 @@ export function AddGroupResourceGrant({
     // See AddResourceGrant's identical usableTargetTypes for why
     // "character" is excluded here when nothing is assignable, but the
     // four async kinds cannot be pre-checked the same way.
-    const usableTargetTypes = targetTypes.filter(
-        (targetType) => targetType !== "character" || assignableCharacters.length > 0,
-    )
+    const offersCharacterDeny = canOfferCharacterDeny(deniableCapabilities, assignableCharacters)
+    const usableTargetTypes = [
+        ...targetTypes.filter(
+            (targetType) => targetType !== "character" || assignableCharacters.length > 0,
+        ),
+        // The one pseudo-kind: a deny on a character, offered only from the server's list. It comes last, so
+        // the form still opens on the first existing kind.
+        ...(offersCharacterDeny ? [CHARACTER_DENY_KIND] : []),
+    ]
 
     const [selectedTargetType, setSelectedTargetType] = useState(usableTargetTypes[0] ?? "")
     const [selectedResource, setSelectedResource] = useState<{
@@ -78,6 +98,9 @@ export function AddGroupResourceGrant({
         id: string
     }>({ targetType: "", id: "" })
     const [selectedEffect, setSelectedEffect] = useState<ResourceGrantEffect>("allow")
+    // The character-deny kind keeps its own selections. None is implicit: a character and a permission are chosen.
+    const [denyCharacterId, setDenyCharacterId] = useState("")
+    const [denyCode, setDenyCode] = useState("")
     const [selectedCapability, setSelectedCapability] = useState<{
         targetType: string
         resourceId: string
@@ -85,8 +108,16 @@ export function AddGroupResourceGrant({
         code: string
     }>({ targetType: "", resourceId: "", effect: "allow", code: "" })
 
-    const { status, submit, reset } = useAddGroupResourceGrant(campaignId, () =>
-        onChanged(selectedEffect === "deny" ? "Resource denial added." : "Resource access added."),
+    const isCharacterDeny = selectedTargetType === CHARACTER_DENY_KIND
+
+    const { status, failureStatus, submit, reset } = useAddGroupResourceGrant(campaignId, () =>
+        onChanged(
+            isCharacterDeny
+                ? "Denial added."
+                : selectedEffect === "deny"
+                  ? "Resource denial added."
+                  : "Resource access added.",
+        ),
     )
 
     const isPending = status.kind === "pending"
@@ -126,6 +157,13 @@ export function AddGroupResourceGrant({
         })
     }
 
+    const denyAvailable = availableDenyCapabilities(
+        deniableCapabilities ?? [],
+        existingGrants,
+        denyCharacterId,
+    )
+    const denyChosen = denyAvailable.some((capability) => capability.code === denyCode)
+
     if (usableTargetTypes.length === 0) {
         // No grantable capability of any kind, or the only kind available
         // is "character" with none assignable — never show a control
@@ -143,6 +181,8 @@ export function AddGroupResourceGrant({
                     setSelectedTargetType(usableTargetTypes[0] ?? "")
                     setSelectedEffect("allow")
                     setDenyConfirmed(false)
+                    setDenyCharacterId("")
+                    setDenyCode("")
                     setIsEditing(true)
                 }}
             >
@@ -151,11 +191,12 @@ export function AddGroupResourceGrant({
         )
     }
 
-    const canSubmit =
-        selectedTargetType !== "" &&
-        selectedResourceId !== "" &&
-        selectedCapabilityCode !== "" &&
-        (selectedEffect === "allow" || denyConfirmed)
+    const canSubmit = isCharacterDeny
+        ? denyCharacterId !== "" && denyChosen && denyConfirmed
+        : selectedTargetType !== "" &&
+          selectedResourceId !== "" &&
+          selectedCapabilityCode !== "" &&
+          (selectedEffect === "allow" || denyConfirmed)
 
     return (
         <form
@@ -166,6 +207,16 @@ export function AddGroupResourceGrant({
                     return
                 }
                 onMutationStart()
+                if (isCharacterDeny) {
+                    // The server's rule for a character deny: `entity_id`, effect deny (never an allow).
+                    submit(
+                        accessGroupId,
+                        { field: "entity_id", id: denyCharacterId },
+                        denyCode,
+                        "deny",
+                    )
+                    return
+                }
                 submit(
                     accessGroupId,
                     { field: targetFieldForType(selectedTargetType), id: selectedResourceId },
@@ -186,11 +237,30 @@ export function AddGroupResourceGrant({
             >
                 {usableTargetTypes.map((targetType) => (
                     <option key={targetType} value={targetType}>
-                        {humanizeCode(targetType)}
+                        {targetType === CHARACTER_DENY_KIND
+                            ? CHARACTER_DENY_KIND_LABEL
+                            : humanizeCode(targetType)}
                     </option>
                 ))}
             </select>
 
+            {isCharacterDeny ? (
+                <CharacterDenyFields
+                    granteeKind="group"
+                    granteeName={groupName}
+                    characters={assignableCharacters}
+                    deniable={deniableCapabilities ?? []}
+                    existingGrants={existingGrants}
+                    characterId={denyCharacterId}
+                    onCharacterChange={setDenyCharacterId}
+                    code={denyChosen ? denyCode : ""}
+                    onCodeChange={setDenyCode}
+                    confirmed={denyConfirmed}
+                    onConfirmedChange={setDenyConfirmed}
+                    isPending={isPending}
+                />
+            ) : (
+            <>
             <label id={resourceLabelId}>{humanizeCode(selectedTargetType)}</label>
             <ResourceTargetSelector
                 campaignId={campaignId}
@@ -277,10 +347,16 @@ export function AddGroupResourceGrant({
             ) : (
                 <p>Every available permission is already granted for this resource and effect.</p>
             )}
+            </>
+            )}
 
             <div className="access-role-editor__actions">
                 <button type="submit" disabled={isPending || !canSubmit} aria-busy={isPending}>
-                    {isPending ? "Adding…" : "Add"}
+                    {isPending
+                        ? "Adding…"
+                        : isCharacterDeny && status.kind === "error"
+                          ? "Try again"
+                          : "Add"}
                 </button>
 
                 <button
@@ -295,18 +371,27 @@ export function AddGroupResourceGrant({
                 </button>
             </div>
 
-            <p
-                id={statusId}
-                className={
-                    status.kind === "denied" || status.kind === "conflict" || status.kind === "error"
-                        ? "access-role-editor__status access-role-editor__status--error"
-                        : "access-role-editor__status"
-                }
-                role="status"
-                aria-live="polite"
-            >
-                {status.kind === "idle" ? "" : statusMessage(status.kind)}
-            </p>
+            {isCharacterDeny ? (
+                <CharacterDenyFeedback
+                    kind={status.kind}
+                    failureStatus={failureStatus}
+                    granteeKind="group"
+                    onRefresh={() => onRefreshAccess?.()}
+                />
+            ) : (
+                <p
+                    id={statusId}
+                    className={
+                        status.kind === "denied" || status.kind === "conflict" || status.kind === "error"
+                            ? "access-role-editor__status access-role-editor__status--error"
+                            : "access-role-editor__status"
+                    }
+                    role="status"
+                    aria-live="polite"
+                >
+                    {status.kind === "idle" ? "" : statusMessage(status.kind)}
+                </p>
+            )}
         </form>
     )
 }

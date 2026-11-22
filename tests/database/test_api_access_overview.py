@@ -811,3 +811,136 @@ def test_revoking_a_role_after_the_fact_is_reflected_on_the_next_request(
     assert after.status_code == 200, after.text
     member_after = _member(after.json(), f.member_membership_id)
     assert member_after["roles"] == []
+
+
+# ---------------------------------------------------------------------------
+# P15-C02-S04 T01: the permissions a character may be denied (BD1 to BD5)
+# ---------------------------------------------------------------------------
+
+# The grantable list before the field existed: its set is pinned so the additive field cannot have
+# moved it (BD2). Only the two generic codes are in the `entity` row; the character row is the
+# `character.*` codes.
+_DENIABLE = ["campaign.view", "canon.edit"]
+
+
+def _deniable(payload: dict) -> list[dict]:
+    return payload["deniable_character_capabilities"]
+
+
+def test_bd1_the_overview_lists_the_two_character_deniable_permissions_in_code_order(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture, postgres_engine: Engine
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        response = client.get(_overview_url(f))
+    assert response.status_code == 200, response.text
+    deniable = _deniable(response.json())
+    assert [c["code"] for c in deniable] == _DENIABLE
+    assert all(c["display_name"].strip() for c in deniable)
+    with postgres_engine.connect() as connection:
+        ids = {
+            row.code: str(row.capability_id)
+            for row in connection.execute(
+                text("SELECT code, capability_id FROM security.capabilities WHERE code = ANY(:c)"),
+                {"c": _DENIABLE},
+            )
+        }
+    assert {c["code"]: c["capability_id"] for c in deniable} == ids
+    assert all(set(c) == {"capability_id", "code", "display_name"} for c in deniable)
+
+
+def test_bd2_the_grantable_list_is_exactly_the_catalog_and_does_not_include_the_new_field(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    from dnd_ai.domain.access import RESOURCE_GRANT_CAPABILITY_CATALOG
+
+    with client_factory(f.admin_user_id) as client:
+        payload = client.get(_overview_url(f)).json()
+    expected = {
+        (code, column.removesuffix("_id"))
+        for column, codes in RESOURCE_GRANT_CAPABILITY_CATALOG.items()
+        for code in codes
+    }
+    actual = [(c["code"], c["target_type"]) for c in payload["grantable_resource_capabilities"]]
+    assert len(actual) == len(set(actual))
+    assert set(actual) == expected
+    assert set(payload["grantable_resource_capabilities"][0]) == {
+        "capability_id",
+        "code",
+        "display_name",
+        "target_type",
+    }
+
+
+@pytest.mark.parametrize("type_code", ["character", "npc", "player_character"])
+def test_bd3_the_list_matches_what_the_command_accepts_for_a_character_deny(
+    client_factory: Callable[[uuid.UUID], TestClient],
+    f: Fixture,
+    postgres_engine: Engine,
+    type_code: str,
+) -> None:
+    """Drift between the list and the command fails here: every listed code is accepted as a deny
+    under `entity_id` (201) and refused as an allow (404); a generic code the list omits is not
+    something the route would take for a character deny either (the `character.*` codes)."""
+    with postgres_engine.begin() as connection:
+        target = make_character(
+            connection, f.world_id, name=f"Deny {type_code}", entity_type_code=type_code
+        )
+    with client_factory(f.admin_user_id) as client:
+        listed = _deniable(client.get(_overview_url(f)).json())
+        assert listed
+        url = f"/campaigns/{f.campaign_id}/resource-grants"
+
+        def post(code: str, effect: str) -> int:
+            return client.post(
+                url,
+                json={
+                    "capability_code": code,
+                    "effect": effect,
+                    "entity_id": str(target),
+                    "grantee_campaign_membership_id": str(f.member_membership_id),
+                },
+            ).status_code
+
+        for capability in listed:
+            assert post(capability["code"], "allow") == 404, capability["code"]
+            assert post(capability["code"], "deny") == 201, capability["code"]
+        omitted = {
+            c["code"]
+            for c in client.get(_overview_url(f)).json()["grantable_resource_capabilities"]
+        } - {c["code"] for c in listed}
+        assert "character.view_full" in omitted
+        assert post("character.view_full", "deny") == 404
+
+
+def test_bd4_a_deactivated_capability_is_omitted_like_the_grantable_list(
+    db_connection: Connection,
+) -> None:
+    from dnd_ai.queries.access_overview import (
+        list_deniable_character_capabilities,
+        list_grantable_resource_capabilities,
+    )
+
+    assert [c.code for c in list_deniable_character_capabilities(db_connection)] == _DENIABLE
+    db_connection.execute(
+        text("UPDATE security.capabilities SET is_active = false WHERE code = 'canon.edit'")
+    )
+    assert [c.code for c in list_deniable_character_capabilities(db_connection)] == [
+        "campaign.view"
+    ]
+    assert "canon.edit" not in {c.code for c in list_grantable_resource_capabilities(db_connection)}
+
+
+def test_bd5_the_field_is_the_same_for_every_access_manager_and_the_overview_refuses_a_player(
+    client_factory: Callable[[uuid.UUID], TestClient], f: Fixture
+) -> None:
+    with client_factory(f.admin_user_id) as client:
+        first = client.get(_overview_url(f))
+        other = client.get(_overview_url(f, f.other_campaign_id))
+    # The second campaign has no members for the admin: refused, never a different field.
+    assert first.status_code == 200 and other.status_code in (403, 404)
+    with client_factory(f.capless_user_id) as client:
+        assert client.get(_overview_url(f)).status_code == 403
+    with client_factory(f.member_user_id) as client:
+        refused = client.get(_overview_url(f))
+    assert refused.status_code == 403
+    assert "deniable_character_capabilities" not in refused.text

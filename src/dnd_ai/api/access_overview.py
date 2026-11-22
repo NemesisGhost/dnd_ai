@@ -91,6 +91,7 @@ from dnd_ai.queries.access_overview import (
     list_assignable_campaign_roles,
     list_assignable_character_relationship_types,
     list_campaign_access_groups,
+    list_deniable_character_capabilities,
     list_grantable_resource_capabilities,
 )
 from dnd_ai.queries.effective_access import resolve_member_effective_access
@@ -177,6 +178,12 @@ class GrantableResourceCapabilityResponse(BaseModel):
     target_type: str
 
 
+class DeniableCharacterCapabilityResponse(BaseModel):
+    capability_id: uuid.UUID
+    code: str
+    display_name: str
+
+
 class CampaignMemberSummaryResponse(BaseModel):
     campaign_membership_id: uuid.UUID
     # Identity only, never rendered as page text — matching
@@ -244,6 +251,9 @@ class CampaignAccessOverviewResponse(BaseModel):
     assignable_characters: list[AssignableCharacterResponse]
     assignable_relationship_types: list[AssignableCharacterRelationshipTypeResponse]
     grantable_resource_capabilities: list[GrantableResourceCapabilityResponse]
+    # The permissions a character may be denied (`entity_id`, deny only; P15-C02-S04). Server-derived
+    # from the command's own rule so the portal holds no target policy.
+    deniable_character_capabilities: list[DeniableCharacterCapabilityResponse]
     access_groups: list[AccessGroupSummaryResponse]
 
 
@@ -313,6 +323,7 @@ def get_campaign_access_overview_endpoint(
     )
     assignable_relationship_types = list_assignable_character_relationship_types(connection)
     grantable_resource_capabilities = list_grantable_resource_capabilities(connection)
+    deniable_character_capabilities = list_deniable_character_capabilities(connection)
     access_groups = list_campaign_access_groups(
         connection, campaign_id=campaign_id, timeline_id=access.timeline_id
     )
@@ -345,6 +356,14 @@ def get_campaign_access_overview_endpoint(
                 target_type=capability.target_type,
             )
             for capability in grantable_resource_capabilities
+        ],
+        deniable_character_capabilities=[
+            DeniableCharacterCapabilityResponse(
+                capability_id=capability.capability_id,
+                code=capability.code,
+                display_name=capability.display_name,
+            )
+            for capability in deniable_character_capabilities
         ],
         members=[
             CampaignMemberSummaryResponse(

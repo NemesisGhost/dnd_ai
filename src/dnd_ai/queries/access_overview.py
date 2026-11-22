@@ -122,6 +122,7 @@ from sqlalchemy import Connection, text
 from dnd_ai.commands.local_auth import normalize_login_name
 from dnd_ai.domain.access import (
     BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
+    CHARACTER_DENY_CAPABILITY_CODES,
     LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL,
     LOCAL_AUTH_ISSUER,
     RESOURCE_GRANT_CAPABILITY_CATALOG,
@@ -241,6 +242,13 @@ class GrantableResourceCapabilityView:
     code: str
     display_name: str
     target_type: str
+
+
+@dataclass(frozen=True)
+class DeniableCharacterCapabilityView:
+    capability_id: uuid.UUID
+    code: str
+    display_name: str
 
 
 @dataclass(frozen=True)
@@ -617,8 +625,9 @@ def list_grantable_resource_capabilities(
     target kind, and why `access.manage`/`import.approve`/`rules_source.
     manage` are excluded from every kind entirely). The `(code, target_type)` grain is coarser
     than one sub-rule `create_resource_grant` applies: an `entity` target that is a character is
-    accepted for a `deny` of `campaign.view` or `canon.edit` only (P03-A A2a-R, DEF-018); the
-    portal's `entity` selector excludes characters until A6. The portal's own
+    accepted for a `deny` of `campaign.view` or `canon.edit` only (P03-A A2a-R, DEF-018); the portal's
+    `entity` selector excludes characters, and `list_deniable_character_capabilities` is what offers
+    that deny (P15-C02-S04). The portal's own
     resource-grant management UI only offers `character` as a selectable
     resource type this checkpoint (see `dnd_ai.commands.access_grants`'
     module docstring for why the other five target kinds are deferred), so
@@ -645,6 +654,32 @@ def list_grantable_resource_capabilities(
         for target_column, allowed_codes in RESOURCE_GRANT_CAPABILITY_CATALOG.items()
         for code in sorted(allowed_codes)
         if code in capabilities
+    )
+
+
+def list_deniable_character_capabilities(
+    connection: Connection,
+) -> tuple[DeniableCharacterCapabilityView, ...]:
+    """The currently `is_active` capabilities `create_resource_grant()` accepts as a `deny` on a
+    character under `entity_id` (P03-A A2a-R, DEF-018): `CHARACTER_DENY_CAPABILITY_CODES`, the
+    `entity_id` row of `RESOURCE_GRANT_CAPABILITY_CATALOG`, in code order. It exists so the portal
+    never holds that target policy itself: `grantable_resource_capabilities` has one row per
+    `(code, target_type)` and cannot say that a character is an `entity` target for a deny only.
+    Server-authoritative and campaign-independent, like the list it sits beside."""
+    rows = connection.execute(
+        text("""
+            SELECT capability_id, code, display_name
+            FROM security.capabilities
+            WHERE is_active AND code = ANY(:codes)
+            ORDER BY code
+        """),
+        {"codes": sorted(CHARACTER_DENY_CAPABILITY_CODES)},
+    ).mappings()
+    return tuple(
+        DeniableCharacterCapabilityView(
+            capability_id=row["capability_id"], code=row["code"], display_name=row["display_name"]
+        )
+        for row in rows
     )
 
 
