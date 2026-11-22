@@ -39,12 +39,33 @@ describe("useKnowledgeSaveReads", () => {
     expect(announce).toHaveBeenCalledWith("Saved")
   })
 
-  it("leaves a complete lifecycle step to its panel, which announces it", () => {
+  it("announces a complete lifecycle step once: the shared panel leaves that to the page (R2)", () => {
     const { result, announce } = setup()
     act(() => {
       expect(result.current.open("lifecycle", "Approved", { lifecycle: "ok", authoring: "ok", detail: "ok" }, "a")).toBe("ok")
     })
+    expect(announce.mock.calls).toEqual([["Approved"]])
+  })
+
+  it("a lifecycle step says saved-but only for a failed read, once, and done once on recovery (R2)", () => {
+    const { result, announce, rerender } = setup()
+    act(() => {
+      result.current.open("lifecycle", "Approved", { lifecycle: "ok", authoring: "superseded", detail: "ok" }, "a")
+    })
     expect(announce).not.toHaveBeenCalled()
+    act(() => result.current.observe({ authoring: "failed" }, "a"))
+    expect(announce.mock.calls).toEqual([[SAVED_BUT]])
+    rerender(props({ applied: { ...NONE, authoring: 4 } }))
+    expect(announce.mock.calls).toEqual([[SAVED_BUT], ["Approved"]])
+  })
+
+  it("a lifecycle step whose authoring read is refused is done once, without saved-but (R2)", () => {
+    const { result, announce, rerender } = setup(props({ closed: { authoring: true, lifecycle: false } }))
+    act(() => {
+      result.current.open("lifecycle", "Approved", { lifecycle: "ok", authoring: "failed", detail: "ok" }, "a")
+    })
+    rerender(props({ closed: { authoring: true, lifecycle: false } }))
+    expect(announce.mock.calls).toEqual([["Approved"]])
   })
 
   it("holds only for the authoring read, and names only what is outstanding", () => {
@@ -137,7 +158,7 @@ describe("useKnowledgeSaveReads", () => {
     expect(announce.mock.calls).toEqual([["Saved"]])
   })
 
-  it("a refused detail replaces the page: nothing is tracked, a claim save is announced once, a step by its panel", () => {
+  it("a refused detail replaces the page: nothing is tracked, a save or a step is announced once", () => {
     const { result, announce } = setup()
     act(() => {
       expect(result.current.open("claim", "Saved", { authoring: "failed", detail: "closed" }, "a")).toBe("ok")
@@ -148,7 +169,7 @@ describe("useKnowledgeSaveReads", () => {
     act(() => {
       expect(result.current.open("lifecycle", "Approved", { authoring: "ok", detail: "closed" }, "a")).toBe("ok")
     })
-    expect(announce).toHaveBeenCalledTimes(1)
+    expect(announce.mock.calls).toEqual([["Saved"], ["Approved"]])
   })
 
   it("forgets every save when the record, perspective or user changes (B18)", () => {

@@ -1071,7 +1071,8 @@ describe("unified knowledge claim page", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
       expect(await screen.findByText(/Saved\. The latest claim could not be loaded/)).toBeInTheDocument()
       const live = screen.getByTestId("authoring-announcer")
-      expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
+      // The page announces it with its notice (the shared panel no longer does, R2), so it may follow it.
+      await waitFor(() => expect(live).toHaveTextContent("Saved, but the latest data could not be loaded."))
       expect(live).not.toHaveTextContent("Submitted for review")
       // Load latest reads again once the detail is back, and never sends the step again.
       server.on("GET", DETAIL, () => ({ body: current.detail }))
@@ -2188,6 +2189,78 @@ describe("selection ownership on the real claim page", () => {
         await waitFor(() => expect(server.callsTo("GET", VIEW_PATH).length).toBeGreaterThan(1))
         expect(await claimBox()).toHaveValue("Submitted")
         expect(screen.queryByText("Unsaved changes to the claim")).toBeNull()
+      })
+    })
+
+    describe("R2: a lifecycle step's read-back is classified by the page, not by the shared panel", () => {
+      const DENIED = { status: 403, body: { error: { code: "forbidden", message: "m", correlation_id: "c" } } }
+      const GONE = { status: 404 }
+      const STEP_DONE = "Submitted for review"
+
+      for (const [name, refusal] of [
+        ["403", DENIED],
+        ["404", GONE],
+      ] as const) {
+        it(`an authoring read refused with ${name} is a result: done once, never saved-but`, async () => {
+          submitStepSetup(() => server.on("GET", VIEW_PATH, refusal))
+          setup()
+          await claimBox()
+          const heard = recordAnnouncements()
+          await clickSubmitForReview()
+          await waitFor(() => expect(heard.count(STEP_DONE)).toBe(1))
+          await new Promise((resolve) => setTimeout(resolve, 60))
+          expect(heard.count(STEP_DONE)).toBe(1)
+          expect(heard.count(SAVED_BUT)).toBe(0)
+          expect(screen.queryByText(/The latest claim could not be loaded/)).toBeNull()
+          expect(server.callsTo("POST", /./)).toHaveLength(1)
+          heard.stop()
+        })
+      }
+
+      it("a step's detail read superseded by a newer read defers to it: no saved-but, done once", async () => {
+        submitStepSetup()
+        setup()
+        await claimBox()
+        let armed = false
+        let detailCalls = 0
+        let releaseFirst!: () => void
+        const first = new Promise<void>((resolve) => {
+          releaseFirst = resolve
+        })
+        let releaseSecond!: () => void
+        const second = new Promise<void>((resolve) => {
+          releaseSecond = resolve
+        })
+        server.on("GET", DETAIL, async () => {
+          const n = armed ? (detailCalls += 1) : 0
+          if (n === 1) await first
+          if (n === 2) await second
+          return { body: current.detail }
+        })
+        server.on("POST", UPDATE, () => {
+          current = { detail: detail({ truth_status_code: "false" }), view: view({ truth_status: "false", row_version: 2 }) }
+          return { body: RECEIPT }
+        })
+        armed = true
+        const heard = recordAnnouncements()
+        await clickSubmitForReview()
+        await waitFor(() => expect(detailCalls).toBe(1))
+        // The claim is saved while the step's detail read is in flight: its read of the detail supersedes the step's.
+        fireEvent.click(stageLink(1))
+        await saveTruth()
+        await waitFor(() => expect(detailCalls).toBe(2))
+        releaseFirst()
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        expect(heard.count(SAVED_BUT)).toBe(0)
+        expect(heard.count(STEP_DONE)).toBe(0)
+        releaseSecond()
+        await waitFor(() => expect(heard.count(STEP_DONE)).toBe(1))
+        await waitFor(() => expect(heard.count(DONE)).toBe(1))
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        expect(heard.count(STEP_DONE)).toBe(1)
+        expect(heard.count(SAVED_BUT)).toBe(0)
+        expect(screen.queryByText(/could not be loaded/)).toBeNull()
+        heard.stop()
       })
     })
 

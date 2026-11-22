@@ -2,7 +2,8 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { bootstrapWith, installMockServer, renderAuthoringRoutes } from "../test/authoringHarness"
-import { EntityLifecyclePanel } from "./EntityLifecyclePanel"
+import type { RefreshOutcome } from "../hooks/useAuthoringMutation"
+import { EntityLifecyclePanel, LifecycleControls } from "./EntityLifecyclePanel"
 
 const BASE = "/campaigns/mundivita/entities/e1/lifecycle"
 
@@ -230,5 +231,72 @@ describe("EntityLifecyclePanel", () => {
         })
         expect(await screen.findByText("Replaced by New Archive.")).toBeInTheDocument()
         expect(screen.getByText("No lifecycle action is available to you right now.")).toBeInTheDocument()
+    })
+})
+
+// R2: who announces a confirmed step's read-back. The page that reports the read-back itself classifies it.
+describe("LifecycleControls read-back announcements", () => {
+    const SAVED_BUT = "Saved, but the latest data could not be loaded."
+
+    function stepWith(
+        outcome: RefreshOutcome,
+        flags: { pageReportsRefresh?: boolean; onStepConfirmed?: (done: string) => void } = {},
+    ) {
+        const server = installMockServer()
+        server.on("POST", `${BASE}/submit-for-review`, () => ({
+            body: { entity_id: "e1", canon_status: "proposed", lifecycle_status: "active", row_version: 4 },
+        }))
+        const rendered = renderAuthoringRoutes({
+            initialEntry: "/app/mundivita/world/location/e1",
+            routes: [
+                {
+                    path: "/app/:campaignId/world/location/:entityId",
+                    element: (
+                        <LifecycleControls
+                            campaignId="mundivita"
+                            view={view() as never}
+                            refetch={async () => "ok"}
+                            onChanged={async () => outcome}
+                            {...flags}
+                        />
+                    ),
+                },
+            ],
+            bootstrap: bootstrapWith({ campaigns: [campaign(["canon.edit", "campaign.view"])] }),
+        })
+        return { server, ...rendered }
+    }
+    const announcer = () => screen.getByTestId("authoring-announcer")
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 60))
+
+    it("by default announces saved-but for any read-back that is not ok", async () => {
+        const { server } = stepWith("superseded")
+        fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+        await waitFor(() => expect(announcer()).toHaveTextContent(SAVED_BUT))
+        expect(server.callsTo("POST", `${BASE}/submit-for-review`)).toHaveLength(1)
+    })
+
+    it("by default announces the step once when the read-back is ok", async () => {
+        stepWith("ok")
+        fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+        await waitFor(() => expect(announcer()).toHaveTextContent("Submitted for review"))
+    })
+
+    for (const outcome of ["ok", "failed", "superseded"] as const) {
+        it(`announces nothing itself when the page reports the read-back (${outcome}), and hands over what to announce`, async () => {
+            const confirmed: string[] = []
+            const { server } = stepWith(outcome, { pageReportsRefresh: true, onStepConfirmed: (done) => confirmed.push(done) })
+            fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+            await waitFor(() => expect(confirmed).toEqual(["Submitted for review"]))
+            await settle()
+            expect(announcer()).toHaveTextContent("")
+            expect(server.callsTo("POST", `${BASE}/submit-for-review`)).toHaveLength(1)
+        })
+    }
+
+    it("a page that reports the read-back but cannot say what to announce keeps the panel's own announcement", async () => {
+        stepWith("failed", { pageReportsRefresh: true })
+        fireEvent.click(await screen.findByRole("button", { name: "Submit for review" }))
+        await waitFor(() => expect(announcer()).toHaveTextContent(SAVED_BUT))
     })
 })

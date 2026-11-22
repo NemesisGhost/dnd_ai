@@ -69,7 +69,7 @@ export interface KnowledgeSaveReads {
     // confirmed and passes it back, so an answer that arrives after the page moved on changes nothing.
     scope: string
     // Records a confirmed save and what each of its reads did. Returns what the mutation (or lifecycle
-    // panel) should report: "ok" when nothing is waiting. A claim save that is complete is announced here;
+    // panel) should report: "ok" when nothing is waiting. A save (a claim save or a lifecycle step) that is complete is announced here;
     // otherwise the save is tracked until every unresolved read is resolved, and is then announced as done
     // exactly once. A refusal of the detail replaces the page: the save is done and nothing is held.
     open: (
@@ -144,7 +144,8 @@ export function useKnowledgeSaveReads({
 
     // A save whose last unresolved read is resolved is announced as done, once. It is dropped from the list
     // the next time one is recorded (`announced` is what keeps it from being announced again). A claim save
-    // that has a read to read again says so once ("saved, but"), as the first failure of its read-back.
+    // that has a read that failed to read again says so once ("saved, but"), as the first failure of its read-back;
+    // a refusal or a superseded read is not a failure and says nothing until the newer answer resolves it.
     useEffect(() => {
         for (const episode of episodes) {
             if (unresolved(episode, closed).length === 0) {
@@ -152,7 +153,6 @@ export function useKnowledgeSaveReads({
                 announced.current.add(episode.id)
                 announce(episode.done)
             } else if (
-                episode.kind === "claim" &&
                 !notified.current.has(episode.id) &&
                 keysIn(episode, closed, "outstanding").length > 0
             ) {
@@ -181,9 +181,9 @@ export function useKnowledgeSaveReads({
             // The page moved on (another record, perspective or user) while this save was being read back.
             if (startedIn !== live.current.scope) return reported
             // The detail was refused: the page is replaced by the unavailable result, the write is done, and
-            // nothing is held or read again. A lifecycle step is announced by its panel on "ok".
+            // nothing is held or read again.
             if (outcomes.detail === "closed") {
-                if (kind === "claim" && live.current.mounted) live.current.announce(done)
+                if (live.current.mounted) live.current.announce(done)
                 return "ok"
             }
             const reads: SaveEpisode["reads"] = {}
@@ -198,7 +198,7 @@ export function useKnowledgeSaveReads({
                 ...(complete ? [] : [episode]),
             ])
             if (!complete) return reported
-            if (kind === "claim" && live.current.mounted) live.current.announce(done)
+            if (live.current.mounted) live.current.announce(done)
             return "ok"
         },
         [settle],
