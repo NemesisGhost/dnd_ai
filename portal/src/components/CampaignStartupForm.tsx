@@ -164,7 +164,8 @@ export function CampaignStartupForm({
 
             <div role="status" aria-live="polite">
                 {pending && "Saving your startup preference…"}
-                {(status.kind === "success" || confirmed) && "Startup preference saved."}
+                {status.kind === "success" && "Startup preference saved."}
+                {confirmed && "Your earlier startup preference change was confirmed."}
                 {checking && "Checking your session…"}
                 {checkFailed && "The latest settings still could not be confirmed."}
             </div>

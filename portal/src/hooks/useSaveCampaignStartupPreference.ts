@@ -28,8 +28,8 @@ export interface UseSaveCampaignStartupPreferenceResult {
     // A confirmed save whose read-back was not applied is waiting for the shared session to show its value
     // for the same user. It ends only on confirmation, a newer confirmed save, an account change or unmount.
     outstanding: boolean
-    // That episode was confirmed by a later read while another request's status (a rejected newer save) is
-    // still showing, so `status` could not carry it.
+    // That episode was confirmed by a later read while another request's status (a newer save that is pending
+    // or was rejected) is showing, so `status` could not carry it.
     confirmed: boolean
     // Reads the session again in place for the outstanding episode (never a reload, never a PUT).
     check: () => void
@@ -101,7 +101,9 @@ export function useSaveCampaignStartupPreference(): UseSaveCampaignStartupPrefer
             setCheck(null)
             if (status.kind === "idle" || status.kind === "unconfirmed") {
                 setStatus({ kind: "success" })
-            } else if (status.kind !== "pending" && status.kind !== "success") {
+            } else if (status.kind !== "success") {
+                // Another request's status (a newer save that is pending, or was rejected) is showing: the
+                // earlier save's confirmation is kept beside it, as its own result.
                 setConfirmed(true)
             }
         }
@@ -220,7 +222,8 @@ export function useSaveCampaignStartupPreference(): UseSaveCampaignStartupPrefer
         save,
         reset,
         outstanding: episode !== null,
-        confirmed,
+        // Not beside a success: that newer save was read back by its own read.
+        confirmed: confirmed && status.kind !== "success",
         check: checkSession,
         checking: current?.phase === "checking",
         checkFailed: current?.phase === "failed",

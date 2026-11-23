@@ -533,3 +533,115 @@ describe("CampaignStartupForm unconfirmed episode", () => {
         await waitFor(() => expect(screen.getByRole("link", { name: "Go to campaigns" })).toHaveFocus())
     })
 })
+
+
+// S02-R1: save A is outstanding, the person saves B, and a matching read for A is published while B is pending.
+describe("CampaignStartupForm: A is confirmed while a newer save B is pending", () => {
+    const EARLIER = "Your earlier startup preference change was confirmed."
+    const SAVED = "Startup preference saved."
+    const betaPreferred = () =>
+        makeBootstrap({
+            campaign_preferences: {
+                startup_mode: "preferred_campaign",
+                preferred_campaign_id: "campaign-b",
+                last_visited_campaign_id: null,
+            },
+        })
+    const polite = () => screen.getByRole("status")
+
+    // How many times the live region came to say `phrase` (a change into text that includes it).
+    function recordPolite() {
+        const region = polite()
+        const snapshots: string[] = []
+        const observer = new MutationObserver(() => snapshots.push(region.textContent ?? ""))
+        observer.observe(region, { childList: true, subtree: true, characterData: true })
+        return {
+            times: (phrase: string) =>
+                snapshots.filter((text, index) => text.includes(phrase) && !(snapshots[index - 1] ?? "").includes(phrase)).length,
+            stop: () => observer.disconnect(),
+        }
+    }
+
+    // A (Beta) is confirmed but unread; the person then saves B (Alpha), whose PUT is held.
+    async function bPending() {
+        refreshOutcome.unapplied = true
+        renderForm()
+        fireEvent.click(fixedRadio())
+        fireEvent.change(campaignSelect(), { target: { value: "campaign-b" } })
+        fireEvent.click(saveButton())
+        await screen.findByRole("alert")
+        let settle!: { ok: () => void; fail: (cause: unknown) => void }
+        setPreferenceMock.mockImplementationOnce(
+            () =>
+                new Promise<void>((resolve, reject) => {
+                    settle = {
+                        ok: () => {
+                            serverPreferred = "campaign-a"
+                            resolve()
+                        },
+                        fail: reject,
+                    }
+                }),
+        )
+        fireEvent.change(campaignSelect(), { target: { value: "campaign-a" } })
+        fireEvent.click(saveButton())
+        await waitFor(() => expect(setPreferenceMock).toHaveBeenCalledTimes(2))
+        const heard = recordPolite()
+        // The matching read for A arrives while B is pending.
+        act(() => publish(betaPreferred()))
+        return { settle, heard }
+    }
+
+    it("exposes A's confirmation at once, once, and never as B's", async () => {
+        const { heard } = await bPending()
+        expect(polite()).toHaveTextContent(EARLIER)
+        expect(polite()).not.toHaveTextContent(SAVED)
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+        expect(heard.times(EARLIER)).toBe(1)
+        heard.stop()
+    })
+
+    it.each([
+        ["a 403", () => new UserPreferenceRequestError(403, "no"), "nothing was saved"],
+        ["a 404", () => new UserPreferenceRequestError(404, "gone"), "no longer available"],
+        ["a 500", () => new UserPreferenceRequestError(500, "boom"), "could not be saved"],
+        ["a network failure", () => new TypeError("offline"), "could not be saved"],
+    ])("B rejected with %s: B's failure is reported, A's confirmation stays, announced once", async (_name, failure, message) => {
+        const { settle, heard } = await bPending()
+        await act(async () => settle.fail(failure()))
+        expect(await screen.findByRole("alert")).toHaveTextContent(message)
+        expect(screen.getByRole("alert")).not.toHaveTextContent("Your preference was saved")
+        expect(polite()).toHaveTextContent(EARLIER)
+        expect(polite()).not.toHaveTextContent(SAVED)
+        expect(heard.times(EARLIER)).toBe(1)
+        expect(heard.times(SAVED)).toBe(0)
+        expect(setPreferenceMock).toHaveBeenCalledTimes(2)
+        heard.stop()
+    })
+
+    it("B succeeds and is read back: its own success replaces the earlier text, each announced once", async () => {
+        const { settle, heard } = await bPending()
+        refreshOutcome.unapplied = false
+        await act(async () => settle.ok())
+        await waitFor(() => expect(polite()).toHaveTextContent(SAVED))
+        expect(polite()).not.toHaveTextContent(EARLIER)
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+        expect(heard.times(EARLIER)).toBe(1)
+        expect(heard.times(SAVED)).toBe(1)
+        expect(campaignSelect()).toHaveValue("campaign-a")
+        heard.stop()
+    })
+
+    it("B succeeds but its read-back stays outstanding: B's notice, A's confirmation, and no saved claim for B", async () => {
+        const { settle, heard } = await bPending()
+        await act(async () => settle.ok())
+        expect(await screen.findByRole("alert")).toHaveTextContent("Your preference was saved, but the latest settings could not be confirmed")
+        expect(polite()).toHaveTextContent(EARLIER)
+        expect(polite()).not.toHaveTextContent(SAVED)
+        expect(heard.times(EARLIER)).toBe(1)
+        expect(heard.times(SAVED)).toBe(0)
+        expect(campaignSelect()).toHaveValue("campaign-a")
+        expect(setPreferenceMock).toHaveBeenCalledTimes(2)
+        heard.stop()
+    })
+})

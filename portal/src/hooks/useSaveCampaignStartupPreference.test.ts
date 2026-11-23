@@ -450,3 +450,74 @@ describe("an outstanding episode: a confirmed PUT whose read-back was not applie
         expect(result.current.outstanding).toBe(true)
     })
 })
+
+
+describe("S02-R1: A is confirmed while a newer save B is pending", () => {
+    async function aOutstandingBPending() {
+        setPreferenceMock.mockResolvedValueOnce(undefined)
+        refreshMock.mockRejectedValue(new Error("offline"))
+        const rendered = renderHook(() => useSaveCampaignStartupPreference())
+        act(() => {
+            rendered.result.current.save("campaign-a")
+        })
+        await waitFor(() => expect(rendered.result.current.status).toEqual({ kind: "unconfirmed" }))
+        let settle!: { ok: () => void; fail: (cause: unknown) => void }
+        setPreferenceMock.mockImplementationOnce(
+            () =>
+                new Promise<void>((resolve, reject) => {
+                    settle = { ok: resolve, fail: reject }
+                }),
+        )
+        act(() => {
+            rendered.result.current.save("campaign-b")
+        })
+        expect(rendered.result.current.status).toEqual({ kind: "pending" })
+        sessionStateRef.current = sessionWith("user-1", "campaign-a")
+        rendered.rerender()
+        return { ...rendered, settle }
+    }
+
+    it("keeps A's confirmation while B is pending, and the episode is over", async () => {
+        const { result } = await aOutstandingBPending()
+        expect(result.current.outstanding).toBe(false)
+        expect(result.current.confirmed).toBe(true)
+        expect(result.current.status).toEqual({ kind: "pending" })
+    })
+
+    it.each([
+        ["a 404", () => new UserPreferenceRequestError(404, "gone"), "unavailable"],
+        ["a 403", () => new UserPreferenceRequestError(403, "no"), "denied"],
+        ["a 500", () => new UserPreferenceRequestError(500, "boom"), "error"],
+        ["a network failure", () => new TypeError("offline"), "error"],
+    ])("B rejected (%s): B's status stays, A's confirmation stays", async (_name, failure, kind) => {
+        const { result, settle } = await aOutstandingBPending()
+        await act(async () => settle.fail(failure()))
+        expect(result.current.status).toEqual({ kind })
+        expect(result.current.confirmed).toBe(true)
+        expect(result.current.outstanding).toBe(false)
+    })
+
+    it("B succeeds and is read back: B is success and A's confirmation is not reported beside it", async () => {
+        refreshMock.mockReset()
+        const { result, settle } = await aOutstandingBPending()
+        refreshMock.mockResolvedValue(true)
+        await act(async () => settle.ok())
+        expect(result.current.status).toEqual({ kind: "success" })
+        expect(result.current.confirmed).toBe(false)
+    })
+
+    it("B succeeds with its read-back outstanding: B is unconfirmed, A is confirmed, and A's value does not confirm B", async () => {
+        const { result, settle, rerender } = await aOutstandingBPending()
+        await act(async () => settle.ok())
+        expect(result.current.status).toEqual({ kind: "unconfirmed" })
+        expect(result.current.outstanding).toBe(true)
+        expect(result.current.confirmed).toBe(true)
+        sessionStateRef.current = sessionWith("user-1", "campaign-a")
+        rerender()
+        expect(result.current.status).toEqual({ kind: "unconfirmed" })
+        sessionStateRef.current = sessionWith("user-1", "campaign-b")
+        rerender()
+        expect(result.current.status).toEqual({ kind: "success" })
+        expect(result.current.confirmed).toBe(false)
+    })
+})
