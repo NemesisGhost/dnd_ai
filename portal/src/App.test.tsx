@@ -343,8 +343,6 @@ beforeEach(() => {
 
   usePlatformAccountsMock.mockReturnValue({
     state: { status: "success", items: [], nextCursor: null },
-    query: "",
-    setQuery: vi.fn(),
     retry: vi.fn(),
     loadMore: vi.fn(),
   })

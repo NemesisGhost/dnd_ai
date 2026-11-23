@@ -11,8 +11,6 @@ export type PlatformAccountsState =
 
 export interface UsePlatformAccountsResult {
     state: PlatformAccountsState
-    query: string
-    setQuery: (query: string) => void
     retry: () => void
     loadMore: () => void
 }
@@ -26,11 +24,16 @@ interface Snapshot {
 
 const initialState: PlatformAccountsState = { status: "loading" }
 
-export function usePlatformAccounts(): UsePlatformAccountsResult {
+// The search comes from the page (it lives in the address), so a change of query is a new first page: a
+// cursor belongs to the query it was issued for and is ignored for any other.
+export function usePlatformAccounts(query: string): UsePlatformAccountsResult {
     const { reload } = useSession()
-    const [query, setQueryState] = useState("")
     const [requestVersion, setRequestVersion] = useState(0)
-    const [cursor, setCursor] = useState<string | null>(null)
+    const [cursorFor, setCursorFor] = useState<{ query: string; cursor: string | null }>({
+        query,
+        cursor: null,
+    })
+    const cursor = cursorFor.query === query ? cursorFor.cursor : null
     const [snapshot, setSnapshot] = useState<Snapshot>(() => ({
         query: "",
         requestVersion: 0,
@@ -46,11 +49,6 @@ export function usePlatformAccounts(): UsePlatformAccountsResult {
             ? snapshot.state
             : initialState
 
-    const setQuery = useCallback((next: string) => {
-        setQueryState(next)
-        setCursor(null)
-    }, [])
-
     const retry = useCallback(() => {
         setRequestVersion((current) => current + 1)
     }, [])
@@ -59,8 +57,8 @@ export function usePlatformAccounts(): UsePlatformAccountsResult {
         if (nextCursorRef.current === null) {
             return
         }
-        setCursor(nextCursorRef.current)
-    }, [])
+        setCursorFor({ query, cursor: nextCursorRef.current })
+    }, [query])
 
     useEffect(() => {
         const controller = new AbortController()
@@ -128,5 +126,5 @@ export function usePlatformAccounts(): UsePlatformAccountsResult {
         }
     }, [query, requestVersion, cursor, reload])
 
-    return { state, query, setQuery, retry, loadMore }
+    return { state, retry, loadMore }
 }

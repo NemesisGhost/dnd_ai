@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react"
+import { RouterProvider, createMemoryRouter } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { CreateAccountPanel } from "./CreateAccountPanel"
 
@@ -16,6 +17,21 @@ vi.mock("../hooks/useCreateAccount", () => ({
     },
 }))
 
+// A data router, because the panel guards unsaved input with useBlocker. The page-level behavior (the route,
+// the guard questions, focus and the one-time link's lifecycle) is covered in pages/CreateAccountPage.test.tsx.
+function renderPanel() {
+    const router = createMemoryRouter(
+        [
+            {
+                path: "/platform/accounts/new",
+                element: <CreateAccountPanel returnTo={{ pathname: "/platform/accounts", search: "" }} />,
+            },
+        ],
+        { initialEntries: ["/platform/accounts/new"] },
+    )
+    return render(<RouterProvider router={router} />)
+}
+
 beforeEach(() => {
     statusRef.current = { kind: "idle" }
     submitMock.mockReset()
@@ -25,8 +41,7 @@ beforeEach(() => {
 
 describe("CreateAccountPanel", () => {
     it("submits trimmed login name, display name, and null for a blank email", () => {
-        const onCreated = vi.fn()
-        render(<CreateAccountPanel onCreated={onCreated} />)
+        renderPanel()
 
         fireEvent.change(screen.getByLabelText("Login name"), {
             target: { value: "  new.gm  " },
@@ -39,9 +54,8 @@ describe("CreateAccountPanel", () => {
         expect(submitMock).toHaveBeenCalledWith("new.gm", "New GM", null, ["player"])
     })
 
-    it("shows the one-time activation link once the account is created", () => {
-        const onCreated = vi.fn()
-        render(<CreateAccountPanel onCreated={onCreated} />)
+    it("shows the one-time activation link, for the named account, once the account is created", () => {
+        renderPanel()
 
         fireEvent.change(screen.getByLabelText("Login name"), { target: { value: "new.gm" } })
         fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "New GM" } })
@@ -55,8 +69,13 @@ describe("CreateAccountPanel", () => {
             })
         })
 
-        expect(onCreated).toHaveBeenCalledTimes(1)
+        expect(
+            screen.getByRole("heading", { name: "Copy the activation link for New GM now" }),
+        ).toBeInTheDocument()
         const link = screen.getByLabelText("Activation link")
         expect(link).toHaveValue(`${window.location.origin}/activate#token=raw-token`)
+        expect(screen.getByRole("button", { name: "Back to accounts" })).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Create another account" })).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument()
     })
 })

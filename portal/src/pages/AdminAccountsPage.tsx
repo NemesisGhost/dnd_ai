@@ -1,12 +1,21 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { Link, NavigationType, useLocation, useNavigationType, useSearchParams } from "react-router"
 import {
     AccountLifecycleActions,
     type IssuedPasswordReset,
 } from "../components/AccountLifecycleActions"
-import { CreateAccountPanel } from "../components/CreateAccountPanel"
+import { ConfirmDialog } from "../components/authoring/ConfirmDialog"
 import { TableScroll } from "../components/TableScroll"
 import { OneTimeSecretPanel } from "../components/OneTimeSecretPanel"
 import { usePlatformAccounts } from "../hooks/usePlatformAccounts"
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
+import {
+    ACCOUNTS_NEW_PATH,
+    accountsReturnState,
+    isValidAccountsQuery,
+    readAccountsFocus,
+    readAccountsQuery,
+} from "../navigation/platformAccountsReturn"
 import { AccessDeniedPage } from "../components/TerminalState"
 import { HOME_RECOVERY } from "../components/terminalRecovery"
 import type { SessionBootstrap } from "../types/bootstrap"
@@ -34,13 +43,72 @@ function formatTimestamp(timestamp: string | null): string {
 // control for presentation, but every capability decision stays
 // server-side").
 export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
-    const { state, query, setQuery, retry, loadMore } = usePlatformAccounts()
+    if (!canManageAccounts(bootstrap)) {
+        return <AccessDeniedPage what="platform accounts" recovery={[HOME_RECOVERY]} />
+    }
+    return <AuthorizedAccountsPage bootstrap={bootstrap} />
+}
+
+// Mounted only while a reset link is shown: that link is lost for good on a departure, so leaving the page asks
+// (a search change keeps the path and is not a departure). Dismissing the link unmounts this and releases the guard.
+function ResetLinkGuard() {
+    const guard = useUnsavedChangesGuard(true)
+    return (
+        <ConfirmDialog
+            open={guard.blocked}
+            title="Leave without the password-reset link?"
+            description="It is shown once and cannot be shown again."
+            confirmLabel="Leave"
+            cancelLabel="Stay"
+            onConfirm={guard.discard}
+            onCancel={guard.stay}
+        />
+    )
+}
+
+function AuthorizedAccountsPage({ bootstrap }: AdminAccountsPageProps) {
+    const [params, setParams] = useSearchParams()
+    const location = useLocation()
+    const navigationType = useNavigationType()
+    // The search lives in the address (?q=), so it survives a reload, Back and the trip to the creation page.
+    const addressQuery = readAccountsQuery(params)
+    // The field keeps its own text while typing; an address that changed from outside (Back) replaces it.
+    const [text, setText] = useState(addressQuery)
+    const [textFor, setTextFor] = useState(addressQuery)
+    if (textFor !== addressQuery) {
+        setTextFor(addressQuery)
+        setText(addressQuery)
+    }
+    const { state, retry, loadMore } = usePlatformAccounts(addressQuery)
     // Transient React memory only. Lives above the account-list loading
     // boundary so the refetch that follows issuance cannot unmount it.
     const [issuedReset, setIssuedReset] = useState<IssuedPasswordReset | null>(null)
 
-    if (!canManageAccounts(bootstrap)) {
-        return <AccessDeniedPage what="platform accounts" recovery={[HOME_RECOVERY]} />
+    // Back from the creation page (a PUSH carrying the marker) lands on the Create account link; Back/Forward,
+    // a reload and every other arrival move nothing, and a control the person already chose keeps focus.
+    const createLinkRef = useRef<HTMLAnchorElement>(null)
+    const arrivedFor = useRef<string | null>(null)
+    useEffect(() => {
+        if (arrivedFor.current === location.key) {
+            return
+        }
+        arrivedFor.current = location.key
+        if (navigationType !== NavigationType.Push || !readAccountsFocus(location.state)) {
+            return
+        }
+        const active = document.activeElement
+        if (active === null || active === document.body) {
+            createLinkRef.current?.focus()
+        }
+    }, [location.key, location.state, navigationType])
+
+    function changeText(next: string) {
+        if (!isValidAccountsQuery(next)) {
+            return
+        }
+        setText(next)
+        setTextFor(next)
+        setParams(next === "" ? {} : { q: next }, { replace: true })
     }
 
     return (
@@ -48,24 +116,36 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
             <section aria-labelledby="admin-accounts-heading">
                 <h1 id="admin-accounts-heading">Platform accounts</h1>
 
-                <CreateAccountPanel onCreated={retry} canGrantAdmin={canGrantAdmin(bootstrap)} />
+                <p>
+                    <Link
+                        ref={createLinkRef}
+                        to={ACCOUNTS_NEW_PATH}
+                        state={accountsReturnState(addressQuery)}
+                    >
+                        Create account
+                    </Link>
+                </p>
 
                 {issuedReset !== null && (
-                    <OneTimeSecretPanel
-                        heading={`Copy the password-reset link for ${issuedReset.displayName} now`}
-                        description={`This link is for ${issuedReset.displayName} only, is shown once, and cannot be recovered later. It expires ${formatTimestamp(issuedReset.expiresAt)}. No email is sent; send it to the account holder out of band.`}
-                        secretLabel="Password-reset link"
-                        secret={buildFragmentLink("/reset-password", issuedReset.rawToken)}
-                        onDismiss={() => setIssuedReset(null)}
-                    />
+                    <>
+                        <ResetLinkGuard />
+                        <OneTimeSecretPanel
+                            heading={`Copy the password-reset link for ${issuedReset.displayName} now`}
+                            description={`This link is for ${issuedReset.displayName} only, is shown once, and cannot be recovered later. It expires ${formatTimestamp(issuedReset.expiresAt)}. No email is sent; send it to the account holder out of band.`}
+                            secretLabel="Password-reset link"
+                            secret={buildFragmentLink("/reset-password", issuedReset.rawToken)}
+                            onDismiss={() => setIssuedReset(null)}
+                        />
+                    </>
                 )}
 
                 <label htmlFor="admin-accounts-search">Search by display name or login name</label>
                 <input
                     id="admin-accounts-search"
                     type="text"
-                    value={query}
-                    onChange={(event) => setQuery(event.currentTarget.value)}
+                    maxLength={200}
+                    value={text}
+                    onChange={(event) => changeText(event.currentTarget.value)}
                 />
 
                 {state.status === "loading" && <p>Loading accounts…</p>}

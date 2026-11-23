@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react"
-import { MemoryRouter } from "react-router"
+import { RouterProvider, createMemoryRouter } from "react-router"
+import type { ReactNode } from "react"
 import { describe, expect, it, vi } from "vitest"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
 import { AdminAccountsPage } from "./AdminAccountsPage"
@@ -12,15 +13,9 @@ const { stateRef } = vi.hoisted(() => ({
 vi.mock("../hooks/usePlatformAccounts", () => ({
     usePlatformAccounts: () => ({
         state: stateRef.current,
-        query: "",
-        setQuery: vi.fn(),
         retry: vi.fn(),
         loadMore: vi.fn(),
     }),
-}))
-
-vi.mock("../components/CreateAccountPanel", () => ({
-    CreateAccountPanel: () => <div>create-account-panel</div>,
 }))
 
 vi.mock("../components/SystemRolesEditor", () => ({
@@ -35,17 +30,19 @@ vi.mock("../components/AccountLifecycleActions", () => ({
     ),
 }))
 
+// A data router, because the page guards a shown reset link with useBlocker.
+function renderInRouter(element: ReactNode) {
+    const router = createMemoryRouter([{ path: "*", element }], { initialEntries: ["/platform/accounts"] })
+    return render(<RouterProvider router={router} />)
+}
+
 describe("AdminAccountsPage", () => {
     it("renders an explicit denial for a non-administrator bootstrap, presentation only", () => {
-        render(
-            <MemoryRouter>
-                <AdminAccountsPage
-                    bootstrap={{ ...sessionBootstrapFixture, global_capabilities: [] }}
-                />
-            </MemoryRouter>,
+        renderInRouter(
+            <AdminAccountsPage bootstrap={{ ...sessionBootstrapFixture, global_capabilities: [] }} />,
         )
         expect(screen.getByRole("heading", { name: "Access denied" })).toBeInTheDocument()
-        expect(screen.queryByText("create-account-panel")).not.toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "Create account" })).not.toBeInTheDocument()
     })
 
     it("renders the account table for an administrator", () => {
@@ -68,14 +65,18 @@ describe("AdminAccountsPage", () => {
             nextCursor: null,
         }
 
-        render(
+        renderInRouter(
             <AdminAccountsPage
                 bootstrap={{ ...sessionBootstrapFixture, global_capabilities: ["accounts.manage", "system_roles.manage"] }}
             />,
         )
 
         expect(screen.getByRole("heading", { name: "Platform accounts" })).toBeInTheDocument()
-        expect(screen.getByText("create-account-panel")).toBeInTheDocument()
+        expect(screen.getByRole("link", { name: "Create account" })).toHaveAttribute(
+            "href",
+            "/platform/accounts/new",
+        )
+        expect(screen.queryByRole("form", { name: "Create account" })).not.toBeInTheDocument()
         expect(screen.getByText("GM Two")).toBeInTheDocument()
         expect(screen.getByLabelText("Platform administrator")).toBeInTheDocument()
         expect(screen.getByText("lifecycle-actions-user-1")).toBeInTheDocument()
@@ -115,7 +116,7 @@ describe("AdminAccountsPage", () => {
             nextCursor: "cursor-1",
         }
 
-        render(
+        renderInRouter(
             <AdminAccountsPage
                 bootstrap={{ ...sessionBootstrapFixture, global_capabilities: ["accounts.manage", "system_roles.manage"] }}
             />,

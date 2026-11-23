@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { RouterProvider, createMemoryRouter } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { PlatformAccountsRequestError } from "../api/platformAccounts"
 import { sessionBootstrapFixture } from "../fixtures/sessionBootstrap"
@@ -24,7 +25,6 @@ vi.mock("../context/SessionContext", () => ({
         reload: reloadMock,
     }),
 }))
-vi.mock("../components/CreateAccountPanel", () => ({ CreateAccountPanel: () => null }))
 
 function account(id: string, name: string): PlatformAccount {
     return {
@@ -55,7 +55,12 @@ function issued(id: string, token: string) {
 }
 
 async function renderPage() {
-    const view = render(<AdminAccountsPage bootstrap={bootstrap} />)
+    // A data router, because the page guards a shown reset link with useBlocker.
+    const router = createMemoryRouter(
+        [{ path: "*", element: <AdminAccountsPage bootstrap={bootstrap} /> }],
+        { initialEntries: ["/platform/accounts"] },
+    )
+    const view = render(<RouterProvider router={router} />)
     await screen.findByText("Alice Example")
     return view
 }

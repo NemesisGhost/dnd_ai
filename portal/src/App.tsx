@@ -67,6 +67,7 @@ import { CampaignAccessAuditPage } from "./pages/CampaignAccessAuditPage"
 import { CampaignRevealAuthorityPage } from "./pages/CampaignRevealAuthorityPage"
 import { AcceptCampaignInvitationPage } from "./pages/AcceptCampaignInvitationPage"
 import { AdminAccountsPage } from "./pages/AdminAccountsPage"
+import { CreateAccountPage } from "./pages/CreateAccountPage"
 import { ActivateAccountPage } from "./pages/ActivateAccountPage"
 import { ResetPasswordPage } from "./pages/ResetPasswordPage"
 import { AccountPage } from "./pages/AccountPage"
@@ -110,7 +111,21 @@ function PlatformAccountsRoute() {
     return <AccessDeniedPage what="platform accounts" recovery={[HOME_RECOVERY]} />
   }
 
-  return <AdminAccountsPage bootstrap={bootstrap} />
+  // Keyed by the signed-in account, so a reset link, a pending request or a typed value never crosses an
+  // account change.
+  return <AdminAccountsPage key={bootstrap.user.user_id} bootstrap={bootstrap} />
+}
+
+// The same gate for the creation page: without `accounts.manage` it never mounts and nothing is requested.
+// Keyed by the signed-in account so no value, message or one-time activation link carries over to another.
+function PlatformAccountCreateRoute() {
+  const { bootstrap } = useAuthenticatedSession()
+
+  if (!canManageAccounts(bootstrap)) {
+    return <AccessDeniedPage what="platform accounts" recovery={[HOME_RECOVERY]} />
+  }
+
+  return <CreateAccountPage key={bootstrap.user.user_id} bootstrap={bootstrap} />
 }
 
 function App() {
@@ -240,6 +255,11 @@ function App() {
           <Route
             path="/platform/accounts"
             element={<PlatformAccountsRoute />}
+          />
+
+          <Route
+            path="/platform/accounts/new"
+            element={<PlatformAccountCreateRoute />}
           />
 
           <Route
