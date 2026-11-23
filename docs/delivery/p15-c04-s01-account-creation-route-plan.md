@@ -1,0 +1,273 @@
+# D/P15-C04-S01 implementation plan: separate account creation from the list
+
+**Status:** Opus plan prepared 2026-11-23. **Ready for Sonnet.** No owner decision blocks the task. Section 10 lists the routine choices made here; none changes a product policy, an API contract or authorization.
+
+**Register rows:**
+- slice [D/P15-C04-S01](work-register.md#p15-c04-s01);
+- task [T01](work-register.md#p15-c04-s01-t01);
+- parent checkpoint [D/P15-C04](work-register.md#p15-c04).
+
+**Plan-entry head:** `d09429fbc5a56636ee4b71a746510c4ddcb7bc7e` ("Merge pull request #72 from NemesisGhost/phase15/completion"), the C03 merge on `main`.
+- `phase15/completion` was at `38b92ec29d45a1d5761f4bfed45a4dc2cd5be265` (equal to its origin, clean worktree). That commit is the merge's second parent and the merge tree is identical to it, so the branch was fast-forwarded to `d09429f` after `git fetch origin`. No history was rewritten.
+- CI: no run exists for C04. CI runs on pull requests, and the C04 checkpoint PR has not been opened.
+
+Sonnet's implementation baseline is the commit that adds this plan, a child of `d09429f`. The handoff prompt names it.
+
+**How each statement was established:**
+- by reading source, tests and documents at the plan-entry head;
+- by a temporary plan-entry reproduction (§2.2): one Vitest file, written into `portal/src/pages/` only for the run and deleted afterwards. It rendered the real `AdminAccountsPage`, `CreateAccountPanel` and `useCreateAccount` with the list read and the session faked, and a stubbed `fetch` for the create request. No repository file was changed by it.
+
+**Governing sources:**
+- [Portal behavior §4.4](../reference/portal-behavior.md#44-platform-accounts-authorization): Platform Accounts visibility from `accounts.manage` only, the direct route as the gate, non-disclosing server refusals, the create form's role choice (default Player; Administrator only with `system_roles.grant_admin`).
+- [Portal behavior §5.11](../reference/portal-behavior.md#511-authoring-patterns-phase-14): unsaved-input guard, page-arrival focus, one meaningful announcement.
+- [Navigation contract §4.8.10](../reference/portal-navigation.md#4810-campaign-setup-settings-and-access-p02-7e): unscoped pages have no task model; Platform Users was left untouched by P02.
+- [R07](work-register.md#r07--platform-users-administration): "separate creation into a route using P02 task return; preserve the list's query/focus"; "activation/reset links retained safely in transient memory. Do not persist secrets in return state, URLs, logs or generic recovery storage."
+- The register's [C04 criteria](work-register.md#criteria-p15-c04), [S01 criteria](work-register.md#criteria-p15-c04-s01) and [T01 criteria](work-register.md#criteria-p15-c04-s01-t01): "List navigation retains state and keeps credentials out of URLs and persistent storage"; "Preserve query, direct-entry return and focus on the creation route with transient activation/reset handling".
+- The create command (`src/dnd_ai/commands/local_auth.py`, `_create_user_with_activation_token`): a login name is reserved only at activation, so two creates with the same values make two pending accounts. The API is `POST /api/admin/accounts` (201 `CreateAccountResponse` with `raw_activation_token`); it has no idempotency key.
+
+## 1. Entry readiness
+
+C04 is "Stage system-role operations". Its prerequisite column is "—" and its criteria row has no entry contract, so C04 has no checkpoint prerequisite. The attached [atomic-roles](work-register.md#atomic-roles) record is a separate, unadmitted proposal; it gates nothing in C04 and is not consumed here.
+
+S01 and S02 each say "Checkpoint entry criteria; no additional slice-specific gate". Neither names the other, so neither depends on the other; table order is not a dependency. S01 is planned first because it is the first eligible slice. **S02 is independently eligible** (Ready for Opus). Both slices edit `AdminAccountsPage.tsx`, so S02's plan should be prepared against S01's implementation head to avoid a conflicting baseline; that is scheduling, not a prerequisite.
+
+**Verdict: S01 eligible and ready for Sonnet.**
+
+## 2. Verified current behavior
+
+### 2.1 How accounts are created today
+
+- `AdminAccountsPage` (`portal/src/pages/AdminAccountsPage.tsx`, route `/platform/accounts` behind `PlatformAccountsRoute` in `App.tsx`) renders the create form inline above the list: `<CreateAccountPanel onCreated={retry} …/>`.
+- `CreateAccountPanel` keeps login name, display name, email and roles in component state and calls `useCreateAccount`. On success it replaces itself with `OneTimeSecretPanel` showing `buildFragmentLink("/activate", raw_activation_token)` and calls `onCreated`, which is the list's `retry`.
+- `retry` bumps the list's request version, so the list re-enters `loading`: the table unmounts and "Loading accounts…" is shown until the read answers.
+- `useCreateAccount` sends one POST with the session CSRF token, ignores a second submit while pending, aborts on unmount, maps 401 to `reload()`, 403/404 to `denied`, and **everything else, including a transport failure and a 5xx, to `error`**, shown as "The account could not be created. Try again." Editing the login or display name clears any status.
+- The list search (`usePlatformAccounts().query`) is React state only. It is not in the address, router state or storage, so any remount starts empty.
+- The password-reset link (`issuedReset`) is held in `AdminAccountsPage` state, above the list's loading boundary, and survives the refetch and query changes (`AdminAccountsPage.resetLink.test.tsx`). Leaving the page loses it silently. No departure guard exists on the page.
+- `/platform/accounts` has route metadata `platform.accounts` (kind `other`, no task root). There is no creation route.
+
+### 2.2 Plan-entry reproduction results
+
+The temporary file (§ header) ran 5 tests; all passed, confirming:
+
+| # | Behavior at `d09429f` |
+|---|---|
+| P1 | The list page renders the `form` named "Create account" inline; there is no Create account link. |
+| P2 | Typing "ali" in the search leaves the address at `/platform/accounts`; unmounting and remounting the page shows an empty search. |
+| P3 | A create whose `fetch` rejects (`TypeError`) shows "The account could not be created. Try again."; pressing Create account again sends a second POST. |
+| P4 | A 500 answer shows the same "could not be created" text. |
+| P5 | After a successful create (focus on the submit button) the list re-enters "Loading accounts…" and `document.activeElement` is `body`. |
+
+### 2.3 Deviations S01 repairs
+
+- **DV-1 (P1).** Creation is not separate from the list (R07, S01 title).
+- **DV-2 (P2).** The list query is not retained across navigation; there is no return to it (T01 "preserve query").
+- **DV-3 (P5).** Focus is lost to `body` when the account is created, at the moment the one-time activation link appears.
+- **DV-4 (P3, P4).** An outcome the portal cannot know (no answer, or a server error) is reported as a refusal and invites "Try again", which can create a second pending account because the server does not reserve the login name before activation. The repair is wording and ownership only; it does not add retry semantics.
+
+### 2.4 Reviewed behavior that must not regress
+
+- The route adapter is the gate: without `accounts.manage` no account page mounts and no `/api/admin/accounts` request is sent; `/admin/accounts` still redirects to `/platform/accounts` (`App.test.tsx`).
+- Default role Player; at least one role; Administrator disabled without `system_roles.grant_admin`, with the operator-script note; "A system role never grants access to any campaign or world."
+- Trimmed values; blank email sent as `null`; no second POST while pending; abort on unmount; 401 → `reload()`; 403/404 → "You do not have permission to create accounts."
+- The activation and reset links are built as fragment links (`#token=`), held in React memory only, with Copy and Dismiss.
+- Every behavior in `AdminAccountsPage.resetLink.test.tsx`: the reset link survives the list refetch and query changes, Dismiss removes it, remount does not restore it, a new issuance clears the old link first, 401 reloads.
+- The list, the system-roles editor and lifecycle actions are otherwise unchanged (S02 owns role staging).
+
+## 3. Outcome, scope and exclusions
+
+### 3.1 User outcome
+
+A platform administrator browses accounts with a search that lives in the address. **Create account** opens its own page. Cancel, the back link, or **Back to accounts** after creating returns to the list as it was left, with focus on Create account. The one-time activation link is shown once on the creation page, holds focus, never enters an address, router state or storage, and is not silently lost to an in-app navigation. When the portal cannot tell whether an account was created, it says so and does not suggest a blind retry.
+
+### 3.2 In scope (T01)
+
+1. **Creation route.** `/platform/accounts/new` → `CreateAccountPage`, behind a route adapter that applies the same `accounts.manage` gate as the list (`AccessDeniedPage` with `HOME_RECOVERY` otherwise; nothing mounts, nothing is requested). Add route metadata `platform.accounts.new` (unscoped, no task root, kind `create`, label "New account") so `routeMeta.test.ts` stays in step with `App.tsx`. No `/admin/accounts/new` alias (R-6).
+2. **The creation page.** An `h1` "Create account" with page-arrival focus (`usePageArrival(true)`), a **Platform accounts** back link, the existing form fields and role rules, **Create account** and **Cancel**. The page is keyed by `bootstrap.user.user_id` so nothing crosses an account change.
+3. **List without the form.** `AdminAccountsPage` drops the inline `CreateAccountPanel` and shows a **Create account** link to `/platform/accounts/new`, carrying the list's return state (item 5).
+4. **Query in the address.** The list search is `?q=` on `/platform/accounts`. Typing writes it with a REPLACE navigation (no history entry per keystroke; an empty search removes `q`). On entry the page reads `q` and accepts it only when it is at most 200 characters with no control characters (U+0000–U+001F, U+007F); otherwise the search starts empty and nothing is echoed. `usePlatformAccounts` takes the query from the page (the address) instead of owning it; Load more stays as today and is not retained (R-3).
+5. **Return state.** The Create account link's router state is `{ accountsReturn: "<search>" }`, where `<search>` is `""` or the list's own `?q=…` string. A new helper (`portal/src/navigation/platformAccountsReturn.ts`) builds it and reads it back: the value is accepted only if it is `""` or starts with `?`, parses to exactly one key `q` whose value passes item 4's rule, and is at most 1024 characters; anything else (missing, another type, extra keys, `//host`, an absolute URL, a path) gives `""`. The destination is always the pathname `/platform/accounts` plus that search, never a value taken from state.
+6. **Return and focus.** Cancel, the back link and **Back to accounts** navigate (PUSH) to the validated list address with state `{ accountsFocus: "create" }`. The list focuses its Create account link once, only on a PUSH arrival carrying that marker (not on POP or a reload of that entry). No other list arrival moves focus.
+7. **Outcomes on the creation page** (`useCreateAccount` and the form):
+   - *success:* the form is replaced by `OneTimeSecretPanel` headed "Copy the activation link for ‹display name› now" (the submitted display name, already on screen), with the existing description and fragment link. Its heading takes focus (programmatic, `tabIndex=-1`). The page's status region stays empty, so the outcome is spoken once, through the heading. The panel offers **Copy**, **Back to accounts** (item 6) and **Create another account** (empty form, Player default, focus on Login name). Both actions drop the secret.
+   - *rejected* (any other 4xx answer): unchanged text "The account could not be created. Try again."; values kept; edits clear it as today.
+   - *denied* (403/404) and *session* (401): unchanged.
+   - *unknown* (a transport failure, or any 5xx): new status kind `unknown`, text "We could not confirm whether the account was created. Check the account list before trying again: creating it again would add a second account." Values are kept. Edits do **not** clear it. Only a deliberate Create account press sends another POST (one per press), which replaces it with that attempt's outcome.
+   - Abort on unmount stays silent.
+8. **Departure guard** (`useUnsavedChangesGuard` + `ConfirmDialog`, the `CreateWorldPage` pattern), on path changes only:
+   - *dirty form* (any field differs from the empty form with Player only): "Discard unsaved changes?" / "You have entered details for a new account that have not been created." / **Discard changes** / **Keep editing**;
+   - *pending create:* "Leave while the account is being created?" / "The account may still be created, but its activation link will not be shown." / **Leave** / **Stay**;
+   - *activation link shown:* "Leave without the activation link?" / "It is shown once and cannot be shown again." / **Leave** / **Stay**.
+   **Back to accounts**, **Create another account** and the post-success state release the guard deliberately (`guard.release()` before navigating). Stay keeps the page, its values or secret and its entry. Leave goes once and sends nothing.
+9. **Reset link on the list.** While a reset link is shown, the list page uses the same guard (activation wording with "password-reset link"). Query-only changes (typing in the search) are not departures and are not asked, so the existing "survives changing the search query" behavior stands. Dismiss releases it.
+10. **Shared component.** `OneTimeSecretPanel` gains optional props only: a heading focus request and replacement action buttons (for the creation page's two actions). Its existing callers (the reset link, and any other) render as before.
+11. **Docs.** Portal behavior §4.4 and the routes table (new row for `/platform/accounts/new`; the list's `?q=`), and the navigation contract's route count (91 → 92) and §4.8.10 note that Platform Users now has a creation route with its own return state (still no task model).
+
+### 3.3 Exclusions
+
+- No backend, API, command, database or authorization change. No idempotency key, login-name reservation or duplicate detection (DV-4 is repaired by honest wording only). Stronger retry semantics would need a separate API design ([R07](work-register.md#r07--platform-users-administration)).
+- No change to role editing, `SystemRolesEditor`, `useSystemRoleChange` or the lifecycle actions (S02 and later).
+- No task-origin (`TaskOriginV1`) adoption for Platform Users: unscoped routes have no task model (§4.8.10). The return state in item 5 is a page-local key with its own validator.
+- No recovery of an activation link that was lost (an unknown outcome, a Leave, a dismissal); the server has no re-issue for it, and none is added.
+- No change to `usePageArrival`, the shared guard hooks, `navigationHolds` or the announcer.
+- No list-position (Load more) retention.
+- No browser, AX or owner acceptance work.
+
+## 4. Affected files and interfaces
+
+- `portal/src/App.tsx`: the creation route and its adapter (keyed by user).
+- `portal/src/navigation/routeMeta.ts`: `platform.accounts.new`.
+- `portal/src/navigation/platformAccountsReturn.ts` (new) and its test.
+- `portal/src/pages/CreateAccountPage.tsx` (new) and `CreateAccountPage.test.tsx` (new).
+- `portal/src/components/CreateAccountPanel.tsx` (becomes the page's form, or is folded into the page) and its test.
+- `portal/src/hooks/useCreateAccount.ts` (`unknown`) and its test.
+- `portal/src/pages/AdminAccountsPage.tsx`, `portal/src/hooks/usePlatformAccounts.ts`.
+- `portal/src/components/OneTimeSecretPanel.tsx` (optional props).
+- Tests whose **harness** changes but whose expectations stay: `AdminAccountsPage.test.tsx` and `AdminAccountsPage.resetLink.test.tsx` (render inside a router; the `CreateAccountPanel` mock is no longer needed), `App.test.tsx` (new route cases added; existing cases unchanged).
+- Expected changed expectations (allowed): the inline-form assertions of `CreateAccountPanel.test.tsx` move to the creation page; `useCreateAccount.test.ts` gains the `unknown` mapping.
+- Docs: `docs/reference/portal-behavior.md`, `docs/reference/portal-navigation.md`.
+
+## 5. Task commit
+
+One commit: `P15-C04-S01-T01: give account creation its own route with list return, focus and transient activation handling`.
+
+## 6. Acceptance cases
+
+"(fails at baseline)" cases must be written first and shown failing on the baseline.
+
+**Route and authorization**
+- **A1** (fails at baseline) `/platform/accounts/new` with `accounts.manage`: `h1` "Create account", the form with Player checked; no `GET /api/admin/accounts` request.
+- **A2** (fails at baseline) Without `accounts.manage`: the access-denied page on `/platform/accounts/new`; no form, no request. The existing list-route denial and the `/admin/accounts` redirect still pass.
+- **A3** (fails at baseline) The list has no inline form and has a **Create account** link to `/platform/accounts/new`.
+
+**Query and return**
+- **A4** (fails at baseline) Typing "ali" makes the address `/platform/accounts?q=ali` by REPLACE (history length unchanged); clearing removes `q`; the list request carries the query.
+- **A5** (fails at baseline) Entering `/platform/accounts?q=ali` shows "ali" and requests it. A `q` over 200 characters, or with a control character, gives an empty search and a request without `q`.
+- **A6** (fails at baseline) From `?q=ali`, Create account then Cancel returns to `/platform/accounts?q=ali` with "ali" in the search; the same holds for the back link, and for browser Back.
+- **A7** (fails at baseline) A direct entry to `/platform/accounts/new` returns to `/platform/accounts`. Tampered `accountsReturn` values (a number, `"?q=a&x=1"`, `"//evil.example"`, `"https://evil.example/"`, `"/campaigns"`, an over-length value, a control character) all return to `/platform/accounts`; no navigation leaves that pathname. (Unit cases on the helper plus one page case.)
+
+**Outcomes**
+- **A8** (fails at baseline) Success: one POST with trimmed values, `null` email and the chosen roles; the panel "Copy the activation link for New GM now" with the fragment link; its heading holds focus; the status region is empty.
+- **A9** (fails at baseline) The token never appears in `location` (pathname, search, hash or state) at any point of the flow (creation, Back to accounts, Create another, browser Back to the creation page), and `sessionStorage.setItem` / `localStorage.setItem` are never called with it. After Back to accounts or Create another it is no longer in the document, and browser Back to `/platform/accounts/new` shows an empty form.
+- **A10** (fails at baseline) **Back to accounts** returns to the carried query with focus on the list's Create account link and a fresh list read. **Create another account** shows the empty form (Player only) with focus on Login name.
+- **A11** Rejected (422): "The account could not be created. Try again."; values kept; editing clears it.
+- **A12** 403 and 404: the existing denial text; 401: one `reload()` and no message.
+- **A13** (fails at baseline) Unknown: a rejected `fetch` and a 503 each show the unknown text, never "could not be created"; no further POST without a press; editing a field keeps the text; one more press sends exactly one more POST.
+- **A14** A second press while pending sends no second POST.
+
+**Navigation guards**
+- **A15** (fails at baseline) A dirty form asks on the back link and on a sidebar link; Keep editing keeps values and the entry; Discard leaves once and sends no POST. A clean form leaves without a question.
+- **A16** (fails at baseline) Leaving while the POST is pending asks with the pending wording; Leave aborts the wait, shows nothing afterwards, sends no second POST, and the list loads.
+- **A17** (fails at baseline) With the activation link shown, the back link asks "Leave without the activation link?"; Stay keeps the link; Leave removes it, and returning to the creation page does not restore it. Back to accounts and Create another do not ask.
+- **A18** (fails at baseline) On the list with a reset link shown, Create account asks; Stay keeps the link; Leave discards it. Typing in the search does not ask and keeps the link.
+
+**Account and focus**
+- **A19** (fails at baseline) A bootstrap for another `user_id` remounts the creation page: no values, status or secret carry over. Losing `accounts.manage` shows the denial and removes the secret.
+- **A20** (fails at baseline) A PUSH arrival at the creation page focuses its `h1` once; Back/Forward to it and a reload do not move focus. The list's Create-account focus happens only on the PUSH return of A6/A10, not when that entry is later reached by Back/Forward.
+
+### 6.1 Mutation probes (run by Sonnet; re-run by the reviewer)
+
+| Probe | Change | Must fail |
+|---|---|---|
+| M1 | Write `q` with PUSH instead of REPLACE | A4 |
+| M2 | Accept any string as `accountsReturn` | A7 |
+| M3 | Map a transport failure or 5xx back to `error` | A13 |
+| M4 | Clear the `unknown` status on edit | A13 |
+| M5 | Carry the created response in Back to accounts' router state | A9 |
+| M6 | Drop the activation-shown condition from the guard | A17 |
+| M7 | Remove the `user_id` key from the creation route | A19 |
+| M8 | Focus the Create account link on POP as well | A20 |
+| M9 | Keep rendering the inline `CreateAccountPanel` on the list | A3 |
+
+Record each probe's failing case, then revert it.
+
+## 7. Verification
+
+### 7.1 Per-commit checks (Sonnet; repeated by the reviewer)
+
+From PowerShell in `C:\Users\nemes\dnd_ai\portal` (uppercase `C:`; Vitest fails with "failed to find the current suite" from a lowercase `c:/` cwd):
+- focused: `npx vitest run src/pages/CreateAccountPage.test.tsx src/pages/AdminAccountsPage.test.tsx src/pages/AdminAccountsPage.resetLink.test.tsx src/components/CreateAccountPanel.test.tsx src/hooks/useCreateAccount.test.ts src/navigation/platformAccountsReturn.test.ts src/navigation/routeMeta.test.ts src/App.test.tsx` (adjust only for files that are folded or added);
+- full `npm test`. Record the first run and any rerun separately, and name any failure outside these files;
+- `npm run lint`, `npm run build`;
+- from the repository root: `uv run python scripts/check_documentation.py` and `git diff --check`.
+
+Backend checks are not required (portal and docs only), unless a backend file changes, which would be a stop condition.
+
+### 7.2 C04 checkpoint merge requirements (not S01's verdict)
+
+The C04 PR merges only when all of these hold:
+1. S01 and S02 have each passed independent review.
+2. The checkpoint acceptance cases pass on the integration head: S01's A1–A20, S02's cases (from its plan), and one full portal run showing both together.
+3. CI passes on the exact integration head.
+
+A reviewed slice is not a merged checkpoint. None of §7.3 is a merge gate.
+
+### 7.3 Separate events (after the merge; not merge gates)
+
+- Integrated-head browser evidence for focus, list return and one-time credentials (the C04 criteria's [browser](work-register.md#browser) obligation), including a real-browser check of A6, A10, A15–A17 and A20 and of the inherited arrival-focus uncertainty (§8).
+- AX evidence ([ax](work-register.md#ax)) and owner acceptance (`p15-owner`). Nothing in this plan grants them.
+
+## 8. Authorization, disclosure, concurrency and focus rules
+
+- **Authorization is unchanged.** Both routes gate on `accounts.manage` as presentation; every request stays server-authorized, and a refusal is the fixed non-disclosing 404. Administrator stays disabled without `system_roles.grant_admin`.
+- **Disclosure.**
+  - The activation token lives only in the creation page's React memory: never in a URL, router state, storage, a log statement or an announcement (A9).
+  - The search text may be in the address and router state. It is not a credential, the list request already sends it as `?q=` to the server, and it is bounded (§3.2 item 4). Nothing else from the list (names, ids, roles, statuses) enters history.
+  - The unknown text names no account and does not claim that the account exists.
+- **Concurrency.**
+  - At most one create in flight; a POST is sent only by a press.
+  - A late answer after unmount is ignored (existing abort).
+  - An account change remounts the page; a capability loss unmounts the form.
+- **Focus.**
+  - Arrival at the creation page: its `h1`, once per PUSH arrival.
+  - Success: the activation panel heading. Create another: Login name. Return to the list: its Create account link, on the PUSH return only.
+  - Rejected, denied and unknown outcomes leave focus on the submit button, which is enabled again.
+  - Back/Forward and reload move nothing.
+  - **Inherited uncertainty.** C02 left open whether `usePageArrival` can take focus after a real interaction has started ([C02 readiness §4](p15-c02-checkpoint-readiness.md#4-the-provisional-cancel-focus-issue-against-the-checkpoint-criteria)). The creation page uses it, so its tests must wait for the heading to hold focus before typing, and the question stays with the browser check in §7.3. S01 does not diagnose or change `usePageArrival`.
+- **Announcements.** Outcome text uses the existing polite status region; success is announced through the focused heading only (one meaningful announcement).
+
+## 9. Intermediate states
+
+T01 is a single commit. Until it lands, current behavior (§2.1) is shipped; no intermediate state is merged.
+
+## 10. Decisions
+
+**No owner decision is required.** Routine choices made here:
+
+- **R-1 (query in the address).** The list search goes in `?q=` like the Characters and World browsers, which gives reload, Back and return for free. It is not a credential, and the API request already carries it. Router state alone was the alternative; it loses the query on a shared or reopened address with no privacy gain.
+- **R-2 (page-local return key).** Unscoped pages have no task model (§4.8.10), so the return is a validated page-local key that can only name `/platform/accounts` plus a `q`. No `returnTo` address is accepted.
+- **R-3 (Load more not retained).** The task names the query; page position is not part of it.
+- **R-4 (unknown = transport failure or 5xx).** The portal cannot tell whether those committed; any other 4xx is a refusal. The wording warns about duplicates because the server reserves login names only at activation. A deliberate retry stays available: the administrator may have checked the list.
+- **R-5 (guard the shown one-time links).** Leaving with a one-time link on screen loses it permanently, so in-app departures ask, as for unsaved input. Explicit actions on the panel do not ask.
+- **R-6 (no legacy alias).** `/admin/accounts` exists only for old bookmarks; no bookmark to a creation route exists.
+- **R-7 (heading-only success announcement).** Focusing the panel heading speaks the outcome; a second live announcement would repeat it.
+
+## 11. Handoffs
+
+### 11.1 Sonnet implementation instructions
+
+1. Confirm the baseline (the commit adding this plan) is HEAD and `origin/phase15/completion`, with a clean worktree.
+2. Read §2 to §8. Write the "(fails at baseline)" cases first, run them on the baseline, and record each failure (test name and assertion).
+3. Implement §3.2 in the files of §4 only. Keep the reviewed behavior in §2.4.
+4. Run §7.1. Run M1–M9, record each probe's failing case, and revert every probe.
+5. **Stop and report instead of continuing if:**
+   - a backend, API or authorization change seems necessary;
+   - a change to `usePageArrival`, `useUnsavedChangesGuard`, `navigationHolds`, the announcer or the task-origin modules seems necessary;
+   - an existing test would need a changed expectation other than those named in §4;
+   - a case cannot be made to fail at baseline where marked.
+6. Commit with the §5 subject, push, and record in §11.3 and the register's T01 row:
+   - the SHA;
+   - the test-first failures;
+   - the focused and full runs, first run and rerun separately;
+   - the probes;
+   - the CI position. CI is expected to be "pending checkpoint PR".
+7. Do not open, mark ready or merge a PR. Do not run browser or AX checks, start copy-ui, preview or other consumers, or record any acceptance.
+
+### 11.2 Independent review boundary (Luna)
+
+- **T01 = combined S01:** from the plan commit to the T01 implementation commit, plus any docs-only records commit that follows it.
+- Review against §2.4, §3, §6 and §8. Re-run the focused tests and M1–M9.
+- A pass is a slice verdict only; §7.2 and §7.3 remain.
+
+### 11.3 Implementation record (Sonnet)
+
+Pending.
