@@ -118,7 +118,16 @@ export function CreateAccountPanel({ returnTo, canGrantAdmin = false }: CreateAc
                 confirmLabel: "Leave",
                 cancelLabel: "Stay",
             }
-          : {
+          : status.kind === "unknown"
+            ? {
+                  // The portal cannot tell whether the account exists, so it must not say it does not.
+                  title: "Leave before checking whether the account was created?",
+                  description:
+                      "The account may already exist. Leaving discards this form and any activation link held by this page. Check the account list before deliberately creating it again.",
+                  confirmLabel: "Leave",
+                  cancelLabel: "Stay",
+              }
+            : {
                 title: "Discard unsaved changes?",
                 description: "You have entered details for a new account that have not been created.",
                 confirmLabel: "Discard changes",

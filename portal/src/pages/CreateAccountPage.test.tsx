@@ -635,6 +635,62 @@ describe("departure guards (A15–A18)", () => {
         expect(router.state.location.pathname).toBe("/platform/accounts")
     })
 
+    const UNKNOWN_TITLE = "Leave before checking whether the account was created?"
+    const UNKNOWN_BODY =
+        "The account may already exist. Leaving discards this form and any activation link held by this page. Check the account list before deliberately creating it again."
+
+    it("C04-S01-R1 never says the account was not created when the outcome is unknown", async () => {
+        const { server, router } = setup({ post: { networkError: true } })
+        await openCreation()
+        fill("new.gm", "New GM")
+        press()
+        await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("could not confirm"))
+
+        fireEvent.click(screen.getByRole("link", { name: "Platform accounts" }))
+        expect(await screen.findByRole("dialog", { name: UNKNOWN_TITLE, hidden: true })).toBeInTheDocument()
+        expect(screen.getByText(UNKNOWN_BODY)).toBeInTheDocument()
+        expect(document.body.textContent).not.toContain("have not been created")
+        fireEvent.click(screen.getByRole("button", { name: "Stay" }))
+        expect(router.state.location.pathname).toBe("/platform/accounts/new")
+        expect(screen.getByLabelText("Login name")).toHaveValue("new.gm")
+        expect(postCalls(server)).toHaveLength(1)
+
+        fireEvent.click(screen.getByRole("link", { name: "Platform accounts" }))
+        fireEvent.click(await screen.findByRole("button", { name: "Leave" }))
+        await screen.findByText("Alice Example")
+        await settle()
+        expect(postCalls(server)).toHaveLength(1)
+    })
+
+    it("C04-S01-R1 updates an open pending question when the request becomes unknown", async () => {
+        const gate = deferred()
+        const { server, router } = setup({ post: () => gate.promise })
+        await openCreation()
+        fill("new.gm", "New GM")
+        press()
+        await waitFor(() => expect(submitButton()).toBeDisabled())
+
+        fireEvent.click(screen.getByRole("link", { name: "Platform accounts" }))
+        await screen.findByRole("dialog", { name: "Leave while the account is being created?", hidden: true })
+        await act(async () => gate.resolve({ status: 503, body: {} }))
+        expect(await screen.findByRole("dialog", { name: UNKNOWN_TITLE, hidden: true })).toBeInTheDocument()
+        expect(screen.getByText(UNKNOWN_BODY)).toBeInTheDocument()
+        expect(document.body.textContent).not.toContain("have not been created")
+        expect(document.body.textContent).not.toContain("activation link will not be shown")
+
+        fireEvent.click(screen.getByRole("button", { name: "Stay" }))
+        expect(router.state.location.pathname).toBe("/platform/accounts/new")
+        expect(screen.getByLabelText("Login name")).toHaveValue("new.gm")
+        await settle()
+        expect(postCalls(server)).toHaveLength(1)
+
+        fireEvent.click(screen.getByRole("link", { name: "Platform accounts" }))
+        fireEvent.click(await screen.findByRole("button", { name: "Leave" }))
+        await screen.findByText("Alice Example")
+        await settle()
+        expect(postCalls(server)).toHaveLength(1)
+    })
+
     it("A17 asks before the shown activation link is lost; Back to accounts and Create another do not", async () => {
         const { router } = setup()
         await openCreation()
