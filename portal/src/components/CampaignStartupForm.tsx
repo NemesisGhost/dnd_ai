@@ -162,7 +162,7 @@ export function CampaignStartupForm({
                 </button>
             </p>
 
-            <div role="status" aria-live="polite">
+            <div role="status" aria-live="polite" tabIndex={-1}>
                 {pending && "Saving your startup preference…"}
                 {status.kind === "success" && "Startup preference saved."}
                 {confirmed && "Your earlier startup preference change was confirmed."}
@@ -193,7 +193,8 @@ export function CampaignStartupForm({
     )
 }
 
-// The checked choice of the saved preference, else another enabled control of the form: where focus goes when
+// The checked choice of the saved preference, else another enabled control of the form, else (every control
+// locked by a pending save) its status region: where focus goes when
 // the notice's button, which the person used, is removed because the session now shows the saved value.
 function resolveCheckTarget(section: HTMLElement): HTMLElement | null {
     const enabled = (selector: string) =>
@@ -204,6 +205,8 @@ function resolveCheckTarget(section: HTMLElement): HTMLElement | null {
         enabled('input[type="radio"]:checked') ??
         enabled('input[type="radio"]') ??
         enabled("select") ??
+        // Every control is locked (another save is pending): the status region, which says what is happening.
+        section.querySelector<HTMLElement>('[role="status"][tabindex="-1"]') ??
         enabled("a[href], button")
     )
 }

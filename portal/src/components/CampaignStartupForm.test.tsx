@@ -563,7 +563,7 @@ describe("CampaignStartupForm: A is confirmed while a newer save B is pending", 
     }
 
     // A (Beta) is confirmed but unread; the person then saves B (Alpha), whose PUT is held.
-    async function bPending() {
+    async function bPending(publishMatch = true) {
         refreshOutcome.unapplied = true
         renderForm()
         fireEvent.click(fixedRadio())
@@ -588,7 +588,7 @@ describe("CampaignStartupForm: A is confirmed while a newer save B is pending", 
         await waitFor(() => expect(setPreferenceMock).toHaveBeenCalledTimes(2))
         const heard = recordPolite()
         // The matching read for A arrives while B is pending.
-        act(() => publish(betaPreferred()))
+        if (publishMatch) act(() => publish(betaPreferred()))
         return { settle, heard }
     }
 
@@ -643,5 +643,61 @@ describe("CampaignStartupForm: A is confirmed while a newer save B is pending", 
         expect(campaignSelect()).toHaveValue("campaign-a")
         expect(setPreferenceMock).toHaveBeenCalledTimes(2)
         heard.stop()
+    })
+
+    // F-S02-1: Check my session confirms A while B's pending save keeps every control disabled.
+    describe("focus when the form is locked by the pending save", () => {
+        const checkButton = () => screen.getByRole("button", { name: "Check my session" })
+        const statusRegion = () => screen.getByRole("status")
+
+        it("hands focus to the status region, which says what happened, when nothing else is enabled", async () => {
+            const { heard } = await bPending(false)
+            expect(campaignSelect()).toBeDisabled()
+            expect(fixedRadio()).toBeDisabled()
+            expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled()
+            refreshOutcome.unapplied = false
+            const button = checkButton()
+            button.focus()
+            fireEvent.click(button)
+            await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument())
+            await waitFor(() => expect(statusRegion()).toHaveFocus())
+            expect(statusRegion().isConnected).toBe(true)
+            expect(statusRegion()).toHaveTextContent(EARLIER)
+            // Controls stay disabled while B is pending.
+            expect(campaignSelect()).toBeDisabled()
+            expect(heard.times(EARLIER)).toBe(1)
+            heard.stop()
+        })
+
+        it("does not move focus the person moved elsewhere", async () => {
+            const { heard } = await bPending(false)
+            const elsewhere = document.createElement("button")
+            document.body.appendChild(elsewhere)
+            refreshOutcome.unapplied = false
+            try {
+                const button = checkButton()
+                button.focus()
+                fireEvent.click(button)
+                elsewhere.focus()
+                fireEvent.blur(button)
+                await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument())
+                await new Promise((resolve) => setTimeout(resolve, 20))
+                expect(elsewhere).toHaveFocus()
+            } finally {
+                elsewhere.remove()
+                heard.stop()
+            }
+        })
+
+        it("keeps the focus on the button when the check fails", async () => {
+            const { heard } = await bPending(false)
+            refreshOutcome.fail = true
+            const button = checkButton()
+            button.focus()
+            fireEvent.click(button)
+            await waitFor(() => expect(polite()).toHaveTextContent("still could not be confirmed"))
+            expect(button).toHaveFocus()
+            heard.stop()
+        })
     })
 })
