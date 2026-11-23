@@ -395,3 +395,41 @@ The review in §11.4 is kept as the history of the finding. Baseline for the cor
 - M9 (report A's confirmation beside B's success too): fails "B succeeds and is read back" in the form and the hook, and "B succeeds with its read-back outstanding" in the hook.
 
 **CI:** none ran for these commits; **CI pending checkpoint PR.**
+
+### 11.6 Independent confirmation of S02-R1 (Codex, 2026-11-22)
+
+**Boundary and checkout.** Branch `phase15/completion`; initial worktree clean; HEAD and origin both `c81d6d90b5c48a5eccf72d0b967ceb7a5c44a314`. Verified ancestry baseline `fc83c2f2b0f81d0ee8c135c522e7744fe9d899cb` → correction `a5827e659ca299c0935fe09a97b1637264fb9064` → final records head `c81d6d90b5c48a5eccf72d0b967ceb7a5c44a314`. The correction changes the four reported portal source/test files; the records range changes only this plan, the register and portal behavior reference. The original S02-R1 finding in §11.4, correction evidence in §11.5, A1–A12, and grading rubric were reviewed.
+
+**S02-R1 disposition: RESOLVED.** The hook retains A's confirmation when a matching same-user bootstrap arrives while B is pending. Form tests assert the distinct earlier-operation wording once, without saying B is saved. B's 403, 404, 500 and network failures each retain A's confirmation alongside B's truthful refusal/error. If B succeeds with its own read-back outstanding, A remains identified separately and B's unconfirmed notice remains; A's value does not confirm B. If B's own read-back applies, A's earlier text is replaced by B's own completion; the live-region test observes each announcement once and in order. The hook guard tests include the B-own-success path, the B-unconfirmed path, and a later matching B bootstrap. The acceptance publication-order rule is unchanged: a matching bootstrap published after submission is accepted without a causal-read requirement.
+
+**Additional residual focus finding F-S02-1 — no focus target when A confirms during B-pending Check.** `portal/src/components/CampaignStartupForm.tsx:198–207`. Supported trigger: A is outstanding; B is pending; the still-enabled Check my session button is used; the read confirms A and removes the notice. B's pending state disables both radios, the select and Save. `resolveCheckTarget` therefore returns `null` after the focused Check button is removed. A temporary form probe reproduced focus falling to `document.body` rather than a connected enabled target. This behavior was present before the R1 correction as well (the correction did not change focus handling); the correction review surfaced it while exercising the required two-save interaction. Rubric: exposure **1/3** (constrained authenticated settings interaction), impact **1/3** (bounded loss of keyboard position; no data or authority effect), triggerability **1/2** (specific overlap), detection/recovery **0/1** (the user can tab again), blast radius **0/1** (one form/user): **3/10, Low**. Readiness: the current S02 plan's §8 focus promise is not met for this supported path, so the combined S02 acceptance remains incomplete even though R1 closes. Bounded Sonnet correction: when the notice is removed while the form is locked by another pending save, provide a meaningful connected focus fallback that remains available (for example a programmatically focusable section heading); retain the normal checked-radio target, do not focus disabled controls, and preserve the move-away/navigation guards. Add a regression that focuses Check, starts/holds B, confirms A, and asserts the fallback; also retain the existing ordinary checked-choice, failure-stays-focused and move-away cases.
+
+**Verdicts.** S02-R1 correction: **PASS / RESOLVED.** S02-T01 and combined S02: **CHANGES REQUIRED** for F-S02-1; this is a remaining acceptance defect, not a new checkpoint gate. S01's PASS WITH VERIFICATION LIMITS is unchanged and no S01 regression was demonstrated.
+
+**Verification (PowerShell).** From `C:\Users\nemes\dnd_ai\portal`, the focused hook/form/Settings/App suite passed: 4 files, 85 tests. Lint, typecheck, build, repository documentation check and `git diff --check` passed; the build emitted the existing chunk-size advisory. A targeted temporary focus probe failed as described, then its test source was restored byte-for-byte (SHA-256 `1ACC75ECBE0B5A0DA4D670D8CA19769B2D609F76A98EDD25B0431474A49C7697`). No whole suite was repeated. All six recorded full runs in §11.5 remain distinct: runs 1–4 and 6 failed, run 5 passed; the clean baseline 5615-test run and isolated reruns remain separate and do not establish cause. CI remains pending the checkpoint PR. No real-browser, AX, human or owner check was run.
+
+**Remaining C03 checkpoint evidence.** Per §7.2, after the S02 focus acceptance is corrected and reviewed, C03 still requires S01 A1–A14/B1–B18 and S02 A1–A12 on the integration head, one full portal run with both slices, and CI on that exact integration head. Browser/AX (including real-browser S02 A9–A11), consumer pilots and owner acceptance remain separate later events under §7.3. This slice review does not declare any of them complete or add a separate review gate.
+
+
+### 11.7 Correction of F-S02-1 (Sonnet, 2026-11-22)
+
+The reviews in §§11.4 and 11.6, including the original CHANGES REQUIRED, are kept as history. Baseline for the correction: `c81d6d90b5c48a5eccf72d0b967ceb7a5c44a314`. **F-S02-1 is corrected, pending independent confirmation.** S02-R1's closure and S01's PASS WITH VERIFICATION LIMITS are carried forward unchanged: no S01 file changed. No acceptance of any kind is claimed.
+
+| What | Full SHA |
+|---|---|
+| Correction (portal) | `45f18f0b0606b6d424342fdf8d326c8be954a2b5` |
+| Re-review range | `c81d6d90b5c48a5eccf72d0b967ceb7a5c44a314..45f18f0b0606b6d424342fdf8d326c8be954a2b5`, plus the docs-only records commit that follows (it changes no source) |
+
+**Correction (portal only; `useRetryFocus`, the session contracts and the hook are untouched).** The form's polite status region is now programmatically focusable (`tabIndex={-1}`), and the focus handoff's `resolveCheckTarget` falls back to it when no control is enabled, between the select and the links/buttons of the empty state. The order is: the enabled checked radio, another enabled radio, the enabled select, the status region, then a link or button. While another save is pending every control is disabled, so after Check my session confirms the earlier save and the notice goes, focus lands on the region that says what happened ("Saving your startup preference…" and "Your earlier startup preference change was confirmed."). Nothing else changes: controls stay disabled, and no save or confirmation behavior was touched. `docs/reference/portal-behavior.md` §4.7 now names the fallback.
+
+**Reproduction and test-first.** On the baseline source (new tests kept), the reported case failed: A outstanding, B pending (radios, select and Save disabled), the Check my session button focused and used, A confirmed, the notice removed; the status region never took focus (`toHaveFocus` timed out, focus on the page). The other two new cases passed at baseline and are kept as guards: focus the person moved to another control before the confirmation stays there, and a failed check keeps focus on the button.
+
+**Verification.**
+- Focused (hook, form, Settings page, App settings): 4 files, 88 tests passed.
+- Full `npm test` (both C03 slices are in it), two runs kept separate:
+  - run 1: 2 failed of 5632, `CharacterPublicProfilePage.test.tsx` "Cancel still returns focus to Release" (the known C02 focus symptom) and `App.knowledgeClaim.test.tsx` "clears the draft when the retry says access is gone…" (S01, recorded as intermittent). Both passed together when rerun alone (208 tests);
+  - run 2 (the justified rerun): 442 files and 5632 tests passed.
+- `npm run lint` clean; `tsc -b` clean; `npm run build` passed (existing chunk-size advisory); `scripts/check_documentation.py` and `git diff --check` pass.
+- Mutation probe M10 (remove the status-region fallback), restored byte-for-byte: fails the new locked-form case; the move-away and failed-check guards and everything else pass.
+
+**CI:** none ran for these commits; **CI pending checkpoint PR.**
