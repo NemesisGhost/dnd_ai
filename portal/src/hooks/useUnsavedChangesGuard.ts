@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
-import { useBlocker } from "react-router"
 import type { Blocker } from "react-router"
+import { useCommittedBlocker } from "./useCommittedBlocker"
 import {
     anyNavigationHold,
     holdNavigationQuestion,
@@ -48,13 +48,17 @@ export function useUnsavedChangesGuard(isDirty: boolean, options?: GuardedTransi
         optionsRef.current = options
     })
 
-    useEffect(() => {
+    // Committed with the render that changed it (a layout effect), never a pass later: a departure attempted
+    // right after the form first becomes dirty must already see it, so the blocker below also answers from the
+    // first commit in which it is needed.
+    useLayoutEffect(() => {
         dirtyRef.current = isDirty
     }, [isDirty])
 
     // Counted so a component with state of its own to protect (see navigationHolds) adds to this guard's
-    // question instead of installing a second blocker; its holds block here too.
-    useEffect(() => registerPageGuard(), [])
+    // question instead of installing a second blocker; its holds block here too. Counted in the same commit as
+    // the guard's first render, so a holder mounting beside it already sees the page guard.
+    useLayoutEffect(() => registerPageGuard(), [])
 
     // When the page goes away with its question still open (permission loss removes it), the held
     // navigation is cancelled through the blocker's own reset, which also tells the router's
@@ -70,7 +74,9 @@ export function useUnsavedChangesGuard(isDirty: boolean, options?: GuardedTransi
         [],
     )
 
-    const blocker = useBlocker(
+    // react-router's `useBlocker` registers its blocker two passive-effect passes after the first render, so a
+    // departure in that window was not held; this registers it in the first commit (see useCommittedBlocker).
+    const blocker = useCommittedBlocker(
         (transition) => (dirtyRef.current || anyNavigationHold()) && isGuardedTransition(transition, optionsRef.current),
     )
 

@@ -657,10 +657,6 @@ describe("S01 reset-link departure while the list reload is held", () => {
         await screen.findByText("Loading accounts…")
         expect(listCalls()).toHaveLength(2)
         expect(resetPosts()).toHaveLength(1)
-        // react-router's useBlocker registers a guard's blocker in effects after the guard first renders, so a
-        // navigation attempted in that first moment is not held (a framework window, not this page's logic; it
-        // made this test fail intermittently in a cold process before it waited). Let the registration settle.
-        await settle()
 
         fireEvent.click(screen.getByRole("link", { name: "Sidebar home" }))
         expect(await dialogHeading("Leave without the password-reset link?")).toBeInTheDocument()
