@@ -18,12 +18,6 @@ vi.mock("../hooks/usePlatformAccounts", () => ({
     }),
 }))
 
-vi.mock("../components/SystemRolesEditor", () => ({
-    SystemRolesEditor: ({ account }: { account: { user_id: string } }) => (
-        <div>system-roles-{account.user_id}</div>
-    ),
-}))
-
 vi.mock("../components/AccountLifecycleActions", () => ({
     AccountLifecycleActions: ({ account }: { account: { user_id: string } }) => (
         <div>lifecycle-actions-{account.user_id}</div>
@@ -80,7 +74,7 @@ describe("AdminAccountsPage", () => {
         expect(screen.getByText("GM Two")).toBeInTheDocument()
         expect(screen.getByLabelText("Platform administrator")).toBeInTheDocument()
         expect(screen.getByText("lifecycle-actions-user-1")).toBeInTheDocument()
-        expect(screen.getByText("system-roles-user-1")).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Edit roles for GM Two" })).toBeInTheDocument()
         expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument()
     })
 

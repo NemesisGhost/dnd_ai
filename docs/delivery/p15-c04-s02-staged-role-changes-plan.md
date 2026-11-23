@@ -165,7 +165,7 @@ An administrator opens one account's roles, ticks and unticks freely, sees what 
 | `portal/src/hooks/usePlatformAccounts.ts` (+ existing test) | T02 | add `replaceAccount`; existing cases unchanged |
 | `docs/reference/portal-behavior.md` §4.4 | T01, T02 | as §3.2 items 5 and 12 |
 
-**Only allowed changed test expectations:** the deletion of `SystemRolesEditor.test.tsx` (its immediate-write expectations are the deviation) and the replaced mock in `AdminAccountsPage.test.tsx`. Every S01 test file (`CreateAccountPage.test.tsx`, `CreateAccountPanel.test.tsx`, `AdminAccountsPage.resetLink.test.tsx`, `App.platformAccounts.test.tsx`, `platformAccountsReturn.test.ts`, `useCreateAccount.test.ts`) keeps its expectations.
+**Only allowed changed test expectations:** the deletion of `SystemRolesEditor.test.tsx` (its immediate-write expectations are the deviation), the replaced mock in `AdminAccountsPage.test.tsx`, and one assertion there: line 83's `screen.getByText("system-roles-user-1")` (text only the deleted per-row editor's mock produced; the panel is no longer in the row, §3.2 item 2) is replaced by an assertion for the accessible button "Edit roles for GM Two". This clarification was approved by the owner at T01 entry (2026-11-23) after Sonnet stopped under §11.1 step 5; no wrapper component may be added to keep mock-generated text. Every other assertion in that file stays. Every S01 test file (`CreateAccountPage.test.tsx`, `CreateAccountPanel.test.tsx`, `AdminAccountsPage.resetLink.test.tsx`, `App.platformAccounts.test.tsx`, `platformAccountsReturn.test.ts`, `useCreateAccount.test.ts`) keeps its expectations.
 
 ## 5. Task commits
 

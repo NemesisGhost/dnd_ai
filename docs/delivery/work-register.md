@@ -1008,7 +1008,7 @@ The local R01 plan, readiness assessment and E4 design notes have been reconcile
 
 ### R07 — Platform Users administration
 
-**Source evidence:** [Accounts](../../portal/src/pages/AdminAccountsPage.tsx) still contains inline creation and repeated role display. [The editor](../../portal/src/components/SystemRolesEditor.tsx) writes on every checkbox. [Its hook](../../portal/src/hooks/useSystemRoleChange.ts) refreshes the list after success; the list renders only in its success state. The source supports the remount explanation, but scroll movement needs a browser check.
+**Source evidence:** [Accounts](../../portal/src/pages/AdminAccountsPage.tsx) still contains inline creation and repeated role display. The editor (`SystemRolesEditor.tsx`, deleted by P15-C04-S02-T01) writes on every checkbox. Its hook (`useSystemRoleChange.ts`, also deleted) refreshes the list after success; the list renders only in its success state. The source supports the remount explanation, but scroll movement needs a browser check.
 
 **Application impact:** multi-role editing is hard to follow; refresh can disrupt focus. Errors concern platform authority, not campaign/world roles. Existing one-time activation/reset secrets and last-admin safeguards are important adjacent workflows.
 
