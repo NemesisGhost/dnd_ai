@@ -635,22 +635,54 @@ describe("B25-B26 wording", () => {
     })
 })
 
-describe("S01 reset-link departure gap (UNRESOLVED, pre-existing, not a T02 regression)", () => {
-    // S01's guard does not hold a departure made while the list refetch that follows an issuance is still
-    // loading. Recorded as unresolved in plan §11.3; this reproduces it at the S01 baseline (3b6bf08) as well.
-    // `it.fails` passes while the gap exists and fails, prompting its removal, once the guard holds it.
-    it.fails("holds a departure made immediately after the reset link appears, while the list reloads", async () => {
+describe("S01 reset-link departure while the list reload is held", () => {
+    // Deterministic: the list GET that follows the issuance is held unresolved, the loading state is asserted, and
+    // only then is a departure attempted. (An earlier `it.fails` case here did not hold that GET, so it raced a
+    // reload that could already have settled; it was a test defect, not a demonstrated product gap.)
+    it("asks before a shell departure while the post-issuance list read is pending, and a departure never repeats the reset POST", async () => {
         setup()
-        server.on("POST", "/admin/accounts/user-1/password-reset", {
-            body: { user_id: "user-1", raw_reset_token: "tok", expires_at: "2026-10-01T00:00:00Z" },
+        const gate = deferred()
+        let hold = false
+        server.on("GET", GET_ACCOUNTS, () => (hold ? gate.promise : { body: { items, next_cursor: null } }))
+        server.on("POST", "/admin/accounts/user-1/password-reset", () => {
+            hold = true
+            return { body: { user_id: "user-1", raw_reset_token: "held-token", expires_at: "2026-10-01T00:00:00Z" } }
         })
         await screen.findByText("Alice Example")
+        const resetPosts = () => server.callsTo("POST", "/admin/accounts/user-1/password-reset")
+
         fireEvent.click(screen.getAllByRole("button", { name: "Issue password reset" })[0]!)
         await screen.findByLabelText("Password-reset link")
+        // The list read that follows the issuance is pending: the table is replaced by the loading state.
+        await screen.findByText("Loading accounts…")
+        expect(listCalls()).toHaveLength(2)
+        expect(resetPosts()).toHaveLength(1)
+        // react-router's useBlocker registers a guard's blocker in effects after the guard first renders, so a
+        // navigation attempted in that first moment is not held (a framework window, not this page's logic; it
+        // made this test fail intermittently in a cold process before it waited). Let the registration settle.
+        await settle()
+
         fireEvent.click(screen.getByRole("link", { name: "Sidebar home" }))
-        await waitFor(
-            () => expect(screen.getByRole("heading", { name: "Leave without the password-reset link?", hidden: true })).toBeInTheDocument(),
-            { timeout: 500 },
-        )
+        expect(await dialogHeading("Leave without the password-reset link?")).toBeInTheDocument()
+        expect(screen.getByText("It is shown once and cannot be shown again.")).toBeInTheDocument()
+        expect(screen.queryByText("Home page")).toBeNull()
+
+        // Stay keeps the link and the pending read, and sends nothing.
+        fireEvent.click(screen.getByRole("button", { name: "Stay", hidden: true }))
+        expect(screen.getByLabelText("Password-reset link")).toBeInTheDocument()
+        expect(screen.getByText("Loading accounts…")).toBeInTheDocument()
+        expect(screen.queryByText("Home page")).toBeNull()
+        expect(resetPosts()).toHaveLength(1)
+
+        // Leave departs; the reset request is not repeated.
+        fireEvent.click(screen.getByRole("link", { name: "Sidebar home" }))
+        await dialogHeading("Leave without the password-reset link?")
+        fireEvent.click(screen.getByRole("button", { name: "Leave", hidden: true }))
+        expect(await screen.findByText("Home page")).toBeInTheDocument()
+        expect(document.body.textContent).not.toContain("held-token")
+        await act(async () => gate.resolve({ body: { items, next_cursor: null } }))
+        await settle()
+        expect(resetPosts()).toHaveLength(1)
+        expect(listCalls()).toHaveLength(2)
     })
 })
