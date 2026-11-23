@@ -20,11 +20,14 @@ import { AccessDeniedPage } from "../components/TerminalState"
 import { HOME_RECOVERY } from "../components/terminalRecovery"
 import type { SessionBootstrap } from "../types/bootstrap"
 import type { PlatformAccount } from "../types/platformAccounts"
-import { SystemRolesPanel } from "../components/SystemRolesPanel"
+import { SystemRolesPanel, SystemRolesReceipt } from "../components/SystemRolesPanel"
+import { useSession } from "../context/SessionContext"
+import { useSystemRoleSave } from "../hooks/useSystemRoleSave"
+import { bootstrapRefreshOutcome } from "../utils/refreshOutcome"
 import { buildFragmentLink } from "../utils/oneTimeLink"
 import { canGrantAdmin, canManageAccounts, canManageSystemRoles } from "../utils/systemAccess"
 import type { SystemRoleCode } from "../utils/systemAccess"
-import { isDirty, knownRoles } from "../utils/systemRoleStaging"
+import { isDirty, knownRoles, mayHaveBeenSent, stagedChanges } from "../utils/systemRoleStaging"
 
 interface AdminAccountsPageProps {
     bootstrap: SessionBootstrap
@@ -55,20 +58,43 @@ export function AdminAccountsPage({ bootstrap }: AdminAccountsPageProps) {
 // The page's one departure guard (react-router supports a single blocker per page). It is mounted only while
 // something would be lost by leaving: a shown reset link (never shown again) or unsaved role changes; a search
 // change keeps the path and is not a departure. Both reasons share this one question.
-function AccountsDepartureGuard({ resetShown, rolesFor }: { resetShown: boolean; rolesFor: string | null }) {
+type DepartureReason = "saving" | "partial" | "dirty"
+
+function AccountsDepartureGuard({
+    resetShown,
+    rolesFor,
+    reason,
+}: {
+    resetShown: boolean
+    rolesFor: string | null
+    reason: DepartureReason | null
+}) {
     const guard = useUnsavedChangesGuard(true)
-    const dialog =
-        rolesFor !== null
-            ? {
-                  title: "Discard unsaved role changes?",
-                  description: `Your changes to ${rolesFor}'s system roles have not been saved.${
-                      resetShown ? " The password-reset link shown on this page will also be lost." : ""
-                  }`,
-              }
-            : {
-                  title: "Leave without the password-reset link?",
-                  description: "It is shown once and cannot be shown again.",
-              }
+    const resetSentence = resetShown ? " The password-reset link shown on this page will also be lost." : ""
+    let dialog: { title: string; description: string }
+    if (rolesFor !== null && reason === "saving") {
+        // Requests are on their way: they may still be applied, and this page will not be here to say so.
+        dialog = {
+            title: "Leave while role changes are being saved?",
+            description: `Changes already sent may still be saved. You will not see their result.${resetSentence}`,
+        }
+    } else if (rolesFor !== null && reason === "partial") {
+        // Something was sent and may be applied, so "not saved" would not be true.
+        dialog = {
+            title: "Leave with role changes not fully saved?",
+            description: `Some changes to ${rolesFor}'s system roles may already be saved. Leaving discards the changes still staged here and the record of what happened. Check the account's roles in the list afterwards.${resetSentence}`,
+        }
+    } else if (rolesFor !== null) {
+        dialog = {
+            title: "Discard unsaved role changes?",
+            description: `Your changes to ${rolesFor}'s system roles have not been saved.${resetSentence}`,
+        }
+    } else {
+        dialog = {
+            title: "Leave without the password-reset link?",
+            description: "It is shown once and cannot be shown again.",
+        }
+    }
     return (
         <ConfirmDialog
             open={guard.blocked}
@@ -104,7 +130,8 @@ function AuthorizedAccountsPage({ bootstrap }: AdminAccountsPageProps) {
         setTextFor(addressQuery)
         setText(addressQuery)
     }
-    const { state, retry, loadMore } = usePlatformAccounts(addressQuery)
+    const { state, retry, loadMore, replaceAccount } = usePlatformAccounts(addressQuery)
+    const { refresh, reload } = useSession()
     // Transient React memory only. Lives above the account-list loading
     // boundary so the refetch that follows issuance cannot unmount it.
     const [issuedReset, setIssuedReset] = useState<IssuedPasswordReset | null>(null)
@@ -122,6 +149,7 @@ function AuthorizedAccountsPage({ bootstrap }: AdminAccountsPageProps) {
         setRoleEdit(null)
     }
     const active = canManageRoles ? roleEdit : null
+    const [confirmSelf, setConfirmSelf] = useState(false)
     const rolesDirty = active !== null && isDirty(active.snapshot.system_roles, active.draft)
     const listed =
         active !== null && state.status === "success"
@@ -131,14 +159,76 @@ function AuthorizedAccountsPage({ bootstrap }: AdminAccountsPageProps) {
     const editingDraft =
         active === null || editing === null ? [] : rolesDirty ? active.draft : knownRoles(editing.system_roles)
 
+    // Saving: one request per change, one at a time, then the account's roles are read again (never the whole list).
+    const save = useSystemRoleSave({
+        csrfToken: bootstrap.csrf_token,
+        selfUserId: bootstrap.user.user_id,
+        onReconciled: (account, draft) => {
+            replaceAccount(account)
+            setRoleEdit((current) =>
+                current !== null && current.userId === account.user_id
+                    ? { ...current, snapshot: account, draft }
+                    : current,
+            )
+        },
+    })
+    const { clear: clearSave } = save
+    // Losing system_roles.manage stops anything outstanding: no later step is sent and no result is kept.
+    useEffect(() => {
+        if (!canManageRoles) {
+            clearSave()
+        }
+    }, [canManageRoles, clearSave])
+    const mine = active !== null && save.state.userId === active.userId
+    const savePhase = mine ? save.state.phase : "idle"
+    const ledger = mine ? save.state.ledger : []
+    const saving = savePhase === "saving" || savePhase === "reconciling"
+    const busy = saving || savePhase === "check_failed"
+    const locked = rolesDirty || busy
+    const receipt = mine ? (save.ownAdminRemoved ? "removed" : savePhase === "access_unknown" ? "unknown" : null) : null
+    const ownAccount = editing !== null && editing.user_id === bootstrap.user.user_id
+    const departure: DepartureReason | null = saving
+        ? "saving"
+        : (rolesDirty || savePhase === "check_failed") && mayHaveBeenSent(ledger)
+          ? "partial"
+          : rolesDirty
+            ? "dirty"
+            : null
+
+    function startSave() {
+        if (active === null || editing === null) {
+            return
+        }
+        save.save(editing, stagedChanges(editing.system_roles, editingDraft, ownAccount))
+    }
+
+    function requestSave() {
+        if (editing === null) {
+            return
+        }
+        const changes = stagedChanges(editing.system_roles, editingDraft, ownAccount)
+        if (ownAccount && changes.some((change) => change.code === "admin" && change.action === "remove")) {
+            setConfirmSelf(true)
+            return
+        }
+        startSave()
+    }
+
+    async function continueAfterReceipt() {
+        if ((await bootstrapRefreshOutcome(refresh)) === "failed") {
+            reload()
+        }
+    }
+
     function openRoles(account: PlatformAccount) {
         if (active !== null && active.userId === account.user_id) {
             setRoleEdit({ ...active, focusSignal: active.focusSignal + 1 })
             return
         }
-        if (rolesDirty) {
+        if (locked) {
             return
         }
+        clearSave()
         setRoleEdit({
             userId: account.user_id,
             snapshot: account,
@@ -162,6 +252,7 @@ function AuthorizedAccountsPage({ bootstrap }: AdminAccountsPageProps) {
 
     function closeRoles() {
         closedFor.current = active?.userId ?? null
+        clearSave()
         setRoleEdit(null)
     }
 
@@ -213,6 +304,32 @@ function AuthorizedAccountsPage({ bootstrap }: AdminAccountsPageProps) {
             <section aria-labelledby="admin-accounts-heading">
                 <h1 id="admin-accounts-heading">Platform accounts</h1>
 
+                {(issuedReset !== null || (departure !== null && receipt === null)) && (
+                    <AccountsDepartureGuard
+                        resetShown={issuedReset !== null}
+                        rolesFor={departure !== null && receipt === null && editing !== null ? editing.display_name : null}
+                        reason={receipt === null ? departure : null}
+                    />
+                )}
+
+                <ConfirmDialog
+                    open={confirmSelf && active !== null}
+                    title="Remove your own Administrator role?"
+                    description="You will lose Platform accounts and system-role management as soon as it is saved. Another administrator would have to give it back."
+                    confirmLabel="Remove my role"
+                    cancelLabel="Keep editing"
+                    onConfirm={() => {
+                        setConfirmSelf(false)
+                        startSave()
+                    }}
+                    onCancel={() => setConfirmSelf(false)}
+                />
+
+                {receipt !== null ? (
+                    <SystemRolesReceipt kind={receipt} ledger={ledger} onContinue={() => void continueAfterReceipt()} />
+                ) : (
+                <>
+
                 <p>
                     <Link
                         ref={createLinkRef}
@@ -235,13 +352,6 @@ function AuthorizedAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                     </>
                 )}
 
-                {(issuedReset !== null || rolesDirty) && (
-                    <AccountsDepartureGuard
-                        resetShown={issuedReset !== null}
-                        rolesFor={rolesDirty && editing !== null ? editing.display_name : null}
-                    />
-                )}
-
                 {active !== null && editing !== null && (
                     <SystemRolesPanel
                         key={active.userId}
@@ -251,7 +361,12 @@ function AuthorizedAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                         canGrantAdmin={canGrantAdmin(bootstrap)}
                         reasonId={reasonId}
                         focusSignal={active.focusSignal}
+                        phase={savePhase}
+                        checking={mine && save.state.checking}
+                        ledger={ledger}
                         onToggle={toggleRole}
+                        onSave={requestSave}
+                        onCheck={save.checkAgain}
                         onCancel={closeRoles}
                         onClose={closeRoles}
                     />
@@ -332,9 +447,9 @@ function AuthorizedAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                                                     id={`${editIdPrefix}${account.user_id}`}
                                                     className="authoring-button"
                                                     aria-label={`Edit roles for ${account.display_name}`}
-                                                    disabled={rolesDirty && active?.userId !== account.user_id}
+                                                    disabled={locked && active?.userId !== account.user_id}
                                                     aria-describedby={
-                                                        rolesDirty && active?.userId !== account.user_id
+                                                        locked && active?.userId !== account.user_id
                                                             ? reasonId
                                                             : undefined
                                                     }
@@ -379,6 +494,8 @@ function AuthorizedAccountsPage({ bootstrap }: AdminAccountsPageProps) {
                             </button>
                         )}
                     </>
+                )}
+                </>
                 )}
             </section>
         </main>

@@ -28,6 +28,11 @@ function renderPanel(
         canGrantAdmin: false,
         reasonId: "reason",
         focusSignal: 1,
+        phase: "idle" as const,
+        checking: false,
+        ledger: [],
+        onSave: vi.fn(),
+        onCheck: vi.fn(),
         onToggle: vi.fn(),
         onCancel: vi.fn(),
         onClose: vi.fn(),
@@ -53,13 +58,13 @@ describe("SystemRolesPanel", () => {
         expect(heading).toHaveFocus()
     })
 
-    it("offers Close and No changes when clean, and no Save", () => {
+    it("offers Close and No changes when clean, with Save off", () => {
         const { props } = renderPanel(["player"])
         expect(screen.getByText("No changes")).toBeInTheDocument()
         fireEvent.click(screen.getByRole("button", { name: "Close" }))
         expect(props.onClose).toHaveBeenCalledTimes(1)
         expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull()
-        expect(screen.queryByRole("button", { name: /save/i })).toBeNull()
+        expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled()
         expect(screen.getByText("Changes are saved one at a time; some can be saved while others are not.")).toBeInTheDocument()
     })
 

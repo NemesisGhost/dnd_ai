@@ -46,4 +46,7 @@ export interface SystemRoleChangeResponse {
     user_id: string
     system_role_code: "admin" | "gm" | "player" | "observer"
     changed: boolean
+    // Present when revoking `gm`: worlds that left without a manageable Owner (identifiers only; the portal
+    // shows a count and never the identifiers).
+    stranded_world_ids?: string[]
 }

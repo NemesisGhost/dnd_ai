@@ -191,3 +191,82 @@ describe("roles panel isolation (B9)", () => {
         expect(writes().map((call) => call.path)).toEqual(["/admin/accounts/user-1/password-reset"])
     })
 })
+
+describe("saving while the session changes (B24 and authority loss)", () => {
+    function holdFirstGrant() {
+        let release: (value: { body: unknown }) => void = () => {}
+        const held = new Promise<{ body: unknown }>((resolve) => (release = resolve))
+        server.on("POST", /system-roles/, (call) => {
+            if (call.path.endsWith("/system-roles") && (call.body as { system_role_code: string }).system_role_code === "gm") {
+                return held
+            }
+            return { body: { user_id: "user-1", system_role_code: "player", changed: true } }
+        })
+        return () => release({ body: { user_id: "user-1", system_role_code: "gm", changed: true } })
+    }
+
+    async function stageAndSave() {
+        renderAt("/platform/accounts")
+        await screen.findByText("Alice Example")
+        fireEvent.click(screen.getByRole("button", { name: "Edit roles for Alice Example" }))
+        fireEvent.click(await screen.findByRole("checkbox", { name: "Game master" }))
+        fireEvent.click(screen.getByRole("checkbox", { name: "Player" }))
+        fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+        await waitFor(() => expect(roleWrites()).toHaveLength(1))
+    }
+
+    const roleWrites = () => server.calls.filter((call) => call.method === "POST" && /system-roles/.test(call.path))
+    const later = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+
+    it("B24 shows no late outcome under another account and sends no later step", async () => {
+        const release = holdFirstGrant()
+        await stageAndSave()
+
+        act(() => {
+            setSession(authenticated({ user: { user_id: "user-B", display_name: "Account B" }, csrf_token: "csrf-B" }))
+        })
+        await waitFor(() => expect(screen.queryByRole("heading", { name: /System roles for/ })).toBeNull())
+        await act(async () => release())
+        await later()
+
+        expect(roleWrites()).toHaveLength(1)
+        expect(screen.queryByRole("heading", { level: 3, name: "Result" })).toBeNull()
+        expect(screen.queryByText("Game master added")).toBeNull()
+        expect(server.calls.filter((call) => call.path.includes("limit=100"))).toHaveLength(0)
+    })
+
+    it("sends no later step and shows no ledger when system_roles.manage is lost between operations", async () => {
+        const release = holdFirstGrant()
+        await stageAndSave()
+
+        act(() => {
+            setSession(authenticated({ global_capabilities: ["accounts.manage"] }))
+        })
+        await waitFor(() => expect(screen.queryByRole("heading", { name: /System roles for/ })).toBeNull())
+        await act(async () => release())
+        await later()
+
+        expect(roleWrites()).toHaveLength(1)
+        expect(screen.queryByText("Game master added")).toBeNull()
+        expect(server.calls.filter((call) => call.path.includes("limit=100"))).toHaveLength(0)
+        // Regaining the capability brings back neither the panel nor a result.
+        act(() => {
+            setSession(authenticated())
+        })
+        await screen.findByRole("button", { name: "Edit roles for Alice Example" })
+        expect(screen.queryByRole("heading", { level: 3, name: "Result" })).toBeNull()
+    })
+
+    it("sends no later step when accounts.manage is lost while a save is pending", async () => {
+        const release = holdFirstGrant()
+        await stageAndSave()
+
+        act(() => {
+            setSession(authenticated({ global_capabilities: [] }))
+        })
+        expect(await screen.findByRole("heading", { name: "Access denied" })).toBeInTheDocument()
+        await act(async () => release())
+        await later()
+        expect(roleWrites()).toHaveLength(1)
+    })
+})

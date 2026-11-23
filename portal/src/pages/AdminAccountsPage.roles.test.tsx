@@ -93,7 +93,8 @@ describe("B1-B3 staging, local cancel and the panel's place", () => {
             "Remove Player",
         ])
         expect(writes()).toEqual([])
-        expect(screen.queryByRole("button", { name: /save/i })).toBeNull()
+        // T02 adds the explicit Save (T01 had none); ticking alone still sends nothing.
+        expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled()
     })
 
     it("B2 Cancel restores the draft, closes the panel, sends nothing and returns focus to the row button", async () => {

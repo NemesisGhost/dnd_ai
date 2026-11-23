@@ -13,6 +13,9 @@ export interface UsePlatformAccountsResult {
     state: PlatformAccountsState
     retry: () => void
     loadMore: () => void
+    // Replaces the listed account that has this user id, in place: no loading state and no refetch. It does
+    // nothing unless the list is showing and holds that account.
+    replaceAccount: (account: PlatformAccount) => void
 }
 
 interface Snapshot {
@@ -51,6 +54,24 @@ export function usePlatformAccounts(query: string): UsePlatformAccountsResult {
 
     const retry = useCallback(() => {
         setRequestVersion((current) => current + 1)
+    }, [])
+
+    const replaceAccount = useCallback((account: PlatformAccount) => {
+        setSnapshot((current) => {
+            if (current.state.status !== "success") {
+                return current
+            }
+            if (!current.state.items.some((item) => item.user_id === account.user_id)) {
+                return current
+            }
+            return {
+                ...current,
+                state: {
+                    ...current.state,
+                    items: current.state.items.map((item) => (item.user_id === account.user_id ? account : item)),
+                },
+            }
+        })
     }, [])
 
     const loadMore = useCallback(() => {
@@ -126,5 +147,5 @@ export function usePlatformAccounts(query: string): UsePlatformAccountsResult {
         }
     }, [query, requestVersion, cursor, reload])
 
-    return { state, retry, loadMore }
+    return { state, retry, loadMore, replaceAccount }
 }

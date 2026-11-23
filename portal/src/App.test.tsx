@@ -345,6 +345,7 @@ beforeEach(() => {
     state: { status: "success", items: [], nextCursor: null },
     retry: vi.fn(),
     loadMore: vi.fn(),
+    replaceAccount: vi.fn(),
   })
 })
 

@@ -18,6 +18,11 @@ vi.mock("../hooks/usePlatformAccounts", () => ({
     }),
 }))
 
+// The page reads the session for saving role changes (T02); nothing here saves.
+vi.mock("../context/SessionContext", () => ({
+    useSession: () => ({ state: { status: "loading" }, reload: vi.fn(), refresh: vi.fn() }),
+}))
+
 vi.mock("../components/AccountLifecycleActions", () => ({
     AccountLifecycleActions: ({ account }: { account: { user_id: string } }) => (
         <div>lifecycle-actions-{account.user_id}</div>

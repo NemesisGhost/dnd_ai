@@ -2,11 +2,14 @@ import type { PlatformAccountList } from "../types/platformAccounts"
 
 export class PlatformAccountsRequestError extends Error {
     readonly status: number
+    // The server's stable error code when its envelope could be read; never a message or a field location.
+    readonly code?: string
 
-    constructor(status: number, message: string) {
+    constructor(status: number, message: string, code?: string) {
         super(message)
         this.name = "PlatformAccountsRequestError"
         this.status = status
+        this.code = code
     }
 }
 
