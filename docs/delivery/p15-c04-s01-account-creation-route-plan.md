@@ -1,6 +1,6 @@
 # D/P15-C04-S01 implementation plan: separate account creation from the list
 
-**Status:** Opus plan prepared 2026-11-23. **T01 implemented by Sonnet at `c2f15975c98943d952df6550f3c0cc2ebdf7d269` (see §11.3); awaiting independent review.** It was ready for Sonnet. No owner decision blocks the task. Section 10 lists the routine choices made here; none changes a product policy, an API contract or authorization.
+**Status:** Opus plan prepared 2026-11-23. **T01 implemented by Sonnet at `c2f15975c98943d952df6550f3c0cc2ebdf7d269` (see §11.3); C04-S01-R1 corrected at `c031179a2997ecc4ead71d98008e4d8aee6cd558` (§11.5). Independently reviewed: R1 resolved; T01 and S01 PASS WITH VERIFICATION LIMITS at reviewed head `39d2a18e8949f0321951b843d03c5a52ae9bc925` (§11.6).** Earlier review history remains in §§11.3–11.5. No owner decision blocks the task. Section 10 lists the routine choices made here; none changes a product policy, an API contract or authorization.
 
 **Register rows:**
 - slice [D/P15-C04-S01](work-register.md#p15-c04-s01);
@@ -357,3 +357,14 @@ Rubric: authenticated account-manager creation path; exposure **2/3** (ordinary 
 **Mutation probe.** Making the new branch unreachable (`status.kind === "unknown"` replaced by `false`) fails exactly the two new regressions (2 failed, 44 passed in `CreateAccountPage.test.tsx`); the file was restored and its SHA-256 matched the pre-probe hash (`958ad14bb883…`).
 
 **Re-review range.** `f20b2f5e7575b20352f05184940b9aab951d4f32..c031179a2997ecc4ead71d98008e4d8aee6cd558` (the correction: `CreateAccountPanel.tsx` and `CreateAccountPage.test.tsx`) plus the docs-only records commit that follows it. CI remains pending the C04 checkpoint PR; browser/AX, human and owner acceptance remain pending.
+
+
+### 11.6 Independent confirmation of C04-S01-R1 (Codex, 2026-11-23)
+
+**Boundary and verdict.** Confirmed ancestry and scope: baseline `f20b2f5e7575b20352f05184940b9aab951d4f32`, correction `c031179a2997ecc4ead71d98008e4d8aee6cd558`, and records head `39d2a18e8949f0321951b843d03c5a52ae9bc925`. The code range changes only `CreateAccountPanel.tsx` and `CreateAccountPage.test.tsx`; the subsequent range to the records head is documentation only. C04-S01-R1 is **resolved**. T01 and S01 are **PASS WITH VERIFICATION LIMITS** for this reviewed implementation and correction.
+
+**Evidence.** The unknown-result branch is selected from current status after the pending branch, so both a settled transport/5xx unknown outcome and an already-open departure dialog whose request settles unknown receive the truthful question. Stay retains the form; Leave proceeds to the accounts list; neither repeats the POST. The two correction regressions and recorded mutation probe are meaningful: both old-behavior cases failed before the fix, and making the new branch unreachable fails both. Existing A13/A15/A16/A17 assertions remain passing and preserve unknown status on edits, ordinary dirty wording, pending behavior, and shown activation-link protection. The recorded mutation restoration was hash-verified.
+
+**Empty form after unknown.** The status can remain unknown after every field is cleared, but the existing departure contract asks only for dirty input, a pending request, or a shown activation link. With no dirty values, the guard does not ask. The plan does not require guarding departure solely to preserve the unknown notice, so this is not a new finding or gate; it does not claim the account was not created.
+
+**Verification.** Focused creation/navigation/guard tests run for this confirmation: 4 files, 95 passed. The correction's recorded focused suite remains separately 11 files, 189 passed. Documentation and diff checks pass after this record update. No full suite or CI ran on the correction; the earlier baseline full-suite failure and clean rerun remain historical, not correction evidence. Browser/AX, human and owner checks remain pending. S02 and consumers were not started.
