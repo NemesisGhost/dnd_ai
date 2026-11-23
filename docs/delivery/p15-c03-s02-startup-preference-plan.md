@@ -299,4 +299,44 @@ T01 is a single commit. Until it lands, current behavior (§2.1) is shipped; no 
 
 ### 11.3 Implementation record (Sonnet)
 
-*Pending.*
+**Implementation commit:** `d0a92536552cec7dbb45b75a534ae9cf16b1b1ec` (`d0a9253`), subject `P15-C03-S02-T01: confirm a saved startup preference from a matching later bootstrap for the same user and save`, a child of the baseline `f27c53dee5c87749f57d1177eadf9f2a42888903`. Pushed to `origin/phase15/completion`. Review range: `f27c53dee5c87749f57d1177eadf9f2a42888903..d0a92536552cec7dbb45b75a534ae9cf16b1b1ec`, plus the docs-only records commit that follows. Portal and docs only; no backend, API, `useSessionBootstrap`, `SessionContext` or `useRetryFocus` change.
+
+**What changed.**
+- `useSaveCampaignStartupPreference`: a confirmed PUT whose read-back is not applied creates an episode `{id, userId, submitted, before}`. It is confirmed during render from `useSession().state` when the session is authenticated, `user_id` equals the episode's user, the bootstrap is a different object from the one held when the save was sent (`before`), and `preferred_campaign_id === submitted` (null equals null). A different user ends it. A newer confirmed PUT ends it. Unmount aborts as before, and now also aborts a check. New result fields: `outstanding`, `confirmed` (confirmed while a rejected newer save's status is showing), `check()`, `checking`, `checkFailed`. `reset()` and edits never end an episode. `check()` calls `refresh(signal)` once (a second press while one is in flight sends nothing), never `reload`; a rejection records `checkFailed`; "not applied" is silent; a late result for an ended episode is ignored (aborted signal and episode id).
+- `CampaignStartupForm`: the unconfirmed notice renders from `outstanding` (so it survives edits and sits beside a later request's error) as a small component that calls `useRetryFocus` with a `resolveTarget` (the checked radio, else another enabled radio, the select, a link or button of the section). The draft is dropped on confirmation only when it equals the saved choice. The polite status announces "Startup preference saved." (also when `confirmed`), "Checking your session…" and "The latest settings still could not be confirmed." The denied (401/403) notice still calls `onCheckSession`.
+- `SettingsPage`: the form is keyed by `bootstrap.user.user_id`.
+- `docs/reference/portal-behavior.md` §4.7 describes the episode, its reconciliation, edits keeping the notice, in-place check, focus, account isolation and limitation O-1. `docs/delivery/coverage.md` needed no change (its row's wording is unchanged).
+
+**Two choices to review.**
+- *Evidence must be a bootstrap published after the save was sent* (`before`). R-1 says a matching bootstrap for the same user suffices, but the existing hook test "keeps a confirmed save as unconfirmed, never denied, when the refresh was not applied" saves `null` from a session that already says null: the bootstrap that was there before the PUT is not evidence of it. A bootstrap published since (including one that superseded the save's own read) is.
+- *Fixtures extended, no expectation changed.* The hook test's mocked session gained `user` and `campaign_preferences` (a `sessionWith` helper), because the hook now reads them; the form test harness gained a `publish` handle, records refresh signals and wraps the form in a `<section>` as the Settings page does (the focus handoff resolves within it).
+
+**Changed existing expectations (the two named in §4, nothing else).** In `CampaignStartupForm.test.tsx`, "does not report success or apply the choice when the session refresh fails" and "says the confirmed save happened, and never that nothing was saved, when the refresh was not applied" clicked Check my session and asserted `onCheckSession` was called once; they now assert one in-place `refresh` and no `onCheckSession` call. The denied-path test ("offers a session check when the save is refused") is unchanged. The hook tests "resets to idle" and the unmount abort are unchanged.
+
+**Test-first (new cases run on the baseline source, 71 tests in the four focused files): 24 failed.**
+- Hook (11): A1, A2, A3 (different user), A3 (read-back false), A4, A5 (404, 403, network), A6 (check never reloads; unapplied check and unmount abort) and "reset() does not end the episode".
+- Form (10): A7, A8 (newer draft), A8 (draft is the saved value), "Check my session reads once in place", "a failed check keeps the notice…", "moves focus to the checked choice", "does not move focus that went elsewhere", "falls back to the next focusable control", and the two changed Check-my-session expectations.
+- Settings page (1): the A8a account-isolation case. App (2): A9 and A10/A11.
+- Passed at baseline and kept as regression guards: the A8 "non-matching bootstrap keeps the notice" case, A8b (access dropped keeps the notice and names nothing) and A12 (an unauthenticated check goes to sign-in).
+
+**Focused run after the change:** `useSaveCampaignStartupPreference.test.ts`, `CampaignStartupForm.test.tsx`, `SettingsPage.test.tsx` and `App.settingsSharedSession.test.tsx`: 4 files, 71 tests passed.
+
+**Full `npm test`, four runs kept separate (the focused files pass in every run):**
+- run 1: 1 failed of 5615, `App.knowledgeMemberPreview.test.tsx` "resets the character, party and page when the member changes…" (an 8 s timeout; that file passed alone, 39/39);
+- run 2: 1 failed of 5615, `OrganizationMembersReader.test.tsx` "does not show the previous organization's roster while the next one loads" (an 8 s timeout; passed alone, 12/12);
+- run 3: 1 failed of 5615, `App.knowledgeClaim.test.tsx` B13 (S01; passed alone, 150/150);
+- run 4: 442 files and 5615 tests passed.
+None of the failures touches startup preferences. `npm run lint` clean; `tsc -b` clean; `npm run build` passed (existing chunk-size advisory); `scripts/check_documentation.py` and `git diff --check` pass.
+
+**Mutation probes (each temporary, reverted byte-for-byte), run against the four focused files:**
+- M1 (drop the `user_id` comparison): fails A3 (different user);
+- M2 (confirm on any published bootstrap): fails A3, A4, and the form A8 "non-matching" and A8b cases;
+- M3 (`reset()` ends the episode): fails A7, A8 (newer draft), the failed-check and focus cases, the hook reset case, A9 and A10/A11;
+- M4 (drop the draft unconditionally): fails A8 (newer draft) and A10/A11;
+- M5 (the notice calls `onCheckSession`): fails A9, A10/A11 and six form cases (the in-place check, its failure and focus cases, and the two changed expectations);
+- M6 (no episode guard on a late check): fails A4 and the A6 unapplied-check case; it took removing the guard, the id match in the derived `checking`/`checkFailed` and the abort on episode end together, because each is a separate defence;
+- M7 (remove the `key`): fails A8a.
+
+**Not done, by instruction:** no PR, copy-ui/preview or other consumers, no browser/AX run, no acceptance of any kind. **CI:** none ran for these commits; **CI pending checkpoint PR.**
+
+**Known limits.** O-1 (§3.3) stands. The `before` rule means a bootstrap published between the PUT being sent and the failure being known is accepted as evidence, so a superseding read that already shows the value confirms the save at once. A confirmation that arrives while a rejected newer save's error is showing is reported beside it (`confirmed`), not in place of it.
