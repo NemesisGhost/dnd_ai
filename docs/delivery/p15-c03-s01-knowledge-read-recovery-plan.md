@@ -499,3 +499,50 @@ The final records head is the docs-only commit that follows `018a3a1` (it names 
 - Full `npm test`, kept separate: run 1 failed 1 of 5590 (`AuditHistory.test.tsx` "loads more rows via the Load more button and appends them", an 8 s timeout under load; the file passed alone, 14/14); run 2: 442 files and 5590 tests passed. Neither touches the Knowledge files.
 - `npm run lint` clean; `tsc -b` clean; `npm run build` passed (existing chunk-size advisory); `scripts/check_documentation.py` and `git diff --check` pass at the final head.
 - No backend, API or unrelated focus change. CI: none ran for these commits; **CI pending checkpoint PR.**
+
+### 11.6 Independent confirmation of R1 and R2 (Codex, 2026-11-22)
+
+**Boundary and checkout.** Branch `phase15/completion`, initial worktree clean, local HEAD and `origin/phase15/completion` both `4b4a48da931c7f3abc082a7afa8819ee9b6c2f9f`. The correction commits resolve to:
+
+| Boundary | Full SHA |
+|---|---|
+| Baseline | `3c3846112209a6934f7c0e8d21bc5c22772c56b7` |
+| R1 | `b27316d1076fe57acf2e1a4a0e48da2331f92f90` |
+| R2 | `018a3a1629ae875a048e2a698bb0aa6606198969` |
+| Final records head | `4b4a48da931c7f3abc082a7afa8819ee9b6c2f9f` |
+
+Ancestry confirms R1 `3c38461..b27316d1076fe57acf2e1a4a0e48da2331f92f90`, R2 `b27316d1076fe57acf2e1a4a0e48da2331f92f90..018a3a1629ae875a048e2a698bb0aa6606198969`, combined implementation `3c3846112209a6934f7c0e8d21bc5c22772c56b7..018a3a1629ae875a048e2a698bb0aa6606198969`, and docs-only records through `4b4a48da931c7f3abc082a7afa8819ee9b6c2f9f`. The supplied R1 full SHA resolves to the same commit object.
+
+**R1 disposition: RESOLVED.** The form tracks each field's value edited since submit separately from the old-base-relative dirty map. After confirmation, only post-submit values different from the confirmed body remain as drafts. This preserves the old value when deliberately restored during the pending write or read-back and avoids a false draft when input is unchanged or returned to the submitted value. The three R1 app tests assert both timing windows, the control case, the resulting dirty state, discard-to-saved behavior and a single POST. The R1 source and tests were reviewed in range; no further defect was found.
+
+**R2 disposition: RESOLVED.** For the Knowledge page, `pageReportsRefresh` together with `onStepConfirmed` now makes the page the sole owner of read-back announcement classification. The tracker announces a lifecycle completion once; it announces “Saved, but…” only for an outstanding recoverable failure. A superseded read waits silently for its owning newer result; a definitive closed/refused read is terminal and settles immediately as done, without waiting for another read. A confirmed detail refusal is also announced once as done. The App tests cover authoring 403, authoring 404 and a detail read superseded by a newer read, checking announcement counts and no duplicate POST. Shared panel tests cover the page-owned ok/failed/superseded handoff, default caller behavior and the `pageReportsRefresh`-without-callback fallback. Tracker tests cover done-once, failure-only saved-but and refusal closure. No non-Knowledge production caller opts into page-owned refresh; optional callback and flag behavior remains compatible for existing callers.
+
+The changed lifecycle assertion is timing-only: it now waits for the same saved-but announcement after the page notice appears. The tracker test's rename and expectation change reflect transfer of announcement ownership from the panel to the tracker. The recorded pre-fix failures and M9–M14 probe results remain in §11.5; this independent confirmation inspected that evidence and reran the focused regressions, but did not repeat each mutation.
+
+**Verdicts.** T01: **PASS WITH VERIFICATION LIMITS; R1 resolved.** T02: **PASS WITH VERIFICATION LIMITS; R2 resolved.** Combined S01: **PASS WITH VERIFICATION LIMITS; independent implementation review passes.** The §11.4 findings, scores and failed-probe records remain unchanged as history. No additional material finding was established. The inherited C02 focus uncertainty is separate and the correction does not alter its page-arrival behavior.
+
+**Independent verification (PowerShell; portal commands from `C:\Users\nemes\dnd_ai\portal`).**
+
+| Command | Result |
+|---|---|
+| `npx vitest run src/App.knowledgeClaim.test.tsx src/hooks/useKnowledgeSaveReads.test.tsx src/hooks/useKnowledgeDetail.test.ts src/components/authoring/feedback.test.tsx src/components/EntityLifecyclePanel.test.tsx src/pages/KnowledgeClaimPage.test.tsx` | 6 files, 228 tests passed |
+| `npm test` | **Failed:** 441 files passed, 1 failed; 5589 passed, 1 failed. Failure: `src/pages/ItemDefinitionPages.save.test.tsx`, “shows a persistent saved status, announces once, keeps the same inputs and moves the version on”; expected the name input to have focus, actual focus was the page heading. This file is outside the changed Knowledge path. |
+| `npx vitest run src/pages/ItemDefinitionPages.save.test.tsx` | 1 file, 17 tests passed in isolation. This does not convert the full run into a pass and does not identify the full-run failure's cause. |
+| `npm run lint` | passed |
+| `npm run build` | passed; Vite emitted the existing chunk-size advisory |
+| `uv run python scripts/check_documentation.py` | passed |
+| `git diff --check` | passed |
+
+The full-run focus failure and isolated pass are distinct events. The changed `pageReportsRefresh` branch is opted into only by Knowledge; the Item Definition failure is recorded as an unrelated full-suite verification limitation, not attributed to a test flake or a product regression. No CI ran for the correction commits; CI remains pending the C03 checkpoint PR. No browser/AX, human or owner acceptance is claimed. Reviewer changes are limited to this plan and the owning register; they remain uncommitted.
+
+### 11.7 Independent re-review of R1/R2 (Codex, 2026-11-22)
+
+The re-review verified the ancestry and correction diff scope from baseline `3c3846112209a6934f7c0e8d21bc5c22772c56b7` through R1 `b27316d1076fe57acf2e1a4a0e48da2331f92f90`, R2 `018a3a1629ae875a048e2a698bb0aa6606198969`, and final records head `4b4a48da931c7f3abc082a7afa8819ee9b6c2f9f`. R1/R2 are implementation changes within the requested correction range; the final records head contains later documentation only. The source implementation, tests and surrounding page/tracker/panel ownership were inspected. The prior review findings, test-first records and mutation-probe history remain intact.
+
+R1 remains **RESOLVED**. Per-field post-submit intent is reconciled against the confirmed submitted body after either the write or read-back settles: returning to the pre-save value is retained as a draft when it differs from the submitted body; untouched input and values returned to the submitted body do not create a false draft. The existing cases cover both pending intervals and the no-false-draft control; repeated submit reset and scope-keyed navigation isolation were inspected in the surrounding code.
+
+R2 remains **RESOLVED**. `stateOf` maps an outstanding or superseded authoring/lifecycle read to terminal `closed` when the current resource state is refused; `unresolved` then excludes it and the effect announces the save completion once. The Knowledge App covers authoritative 403 and 404 outcomes. Tracker tests cover refusal closure after an outstanding claim read and a closed lifecycle response; superseded reads remain pending and settle only when the newer answer is observed. This is not an indefinite wait on a definitive refusal. Actual recoverable failures retain the saved-but notice, and the page-owned lifecycle callback prevents a duplicate panel announcement; default panel callers preserve their existing behavior. The plan wording above now distinguishes terminal closure from supersession explicitly.
+
+**R1: PASS. R2: PASS.** T01: **PASS WITH VERIFICATION LIMITS.** T02: **PASS WITH VERIFICATION LIMITS.** Combined S01: **PASS WITH VERIFICATION LIMITS; independent implementation review passes.** No new rubric-grade runtime finding was established. Inherited C02 focus uncertainty remains separate; CI for these corrections remains pending the checkpoint PR, and browser/AX, human and owner checks remain unperformed.
+
+**Re-review verification.** From `C:\Users\nemes\dnd_ai\portal`, `npx vitest run src/App.knowledgeClaim.test.tsx src/hooks/useKnowledgeSaveReads.test.tsx src/hooks/useKnowledgeDetail.test.ts src/components/authoring/feedback.test.tsx src/components/EntityLifecyclePanel.test.tsx src/pages/KnowledgeClaimPage.test.tsx` passed: 6 files, 228 tests. The separate historical full-run failure, isolated 14/14 and clean 5590-test rerun in §11.5 remain distinct; §11.6 also records its later unrelated full-run focus failure and isolated 17/17 result. This re-review did not rerun full `npm test`, lint or build because those were run and recorded in §11.6 and no production source changed. Documentation and diff checks are rerun after this record update.
