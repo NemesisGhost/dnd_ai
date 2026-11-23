@@ -310,4 +310,31 @@ Unchanged from [S01 plan §7.2](p15-c04-s01-account-creation-route-plan.md#72-c0
 
 ### 11.3 Implementation record
 
-Pending (Sonnet).
+#### T01 (Sonnet, 2026-11-23)
+
+**Status:** T01 implemented at `86a001ec030f384568b5a6f3d0c3ef853f47475c` (`P15-C04-S02-T01: stage system-role changes in one account panel with local cancel`), pushed to `phase15/completion`; **awaiting independent review, not accepted.** It is an intermediate commit: the panel has no Save button, so it is **not mergeable on its own** (§9); T02 follows. Baseline: `3b6bf08a29a6ee3f1c19bd9a6c438c0bf91b6594` (HEAD and origin, clean worktree). CI: **pending the C04 checkpoint PR** (none opened).
+
+**§4 clarification (owner-approved at T01 entry, in the commit).** Before any edit Sonnet stopped under §11.1 step 5: `AdminAccountsPage.test.tsx` line 83 asserted `getByText("system-roles-user-1")`, text only the deleted per-row `SystemRolesEditor` mock produced, so "mock replaced, assertions stay" could not hold once the panel left the row. The owner amended §4: the mock is removed and that one assertion becomes `getByRole("button", { name: "Edit roles for GM Two" })`; no wrapper component was added to keep mock text. Every other assertion in that file, and every S01 test file, is unchanged.
+
+**What changed.** New `utils/systemRoleStaging.ts` (`stagedChanges(baseline, draft, ownAccount)`: grants then removals in option order, own Administrator removal last; `isDirty`; `describeChange`; `knownRoles`) and `components/SystemRolesPanel.tsx` (heading focused on open and on a repeated Edit roles press, checkboxes bound to the draft, Administrator grant gate and operator-script note, the campaign/world line, the one-at-a-time line, "Changes not saved yet" list or "No changes", Cancel when dirty / Close when clean, no Save and no placeholder). Deleted `SystemRolesEditor.tsx`, its test and `hooks/useSystemRoleChange.ts` (`api/systemRoles.ts` stays for T02). `AdminAccountsPage.tsx`: an "Edit roles for ‹name›" button per row (only with `system_roles.manage`), page-level `roleEdit` above the loading boundary, other rows' buttons disabled with the explanation while dirty, clean panel follows the latest list item, and `ResetLinkGuard` replaced by one `AccountsDepartureGuard` with one `ConfirmDialog` (reset-only wording exactly S01's). Docs: `portal-behavior.md` §4.4; one register evidence link to the deleted files became plain text so the documentation check passes.
+
+**Choices to review.** (1) The guard component is still mounted only while a reset link or dirty roles exist (as S01's `ResetLinkGuard` was), because an always-mounted `useBlocker` breaks `App.landing` under its plain `MemoryRouter`; there is exactly one guard instance and one dialog, never two. (2) Losing `system_roles.manage` clears `roleEdit` (render-time reset), so the draft cannot come back if the capability returns. (3) Close focus: the row's button, else the search field, taken only when focus is on `body` or detached (a control the person moved to keeps it). (4) `stagedChanges` takes a boolean `ownAccount` rather than a user id; the page passes `editing.user_id === bootstrap.user.user_id`.
+
+**Test-first failures (baseline `3b6bf08`, new file `AdminAccountsPage.roles.test.tsx`, 14 cases, 13 failed and 1 passed).** B1, B2 and B3 each failed with `Unable to find an accessible element with the role "button" and name "Edit roles for Alice Example"`; B4, B6, B7, B8 (both dirty-roles cases), B10 and the three focus cases failed the same way; the S01 reset-only dialog case failed only because it was clicked while the list refetch was in flight (see observation below) and passes once it waits for the list. B5 (no Edit roles without `system_roles.manage`) passes at baseline, as expected for an absence.
+
+**Added coverage beyond B1–B10.** `App.platformAccounts.roles.test.tsx` (real route table): an account change drops the panel, draft and reset link (nothing under the new account, no extra POST); loss of `system_roles.manage` removes the panel and draft and regaining it does not restore them, with the reset link kept; a dirty draft is no longer asked about after the capability is lost; loss of `accounts.manage` shows the denial and leaves no token. Focus: close falls back to the search field, does not take back focus moved elsewhere, and a list reload after opening does not steal focus. `SystemRolesPanel.test.tsx` and `systemRoleStaging.test.ts` cover the component and pure rules.
+
+**Runs (PowerShell, `C:\Users\nemes\dnd_ai\portal`).**
+- Focused (§7.1 files plus `App.platformAccounts.roles.test.tsx`): 8 files, **96 passed**.
+- Full `npm test`: first run **448 files, 5744 tests passed**; no failure, no rerun.
+- `npm run lint`, `npx tsc -b` and `npm run build` pass (existing chunk-size notice only). `uv run python scripts/check_documentation.py` passes (after the register link fix) and `git diff --check` is clean (git warns that LF will become CRLF in new files; not an error).
+
+**Probes (each reverted; `AdminAccountsPage.tsx` restored byte-for-byte, SHA-256 prefix `fdba378512e7` before and after).**
+- M1 (checkbox change posts immediately) failed B1 (plus B2, B3, B8 stay-draft).
+- M2 (Cancel keeps the draft for reopening) failed B2 (plus others that reopen).
+- M3 (panel inside the row's cell) failed B3 (plus two focus cases).
+- M4 (second guard for roles beside the page guard) failed exactly the B8 combined-reason case.
+
+**Observation (pre-existing S01 behavior, not changed here).** Reproduced at baseline and with the new guard: if a link in the page's own shell is clicked immediately after the reset link appears, while the list refetch that follows issuance is still loading, the departure is not held and no question is asked; once the list has settled it is. Not caused by T01 and not in T01's scope (it would touch the guard path). Recommend Luna or the owner decide whether it needs its own finding.
+
+**Not done.** T02, any PR, browser/AX checks, consumers and any acceptance.
