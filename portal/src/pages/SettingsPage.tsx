@@ -32,7 +32,12 @@ export function SettingsPage({ bootstrap, reload }: SettingsPageProps) {
                     aria-labelledby="settings-startup-heading"
                 >
                     <h2 id="settings-startup-heading">Campaign startup</h2>
-                    <CampaignStartupForm bootstrap={bootstrap} onCheckSession={reload} />
+                    {/* Keyed by account: nothing one account saved, drafted or was told can carry into another. */}
+                    <CampaignStartupForm
+                        key={bootstrap.user.user_id}
+                        bootstrap={bootstrap}
+                        onCheckSession={reload}
+                    />
                 </section>
             </section>
         </main>

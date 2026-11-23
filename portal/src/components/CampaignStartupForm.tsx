@@ -1,6 +1,7 @@
 import { useId, useState } from "react"
 import type { FormEvent } from "react"
 import { Link } from "react-router"
+import { useRetryFocus } from "../hooks/useRetryFocus"
 import { useSaveCampaignStartupPreference } from "../hooks/useSaveCampaignStartupPreference"
 import type { CampaignStartupMode, SessionBootstrap } from "../types/bootstrap"
 
@@ -24,7 +25,8 @@ export function CampaignStartupForm({
     bootstrap,
     onCheckSession,
 }: CampaignStartupFormProps) {
-    const { status, save, reset } = useSaveCampaignStartupPreference()
+    const { status, save, reset, outstanding, confirmed, check, checking, checkFailed } =
+        useSaveCampaignStartupPreference()
     const modeGroupId = useId()
     const selectId = useId()
 
@@ -83,9 +85,9 @@ export function CampaignStartupForm({
         save(preferredSelected ? choice.campaignId : null)
     }
 
-    // Once a save is confirmed (the bootstrap was re-fetched), drop the
-    // draft so the form shows the server's own saved value.
-    if (status.kind === "success" && draft !== null) {
+    // Once a save is confirmed (the bootstrap shows it), drop the draft so the form shows the server's own saved
+    // value - but only a draft that is that value. A newer choice typed while the confirmation was outstanding stays.
+    if ((status.kind === "success" || confirmed) && draft !== null && sameChoice(draft, baseline)) {
         setDraft(null)
     }
 
@@ -160,9 +162,12 @@ export function CampaignStartupForm({
                 </button>
             </p>
 
-            <div role="status" aria-live="polite">
+            <div role="status" aria-live="polite" tabIndex={-1}>
                 {pending && "Saving your startup preference…"}
                 {status.kind === "success" && "Startup preference saved."}
+                {confirmed && "Your earlier startup preference change was confirmed."}
+                {checking && "Checking your session…"}
+                {checkFailed && "The latest settings still could not be confirmed."}
             </div>
 
             {status.kind === "unavailable" && (
@@ -178,15 +183,7 @@ export function CampaignStartupForm({
                     </button>
                 </p>
             )}
-            {status.kind === "unconfirmed" && (
-                <p role="alert" className="campaign-startup-form__error">
-                    Your preference was saved, but the latest settings could not be
-                    confirmed.{" "}
-                    <button type="button" onClick={onCheckSession}>
-                        Check my session
-                    </button>
-                </p>
-            )}
+            {outstanding && <UnconfirmedNotice onCheck={check} />}
             {status.kind === "error" && (
                 <p role="alert" className="campaign-startup-form__error">
                     Your preference could not be saved. Try again.
@@ -194,4 +191,50 @@ export function CampaignStartupForm({
             )}
         </form>
     )
+}
+
+// The checked choice of the saved preference, else another enabled control of the form, else (every control
+// locked by a pending save) its status region: where focus goes when
+// the notice's button, which the person used, is removed because the session now shows the saved value.
+function resolveCheckTarget(section: HTMLElement): HTMLElement | null {
+    const enabled = (selector: string) =>
+        Array.from(section.querySelectorAll<HTMLElement>(selector)).find(
+            (element) => !(element as HTMLInputElement).disabled,
+        ) ?? null
+    return (
+        enabled('input[type="radio"]:checked') ??
+        enabled('input[type="radio"]') ??
+        enabled("select") ??
+        // Every control is locked (another save is pending): the status region, which says what is happening.
+        section.querySelector<HTMLElement>('[role="status"][tabindex="-1"]') ??
+        enabled("a[href], button")
+    )
+}
+
+// The confirmed save the session does not show yet. Its own component so that the recovery button's focus
+// handoff (useRetryFocus) lives exactly as long as the button.
+function UnconfirmedNotice({ onCheck }: { onCheck: () => void }) {
+    const { ref, used, left } = useRetryFocus<HTMLButtonElement>(resolveCheckTarget)
+    return (
+        <p role="alert" className="campaign-startup-form__error">
+            Your preference was saved, but the latest settings could not be confirmed.{" "}
+            <button
+                type="button"
+                ref={ref}
+                onClick={() => {
+                    used()
+                    onCheck()
+                }}
+                onBlur={left}
+            >
+                Check my session
+            </button>
+        </p>
+    )
+}
+
+function sameChoice(a: StartupChoice, b: StartupChoice): boolean {
+    return a.mode === "preferred_campaign"
+        ? b.mode === "preferred_campaign" && a.campaignId === b.campaignId
+        : b.mode === "resume_last_visited"
 }

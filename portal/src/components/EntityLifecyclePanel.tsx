@@ -181,8 +181,14 @@ interface PanelProps {
     // change is confirmed but the page is behind, so the transition is not announced as done.
     onChanged?: () => void | Promise<RefreshOutcome>
     // The page reports a step that was confirmed but not read back itself (its own notice and its own
-    // way to read again), so the panel adds neither a second notice nor a hold of its own.
+    // way to read again), so the panel adds neither a second notice nor a hold of its own, and announces
+    // neither "saved, but" nor the step as done when it also passes `onStepConfirmed`: the page does, once,
+    // when it knows how the reads ended.
     pageReportsRefresh?: boolean
+    // Called once a step is confirmed, just before the record is read again, with what the step is
+    // announced as. For a page that reports the read-back itself (`pageReportsRefresh`) and must announce
+    // the step as done when its own reads recover. Absent: nothing changes for other pages.
+    onStepConfirmed?: (done: string) => void
     // Set while the page holds unsaved edits to the record: every action then asks first, and says
     // the edits are not part of the change.
     unsavedEdits?: boolean
@@ -222,6 +228,7 @@ function useLifecycleActions({
     unsavedEdits = false,
     afterDeletePath,
     pageReportsRefresh = false,
+    onStepConfirmed,
 }: PanelProps): { actions: LifecycleActions; dialogs: ReactNode } {
     const navigate = useNavigate()
     const announce = useAnnounce()
@@ -266,7 +273,12 @@ function useLifecycleActions({
                 })
                 return
             }
+            onStepConfirmed?.(message)
             const outcome = await readBack()
+            // A page that reports the read-back itself classifies it (a refusal is an answer, a superseded read
+            // waits for the newer one, only a failed read is "saved, but") and announces the step: it was
+            // handed what the step is announced as through `onStepConfirmed`.
+            if (pageReportsRefresh && onStepConfirmed !== undefined) return outcome
             if (outcome === "ok") {
                 announce(message)
             } else {

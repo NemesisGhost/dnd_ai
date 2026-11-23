@@ -14,9 +14,10 @@ import { KnowledgeRequestError } from "../api/knowledge"
 import type { KnowledgeDetail } from "../types/knowledge"
 import { useKnowledgeDetail } from "./useKnowledgeDetail"
 
-const { fetchKnowledgeDetailMock, reloadMock } = vi.hoisted(() => ({
+const { fetchKnowledgeDetailMock, reloadMock, bootstrapRefreshMock } = vi.hoisted(() => ({
     fetchKnowledgeDetailMock: vi.fn(),
     reloadMock: vi.fn(),
+    bootstrapRefreshMock: vi.fn(),
 }))
 
 vi.mock("../api/knowledge", async (importOriginal) => {
@@ -28,7 +29,7 @@ vi.mock("../api/knowledge", async (importOriginal) => {
 })
 
 vi.mock("../context/SessionContext", () => ({
-    useSession: () => ({ reload: reloadMock }),
+    useSession: () => ({ reload: reloadMock, refresh: bootstrapRefreshMock }),
 }))
 
 const itemFixture: KnowledgeDetail = {
@@ -46,6 +47,8 @@ beforeEach(() => {
     fetchKnowledgeDetailMock.mockReset()
     reloadMock.mockReset()
     reloadMock.mockResolvedValue(undefined)
+    bootstrapRefreshMock.mockReset()
+    bootstrapRefreshMock.mockResolvedValue(true)
 })
 
 describe("useKnowledgeDetail", () => {
@@ -262,8 +265,60 @@ describe("useKnowledgeDetail", () => {
             await act(async () => {
                 outcome = await result.current.refresh()
             })
-            expect(outcome).toBe("failed")
+            // A refusal is an authoritative result, told apart from a recoverable failure.
+            expect(outcome).toBe("closed")
             expect(result.current.state).toEqual({ status: "unavailable" })
+            expect(result.current.refusedAfterWrite).toBe(true)
+        })
+
+        describe("a party-scoped 404 after a save is rechecked like the first read", () => {
+            const loadedUnderParty = async () => {
+                fetchKnowledgeDetailMock.mockResolvedValueOnce(itemFixture)
+                const hook = renderHook(() => useKnowledgeDetail("campaign-a", "knowledge-a", "character-a", "party-a"))
+                await waitFor(() => expect(hook.result.current.state.status).toBe("success"))
+                return hook
+            }
+            const refreshOnce = async (result: { current: { refresh: () => Promise<string> } }) => {
+                let outcome: string | undefined
+                await act(async () => {
+                    outcome = await result.current.refresh()
+                })
+                return outcome
+            }
+
+            it("B10: refreshes the bootstrap once and reports the party it rechecked", async () => {
+                const { result } = await loadedUnderParty()
+                fetchKnowledgeDetailMock.mockRejectedValueOnce(new KnowledgeRequestError(404))
+                expect(await refreshOnce(result)).toBe("closed")
+                expect(bootstrapRefreshMock).toHaveBeenCalledTimes(1)
+                expect(result.current.state).toEqual({ status: "unavailable", recheckedPartyId: "party-a" })
+            })
+
+            it("B13: a bootstrap refresh that does not apply is a recoverable failure that drops nothing", async () => {
+                const { result } = await loadedUnderParty()
+                bootstrapRefreshMock.mockResolvedValue(false)
+                fetchKnowledgeDetailMock.mockRejectedValueOnce(new KnowledgeRequestError(404))
+                expect(await refreshOnce(result)).toBe("failed")
+                expect(result.current.state).toEqual({ status: "success", item: itemFixture })
+            })
+
+            it("B14: one bootstrap refresh per refresh episode; a later refresh is a new episode", async () => {
+                const { result, rerender } = await loadedUnderParty()
+                fetchKnowledgeDetailMock.mockRejectedValue(new KnowledgeRequestError(404))
+                await refreshOnce(result)
+                rerender()
+                rerender()
+                expect(bootstrapRefreshMock).toHaveBeenCalledTimes(1)
+                await refreshOnce(result)
+                expect(bootstrapRefreshMock).toHaveBeenCalledTimes(2)
+            })
+
+            it("never rechecks without a party in the address", async () => {
+                const { result } = await loaded()
+                fetchKnowledgeDetailMock.mockRejectedValueOnce(new KnowledgeRequestError(404))
+                expect(await refreshOnce(result)).toBe("closed")
+                expect(bootstrapRefreshMock).not.toHaveBeenCalled()
+            })
         })
 
         it("resolves superseded when a newer refresh replaces it, and applies only the newer", async () => {

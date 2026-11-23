@@ -1,11 +1,11 @@
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import type { ReactNode } from "react"
 import { useSession } from "../context/SessionContext"
 import { useKnowledgeDetail } from "../hooks/useKnowledgeDetail"
 import { useBreadcrumbLabel } from "../navigation/BreadcrumbLabelContext"
 import { resolveAuthorizedParties } from "../utils/authorizedParties"
 import type { KnowledgeDetail } from "../types/knowledge"
-import type { RefetchOutcome } from "../hooks/useAuthoringResource"
+import type { KnowledgeRefreshOutcome } from "../hooks/useKnowledgeDetail"
 import PlaceholderPage from "../pages/PlaceholderPage"
 
 interface KnowledgeDetailBoundaryProps {
@@ -19,7 +19,7 @@ interface KnowledgeDetailBoundaryProps {
     // authorized (that stays a genuine "unavailable").
     onPartyRevoked?: (partyId: string) => void
     // `refresh` re-reads the detail without remounting anything below.
-    children: (item: KnowledgeDetail, refresh: () => Promise<RefetchOutcome>) => ReactNode
+    children: (item: KnowledgeDetail, refresh: () => Promise<KnowledgeRefreshOutcome>) => ReactNode
 }
 
 export function KnowledgeDetailBoundary({
@@ -30,7 +30,7 @@ export function KnowledgeDetailBoundary({
     onPartyRevoked,
     children,
 }: KnowledgeDetailBoundaryProps) {
-    const { state, retry, refresh, authority } = useKnowledgeDetail(
+    const { state, retry, refresh, authority, refusedAfterWrite } = useKnowledgeDetail(
         campaignId,
         knowledgeItemId,
         characterId,
@@ -66,12 +66,35 @@ export function KnowledgeDetailBoundary({
         }
     }, [revoked, recheckedPartyId, onPartyRevoked])
 
+    // The item became unavailable on a re-read after a confirmed write: the write is still confirmed, in
+    // words that say nothing about the record (a refusal never discloses what was there). Focus goes to the
+    // heading once, and only if the control that held it has gone (the page that was saved from is replaced).
+    const confirmedThenRefused = state.status === "unavailable" && refusedAfterWrite
+    const terminalHeading = useRef<HTMLHeadingElement>(null)
+    useEffect(() => {
+        if (!confirmedThenRefused) return
+        const focused = document.activeElement
+        if (focused === null || focused === document.body) terminalHeading.current?.focus()
+    }, [confirmedThenRefused])
+
     if (state.status === "loading") {
         return (
             <PlaceholderPage
                 title="Loading knowledge"
                 description="Loading the latest authorized knowledge."
             />
+        )
+    }
+
+    if (state.status === "unavailable" && confirmedThenRefused) {
+        return (
+            <section className="placeholder-page" aria-labelledby="knowledge-unavailable-heading">
+                <h1 id="knowledge-unavailable-heading" ref={terminalHeading} tabIndex={-1}>
+                    Knowledge unavailable
+                </h1>
+                <p>The requested knowledge is not available.</p>
+                <p>Your change was saved.</p>
+            </section>
         )
     }
 
