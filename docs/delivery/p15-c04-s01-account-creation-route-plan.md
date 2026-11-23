@@ -1,6 +1,6 @@
 # D/P15-C04-S01 implementation plan: separate account creation from the list
 
-**Status:** Opus plan prepared 2026-11-23. **Ready for Sonnet.** No owner decision blocks the task. Section 10 lists the routine choices made here; none changes a product policy, an API contract or authorization.
+**Status:** Opus plan prepared 2026-11-23. **T01 implemented by Sonnet at `c2f15975c98943d952df6550f3c0cc2ebdf7d269` (see §11.3); awaiting independent review.** It was ready for Sonnet. No owner decision blocks the task. Section 10 lists the routine choices made here; none changes a product policy, an API contract or authorization.
 
 **Register rows:**
 - slice [D/P15-C04-S01](work-register.md#p15-c04-s01);
@@ -268,6 +268,57 @@ T01 is a single commit. Until it lands, current behavior (§2.1) is shipped; no 
 - Review against §2.4, §3, §6 and §8. Re-run the focused tests and M1–M9.
 - A pass is a slice verdict only; §7.2 and §7.3 remain.
 
-### 11.3 Implementation record (Sonnet)
+### 11.3 Implementation record (Sonnet, 2026-11-23)
 
-Pending.
+**Status:** implemented and pushed; **awaiting independent review (Luna); not accepted.** CI is pending the C04 checkpoint PR (none opened; no workflow was triggered or waited for). Browser, AX, pilot and owner acceptance were not run and are not claimed.
+
+**Commits.** Baseline (plan) `f5f6e6e455709fddc2a27dc6a2fb08a984f8e2f0` (HEAD = `origin/phase15/completion`, clean worktree, confirmed first). T01 implementation `c2f15975c98943d952df6550f3c0cc2ebdf7d269`, subject "P15-C04-S01-T01: give account creation its own route with list return, focus and transient activation handling". Luna's range per §11.2: `f5f6e6e..c2f1597` plus the records commit that follows it (docs only; its SHA is in the hand-off report, because a commit cannot name itself).
+
+**What changed (portal and docs only; no backend, API or authorization file).**
+- New: `navigation/platformAccountsReturn.ts`, `pages/CreateAccountPage.tsx`, and their tests plus `App.platformAccounts.test.tsx`.
+- Changed: `App.tsx` (route adapter `PlatformAccountCreateRoute`; both account routes keyed by `bootstrap.user.user_id`), `navigation/routeMeta.ts` (`platform.accounts.new`), `AdminAccountsPage.tsx` (no inline form, Create account link, `?q=` by REPLACE, focus on PUSH return, `ResetLinkGuard`), `usePlatformAccounts.ts` (takes the query), `useCreateAccount.ts` (`unknown`), `CreateAccountPanel.tsx` (now the page's form and activation panel with the guard), `OneTimeSecretPanel.tsx` (optional `actions` and `focusHeading`; `onDismiss` became optional), and `portal-behavior.md` / `portal-navigation.md` (route count 92).
+- Not changed: `usePageArrival`, `useUnsavedChangesGuard`, `navigationHolds`, the announcer, the task-origin modules, `SessionContext`.
+
+**Test-first failures (before any implementation).** The cases were written first. Because the new modules did not exist, two temporary stubs were created (`platformAccountsReturn.ts` returning empty values and `CreateAccountPage.tsx` rendering `null`) so that each case reports its own assertion instead of one import error; the stubs were deleted before implementation. Run on the baseline plus stubs (4 files): **59 failed | 29 passed (88)**. The saved output is in the session scratchpad (`c04_baseline_failures.txt`). Failing, by file:
+- `platformAccountsReturn.test.ts` (5): the bounded-`q` read, the search builder, the return-state round trip, the carried search and the focus marker.
+- `useCreateAccount.test.ts` (6): the 500/502/503/599 and transport-failure mappings to `unknown`, and the one-more-request-per-press case.
+- `CreateAccountPage.test.tsx`: 41 of its 44 cases, against the stub. They include A1, A2, A3, A4 (REPLACE), A5, A6, A7 (direct entry and the tampered values), A8, A9, A10 (both), A13 (both), A15 to A18 and A20 (three), plus the focus-preservation cases.
+- `App.platformAccounts.test.tsx` (7 of 8): A1, A2 and five A19 cases (the list-gate and legacy-redirect case passes at baseline, as it should).
+- Honest limits of this evidence: with the stub page most failures are absence of the page, not the old inline form's behavior. A11, A12 and A14 are not marked "(fails at baseline)" in §6 and fail here only for that reason. That a case can fail for the right reason is shown by the post-change probes M1 to M9 below. In the hook file, the 404 case, the not-authenticated case and the other pre-existing cases already passed.
+
+**Runs.**
+- Focused §7.1 files plus `App.test.tsx` and `App.platformAccounts.test.tsx`, before the first full run: 10 files, **165 passed**. One earlier run of `CreateAccountPage.test.tsx` had a single failure that was my own test (A8 did not focus the submit button before pressing, so the page heading still owned focus and, correctly, kept it); the test was corrected to focus the button as a person pressing it would.
+- **Full `npm test`, first run: 445 files, 1 failed | 444 passed; 5718 tests, 1 failed | 5717 passed.** The failure was `src/App.landing.test.tsx > persistent sidebar through the real route tree > is present on /platform/accounts`, a defect of this change: that test renders the real list inside a plain `MemoryRouter`, and the list called `useBlocker` unconditionally, which needs a data router. Fixed in the implementation, not in the test: the guard moved into `ResetLinkGuard`, mounted only while a reset link is shown, so the list needs a data router only then (production always has one). `App.landing.test.tsx` is unchanged.
+- Focused rerun after the fix (11 files, `App.landing.test.tsx` added): **186 passed**.
+- **Full `npm test`, rerun: 445 files, 445 passed; 5718 tests, 5718 passed.**
+- `npm run lint`: clean. `npm run build`: succeeds (the existing chunk-size notice only).
+- `uv run python scripts/check_documentation.py`: passes. `git diff --check`: clean (LF/CRLF notices only).
+
+**Test files edited beyond the §4 list (harness or signature only; no expectation was weakened).**
+- `usePlatformAccounts.test.ts`: the hook now takes the query, so the calls pass `""` and the query-change case uses `rerender`; one case added.
+- `App.test.tsx`: the `usePlatformAccounts` mock no longer returns `query`/`setQuery` (they are not part of the hook's result any more). No expectation changed.
+- `AdminAccountsPage.test.tsx`: the list needs a router (a `Link` and `useSearchParams`), so its renders sit in one; the `CreateAccountPanel` mock and its `create-account-panel` assertion are replaced by the A3 assertions (a Create account link to `/platform/accounts/new`, no inline form). The denial and table assertions are unchanged.
+- `AdminAccountsPage.resetLink.test.tsx`: harness only (a data router); the `CreateAccountPanel` mock is removed; every expectation stands.
+- `CreateAccountPanel.test.tsx`: the form moved to the page, so it renders inside a data router with `returnTo`; the two cases keep their assertions, and the link case now expects the named heading.
+
+**Mutation probes** (each applied to one file, the named test files run, and the file restored byte-for-byte, checked by SHA-256 each time; no probe remains in the tree):
+
+| Probe | Failing cases |
+|---|---|
+| M1 REPLACE to PUSH | A4 "writes q by REPLACE..." and A4 "leaves no history entry per keystroke" (2) |
+| M2 accept any string as `accountsReturn` | 13 helper cases and 6 A7 page cases (19) |
+| M3 transport failure / 5xx to `error` | 6 hook cases and both A13 cases (8) |
+| M4 clear `unknown` on edit | both A13 cases (2) |
+| M5 created response in Back to accounts' router state | A9 (1) |
+| M6 drop the activation-shown condition from the guard | A17 "asks before the shown activation link is lost..." (1) |
+| M7 remove the `user_id` key from the creation route | three A19 cases (remount, link removed, late answer) (3) |
+| M8 focus the link on POP as well | A20 "focuses the list's Create account link on the PUSH return only" (1) |
+| M9 keep the inline panel on the list | A3 and the two `AdminAccountsPage.test.tsx` table cases (3) |
+
+**Decisions and notes for review.**
+- *A20 and `usePageArrival`.* The hook focuses the heading on any arrival, including a first mount by Back or reload. To meet "PUSH only" without changing it, the page passes `ready = navigationType === PUSH`. A direct entry therefore moves no focus, so tests of a direct entry have no heading focus to wait for; every test that types after a PUSH arrival waits for the heading to hold focus first (`openCreation`). The inherited uncertainty (whether `usePageArrival` can take focus after a real interaction has started) is untouched and stays with the browser check in §7.3.
+- *Focus is preserved, not forced.* The activation heading, the list's Create account link and the restored submit button take focus only if focus is on `body` (lost with the control that produced the change); a control the person chose meanwhile keeps it. Tests cover a sidebar link focused while the request was pending, for a refusal, an unknown outcome and a success, and a search field focused on the list.
+- *The list is keyed by the signed-in account too* (not in §3.2 item 1, but required so a reset link, shown or in flight, cannot appear under another account); the creation route is keyed as planned.
+- *`AdminAccountsPage` is split* into the capability gate and an authorized page, so a direct mount without `accounts.manage` no longer calls the list hook (it previously did before the check).
+- *Late answers and account changes* rely on the existing abort-on-unmount in `useCreateAccount` and `useIssuePasswordReset` plus the key; `App.platformAccounts.test.tsx` covers a late create answer, a shown activation link, a lost capability, a shown reset link and a late reset answer across an account change.
+- *Verification limits.* jsdom does not establish real-browser focus (including focus after a focused field becomes disabled), the native `<dialog>`, keyboard, zoom or screen-reader behavior; none of §7.3 was run. The unknown-outcome wording makes a retry deliberate, not impossible; duplicate accounts remain possible by design (no idempotency key; separate API work, R07).
