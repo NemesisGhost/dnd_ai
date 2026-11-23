@@ -267,3 +267,64 @@ describe("saved startup preference reaches the shared session", () => {
         expect(screen.getByRole("button", { name: "Check my session" })).toBeInTheDocument()
     })
 })
+
+// P15-C03-S02-T01: Check my session re-reads in place; a matching later bootstrap confirms the saved preference.
+describe("an unconfirmed startup preference is confirmed from a later session read", () => {
+    const puts = () => vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "PUT").length
+    const checkButton = () => screen.getByRole("button", { name: "Check my session" })
+
+    async function unconfirmedBeta() {
+        await openSettings()
+        fireEvent.click(fixedRadio())
+        fireEvent.change(select(), { target: { value: "beta" } })
+        server.sessionStatus = 500
+        fireEvent.click(save())
+        await screen.findByRole("alert")
+        expect(screen.getByRole("alert")).toHaveTextContent("could not be confirmed")
+    }
+
+    it("A9: a failed check keeps the page, the draft and the notice, says so once, and keeps focus on the button", async () => {
+        await unconfirmedBeta()
+        fireEvent.change(select(), { target: { value: "alpha" } })
+        const gets = server.sessionGets
+        checkButton().focus()
+        fireEvent.click(checkButton())
+        await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("still could not be confirmed"))
+        expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument()
+        expect(screen.queryByText("Portal unavailable")).not.toBeInTheDocument()
+        expect(select()).toHaveValue("alpha")
+        expect(screen.getByRole("alert")).toHaveTextContent("could not be confirmed")
+        expect(checkButton()).toHaveFocus()
+        expect(server.sessionGets).toBe(gets + 1)
+        expect(puts()).toBe(1)
+    })
+
+    it("A10 and A11: a check that reads the saved value removes the notice, announces once, keeps the draft, focuses the choice, and /home uses it", async () => {
+        await unconfirmedBeta()
+        fireEvent.change(select(), { target: { value: "alpha" } })
+        server.sessionStatus = 200
+        const gets = server.sessionGets
+        checkButton().focus()
+        fireEvent.click(checkButton())
+        await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument())
+        expect(screen.getByRole("status")).toHaveTextContent("Startup preference saved.")
+        expect(select()).toHaveValue("alpha")
+        expect(save()).toBeEnabled()
+        await waitFor(() => expect(fixedRadio()).toHaveFocus())
+        expect(server.sessionGets).toBe(gets + 1)
+        expect(puts()).toBe(1)
+
+        fireEvent.click(screen.getByRole("link", { name: "D&D AI Portal" }))
+        await waitFor(() => expect(location()).toHaveTextContent("/app/beta/home"))
+    })
+
+    it("A12: a check whose read is unauthenticated goes to sign-in and claims nothing", async () => {
+        await unconfirmedBeta()
+        server.sessionStatus = 401
+        fireEvent.click(checkButton())
+        await waitFor(() => expect(location()).toHaveTextContent("/login"))
+        expect(screen.queryByText("Startup preference saved.")).not.toBeInTheDocument()
+        expect(screen.queryByText(/nothing was saved/)).not.toBeInTheDocument()
+        expect(puts()).toBe(1)
+    })
+})
