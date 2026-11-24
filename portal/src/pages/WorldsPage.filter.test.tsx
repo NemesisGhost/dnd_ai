@@ -506,3 +506,101 @@ describe("WorldsPage filter", () => {
         expect(await screen.findByRole("link", { name: "Create world" })).toHaveAttribute("href", "/worlds/new")
     })
 })
+
+// C06-1: returning to a filter whose list is already loaded shows that cached list at once while a fresh
+// read starts. The cached list must not satisfy the announcement: only the fresh read of the latest
+// choice does, with its own displayed count.
+describe("WorldsPage filter announcements bind to the latest fresh read (C06-1)", () => {
+    function held() {
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => {
+            release = resolve
+        })
+        return { gate, release }
+    }
+
+    // Active: first call answers now with 1 world; later calls wait for `activeGate` and answer
+    // `activeAnswer` (or fail). All: waits for `allGate` and answers 3 worlds.
+    function setup(options: { activeAnswer: "two" | "fail"; releaseAllEarly?: boolean }) {
+        const server = installMockServer()
+        const activeGate = held()
+        const allGate = held()
+        let activeCalls = 0
+        server.on("GET", /^\/worlds\?status=active/, async () => {
+            activeCalls += 1
+            if (activeCalls === 1) return page([world("w1", "Eberron")])
+            await activeGate.gate
+            return options.activeAnswer === "fail"
+                ? { status: 500 }
+                : page([world("w1", "Eberron"), world("w2", "Faerûn")])
+        })
+        server.on("GET", /^\/worlds\?status=all/, async () => {
+            await allGate.gate
+            return page([world("w1", "Eberron"), world("w2", "Faerûn"), archivedWorld("w9", "Old World")])
+        })
+        return { server, activeGate, allGate }
+    }
+
+    async function settle() {
+        await act(async () => {
+            await new Promise((r) => setTimeout(r, 20))
+        })
+    }
+
+    it("1: announces nothing from the cached list and exactly once with the fresh count after settlement", async () => {
+        const { activeGate } = setup({ activeAnswer: "two" })
+        const { announce } = render()
+        await screen.findByRole("link", { name: "Eberron" })
+
+        const box = screen.getByRole("checkbox", { name: CHECKBOX })
+        box.focus()
+        fireEvent.click(box)
+        fireEvent.click(screen.getByRole("checkbox", { name: CHECKBOX }))
+        // The cached active list (1 world) is on screen while the fresh read is held.
+        expect(screen.getByRole("link", { name: "Eberron" })).toBeInTheDocument()
+        await settle()
+        expect(announce).not.toHaveBeenCalled()
+
+        activeGate.release()
+        await screen.findByRole("link", { name: "Faerûn" })
+        await waitFor(() => expect(announce).toHaveBeenCalledTimes(1))
+        expect(announce).toHaveBeenLastCalledWith("Showing 2 active worlds.")
+        await settle()
+        expect(announce).toHaveBeenCalledTimes(1)
+        expect(screen.getByRole("checkbox", { name: CHECKBOX })).toHaveFocus()
+    })
+
+    it("2: a failed final read announces no successful count", async () => {
+        const { activeGate } = setup({ activeAnswer: "fail" })
+        const { announce } = render()
+        await screen.findByRole("link", { name: "Eberron" })
+
+        fireEvent.click(screen.getByRole("checkbox", { name: CHECKBOX }))
+        fireEvent.click(screen.getByRole("checkbox", { name: CHECKBOX }))
+        await settle()
+        expect(announce).not.toHaveBeenCalled()
+
+        activeGate.release()
+        expect(await screen.findByRole("alert")).toHaveTextContent("could not be loaded")
+        await settle()
+        expect(announce).not.toHaveBeenCalled()
+    })
+
+    it("3: a superseded answer that settles late announces nothing stale", async () => {
+        const { activeGate, allGate } = setup({ activeAnswer: "two" })
+        const { announce } = render()
+        await screen.findByRole("link", { name: "Eberron" })
+
+        fireEvent.click(screen.getByRole("checkbox", { name: CHECKBOX })) // all: superseded below
+        fireEvent.click(screen.getByRole("checkbox", { name: CHECKBOX })) // active: the latest choice
+        activeGate.release()
+        await screen.findByRole("link", { name: "Faerûn" })
+        await waitFor(() => expect(announce).toHaveBeenCalledTimes(1))
+        allGate.release() // the superseded answer settles after the latest one
+        await settle()
+        expect(screen.queryByRole("link", { name: "Old World" })).not.toBeInTheDocument()
+        expect(announce).toHaveBeenCalledTimes(1)
+        expect(announce).toHaveBeenLastCalledWith("Showing 2 active worlds.")
+        expect(announce).not.toHaveBeenCalledWith(expect.stringContaining("including archived"))
+    })
+})

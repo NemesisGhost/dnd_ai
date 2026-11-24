@@ -39,7 +39,7 @@ export function WorldsPage() {
     const { bootstrap } = useAuthenticatedSession()
     const [params, setParams] = useSearchParams()
     const includeArchived = readIncludeArchived(params)
-    const { state } = useAuthoringResource<WorldListResponse>(
+    const { state, startedSeq } = useAuthoringResource<WorldListResponse>(
         `${worldsListPath(includeArchived ? "all" : "active")}&limit=100`,
     )
     // Once per path: a change of the filter only changes the query and must leave focus on the checkbox.
@@ -48,27 +48,34 @@ export function WorldsPage() {
     const choices =
         state.kind === "ready" ? buildWorldChoices(state.data.items, bootstrap.campaigns) : []
 
-    // A change the person made waits for the list it asks for. The list is path-keyed, so only an answer
-    // for the state now chosen can be ready; a newer choice replaces the wait, and a failed read ends it
-    // without a count. The result is announced once, from the list actually displayed.
+    // A change the person made waits for the FRESH read of the list it asks for. Going back to a state
+    // whose list was already loaded shows that cached list at once while a new read starts, so a ready
+    // state alone proves nothing: only a read that started after the change settles it. Every read has
+    // a start position in one increasing order (`startedSeq`); the wait records the highest position
+    // seen when the change was made, and only a state started after it counts. That fresh read then
+    // settles the wait once: ready announces the count of the list actually displayed, a failure ends
+    // it with no count. A newer choice replaces the wait, and a read it superseded is never applied.
     const announce = useAnnounce()
-    const awaiting = useRef<boolean | null>(null)
+    const awaiting = useRef<{ wanted: boolean; after: number } | null>(null)
+    const highestSeen = useRef(0)
     const settledCount = choices.length
     useEffect(() => {
-        if (awaiting.current === null) return
-        if (state.kind === "loading") return
-        const wanted = awaiting.current
-        awaiting.current = null
-        if (state.kind !== "ready" || wanted !== includeArchived) return
-        announce(
-            includeArchived
-                ? `Showing ${worldCount(settledCount)}, including archived.`
-                : `Showing ${settledCount === 1 ? "1 active world" : `${settledCount} active worlds`}.`,
-        )
-    }, [state.kind, includeArchived, settledCount, announce])
+        const wait = awaiting.current
+        if (wait !== null && state.kind !== "loading" && startedSeq !== null && startedSeq > wait.after) {
+            awaiting.current = null
+            if (state.kind === "ready" && wait.wanted === includeArchived) {
+                announce(
+                    includeArchived
+                        ? `Showing ${worldCount(settledCount)}, including archived.`
+                        : `Showing ${settledCount === 1 ? "1 active world" : `${settledCount} active worlds`}.`,
+                )
+            }
+        }
+        if (startedSeq !== null && startedSeq > highestSeen.current) highestSeen.current = startedSeq
+    }, [state.kind, startedSeq, includeArchived, settledCount, announce])
 
     function changeIncludeArchived(next: boolean) {
-        awaiting.current = next
+        awaiting.current = { wanted: next, after: highestSeen.current }
         const nextParams = new URLSearchParams(params)
         nextParams.delete("status")
         if (next) nextParams.set("archived", "1")
