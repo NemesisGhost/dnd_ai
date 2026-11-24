@@ -1,6 +1,6 @@
 # D/P15-C05-S02 implementation plan: retain safe ownership-transfer feedback
 
-**Status:** Opus plan prepared 2026-11-24. **Ready for Sonnet (T01).** No owner decision blocks the task. Section 10 lists the routine choices made here; none changes a product policy, an API contract, authorization or account discoverability.
+**Status:** Opus plan prepared 2026-11-24. **T01 implemented (§11.3); independent review pending, not accepted.** No owner decision blocks the task. Section 10 lists the routine choices made here; none changes a product policy, an API contract, authorization or account discoverability.
 
 **Register rows:**
 - slice [D/P15-C05-S02](work-register.md#p15-c05-s02);
@@ -246,4 +246,43 @@ T01 is a single commit. Until it lands, the S01 behavior (§2.1) is shipped; no 
 
 ### 11.3 Implementation record
 
-Pending (Sonnet).
+#### T01 (Sonnet, 2026-11-24)
+
+**Status:** T01 implemented at `191129b8569c510863324e20663fbad9c41aa26a` (`P15-C05-S02-T01: keep a truthful ownership-transfer receipt across loss of access`), pushed to `phase15/completion`; **independent review pending; not accepted.** Baseline `1f608119ef3344a7a660f1c2fccfb8ff80c820d8` (HEAD and origin, clean worktree). CI: **pending the C05 checkpoint PR** (none opened). No PR, browser/AX run, consumer or acceptance. No backend, API, shared-hook, hierarchy-context or session-context change.
+
+**What changed** (`WorldSharingPage.tsx`, the new `WorldSharingPage.transfer.test.tsx`, one allowed expectation in `WorldSharingPage.test.tsx`, and `portal-behavior.md` §4.3a).
+- **Dialog copy (item 1):** built from the chosen retain and the signed-in account's other open, non-Owner roles on the list (matched by `bootstrap.user.user_id`): "You keep the Editor role on this world.", "You will have no role on this world and will lose access to its sharing page.", or "You keep your Reader role on this world."
+- **Record held above the keyed content (items 2, 3):** `WorldSharingPage` holds the transfer record with its `userId` and `worldId`, drops it in the render that sees either change (or an ended session), and shows it only when both match, so losing sharing authority alone keeps it. `SharingContent` reports through `onTransferConfirmed` and `onTransferUncertain` (plus `onTransferStart` and `onCheckAgain`). The receipt ("Ownership transferred", "‹login› is now an owner of ‹world›.", the kept role from the server's `retained_role_code` or "No role was kept for you.", links to the world and Worlds) replaces the sharing content; the access explanation stays below it; with a failed read the receipt shows and no control is offered.
+- **Refresh point (item 4):** once, at a confirmed transfer and once when an unknown transfer is reconciled to "no longer an Owner": `useContext(WorkspaceHierarchyContext)?.refetchWorld()` and the in-place session refresh through `bootstrapRefreshOutcome`. Reads only; each failure is swallowed and changes nothing.
+- **Unknown and refused (items 5, 6):** after a lost answer, or a 403/404 of a retry of one, the page records the access state at that moment and reads the list once; the first settled state after it is that read's own answer. A list that still allows transferring: the "still an owner" note and Retry; a denied, unavailable or no-longer-transferable read: the "Transfer not confirmed" record and the refresh point, no Retry; a read that fails: the unknown message, Retry and Check again (a read only). A first attempt refused 403/404 re-reads once and decides nothing (a denied read shows the terminal, no receipt). A refused retry is shown as "Checking whether the transfer went through…" and then the read's result, never as the permission message. 409s keep their sentences and the input and read nothing.
+- **No repeat (item 7):** no transfer form, dialog or Retry exists after either record; the hook ignores a second press while pending. A Retry for a transfer is a send of the same descriptor, which reuses the reserved key (the hook does not keep a refused attempt as retryable).
+- **Guard (item 8):** S01's single `SharingDepartureGuard` gained "Leave while ownership is being transferred?" and "Leave without knowing whether ownership was transferred?"; no second guard; a receipt is not guarded.
+- **Focus and announcement (item 9):** the receipt's `h2` takes focus on mount only when focus was on the body or detached; the page-heading focus effect is skipped while a receipt is shown. One announcement per outcome ("Ownership transferred to erin. You keep the Editor role on this world." or "Transfer not confirmed."). The transfer branch of the shared `onSuccess` announces nothing and returns no outcome, so the mutation does not add "Saved, but the latest data could not be loaded." as a second announcement.
+
+**Wording limited to what the read establishes (owner instruction).** The plan's sentences are kept verbatim and extended only to be honest: still being an Owner adds "That is what the list said when it was read; it does not rule out a transfer still in progress."; the unconfirmed record adds "This does not show whether ‹login› received ownership."; a read that failed or was superseded produces only "We could not check your access, so we cannot tell whether the transfer went through." and Check again. The receipt of a confirmed transfer rests only on the server's 200.
+
+**Choices to review.** (1) A successful read that no longer allows transferring (`may_transfer: false` without a denial) is treated like a denied read (the plan is silent on it). (2) Sidebar and session refresh failures are swallowed and cannot touch the receipt; a session refresh that keeps the same account keeps the record. (3) The check effect and the render-time derivations carry two scoped lint exceptions (`set-state-in-effect`, `exhaustive-deps`) with reasons, as in S01. (4) The receipt is rendered by the page, not by content, which is why M1 (the record inside the content) loses it on a denial.
+
+**Test-first failures (baseline `1f608119ef3344a7a660f1c2fccfb8ff80c820d8`, new file, first run of 32 cases: 27 failed, 5 passed).** The seven the task named all failed: D1 (the dialog did not say what is kept, three cases), D2 (no receipt: `Unable to find … "Ownership transferred"` heading), D4 (`refresh` and `refetchWorld` never called), D6 (no re-read after the unknown answer), D8 (no "Transfer not confirmed"), D10 (a refused retry was shown as a permission problem, no re-read), D14 (no departure question after an unknown transfer). Also failing: D3, D4 (second), D5, D7, D9, D11, D13, D15–D16 (no pending-transfer question or receipt), D17 (three), D18 (two), D19 (four, session and world transitions). Passing at baseline, as regression guards: D12 (three 409 sentences), D19's late-answer case (S01's guard plus unmount-abort) and D20 (the last-owner sentence). D10 was strengthened after the first full run to hold the re-read and see the dialog while it is pending; M6 passed everything before that and fails D10 after it.
+
+**Existing-test edit (§4).** `WorldSharingPage.test.tsx`: "moves focus to the page heading when a transfer leaves the person without Sharing" now expects the receipt's "Ownership transferred" `h2` to have focus. "Still announces a transfer whose read-back is the denial" passes unchanged (the new announcement contains "Ownership transferred"). S01's `WorldSharingPage.panels.test.tsx` is untouched and passes.
+
+**Runs (PowerShell, `C:\Users\nemes\dnd_ai\portal`).**
+- Focused (§7.1): `WorldSharingPage.transfer`, `.panels`, `WorldSharingPage`, `useAuthoringMutation`, `useUnsavedChangesGuard.registration`, `App`: 6 files, **171 passed**.
+- Full `npm test`, first run: **454 files, 5879 passed, 0 failed**. A second full run after D10 was strengthened: 454 files, 5879 passed, 0 failed. No failure to report.
+- `npm run lint`, `npx tsc -b`, `npm run build` pass (chunk-size notice only). `uv run python scripts/check_documentation.py` and `git diff --check` pass.
+
+**Probes (each reverted; `WorldSharingPage.tsx` restored byte-for-byte, SHA-256 prefix `511363d50e60`).**
+- M1 (receipt only while the access list shows, i.e. the record dies with the content): failed 18 cases: 17 receipt cases including D2, plus the allowed existing focus test.
+- M2 (the kept role not from the server's answer): failed D3 (and D2, D18, D19).
+- M3 (no refresh point): failed D4 and D8.
+- M4 (no unknown-transfer re-read): failed D6, D7, D8, D9, D10 and D14.
+- M5 (a list that still allows transferring treated as not confirmed): failed D7, D9, D10 and D14.
+- M6 (a refused retry shown through the permission message again): **passed everything on the first attempt**, so D10 was strengthened; it then fails D10.
+- M7 (no account/world match on the record): failed D19 (three cases).
+- M8 (no unknown-transfer guard reason): failed D14.
+- M9 (the shared path also announces for a transfer): failed D18 (two cases) and D4's announcement count.
+
+**Not done / limits.** No browser or AX evidence (focus on the receipt, the sidebar after the refresh, D2/D8/D14/D17). The unreconciled "still an owner" read can precede a transfer that is still committing (plan R-2); the wording says so and a later refused retry is reconciled again. A confirmed receipt does not survive a reload or a sign-out (it is page state by design).
+
+**Review range for Luna (§11.2).** `1f608119ef3344a7a660f1c2fccfb8ff80c820d8..191129b8569c510863324e20663fbad9c41aa26a` plus the docs-only records commit that follows it.
