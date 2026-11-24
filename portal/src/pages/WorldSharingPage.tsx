@@ -257,6 +257,12 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
     const settlingSeq = useRef(0)
     const [stillListed, setStillListed] = useState(false)
     const [settledNote, setSettledNote] = useState<string | null>(null)
+    // How many times each login field has been edited, and the count each submitted operation saw. A confirmation
+    // clears a field only when it was not edited at all since that submit: an edit that happens to read the same
+    // after trimming ("dana" then "dana "), or one made away from and back to the submitted text, is the person's own
+    // newer input and is kept. (Plain events write these refs; they are never read while rendering.)
+    const edits = useRef({ login: 0, use: 0 })
+    const submitted = useRef<{ operation: Operation; edits: number } | null>(null)
     const shownView = useRef(view)
     useEffect(() => {
         shownView.current = view
@@ -285,9 +291,12 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
         onSuccess: async (result, operation) => {
             const text = confirmationText(operation, "changed" in result ? result.changed : true)
             setConfirmedText(text)
-            // Cleared only when the field still holds the login that was confirmed: what the person typed since is theirs.
-            if (operation.op === "assign-role") setLogin((current) => (current.trim() === operation.login ? "" : current))
-            if (operation.op === "grant-use") setUseLogin((current) => (current.trim() === operation.login ? "" : current))
+            // Cleared only when this very submit is the confirmed one and the field has not been edited since: anything the
+            // person typed meanwhile, whatever it reads like, is theirs. An attempt that is not the latest submit clears nothing.
+            const sent = submitted.current
+            const own = sent !== null && JSON.stringify(sent.operation) === JSON.stringify(operation)
+            if (own && operation.op === "assign-role" && edits.current.login === sent.edits) setLogin("")
+            if (own && operation.op === "grant-use" && edits.current.use === sent.edits) setUseLogin("")
             const outcome = await refetch()
             setPending(null)
             if (outcome === "ok") announce(text)
@@ -386,9 +395,23 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
         setSettledNote(null)
         const outcome = mutation.submit(operation)
         if (outcome !== "ignored") {
+            submitted.current = {
+                operation,
+                edits: operation.op === "grant-use" ? edits.current.use : edits.current.login,
+            }
             lastOperation.current = operation
             setLastOperationState(operation)
         }
+    }
+
+    function changeLogin(value: string) {
+        edits.current.login += 1
+        setLogin(value)
+    }
+
+    function changeUseLogin(value: string) {
+        edits.current.use += 1
+        setUseLogin(value)
     }
 
     function addRole() {
@@ -501,7 +524,7 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
                     <TextField
                         label="Login name"
                         value={login}
-                        onChange={setLogin}
+                        onChange={changeLogin}
                         hint="The exact login name of an active account."
                     />
                     <SelectField
@@ -561,7 +584,7 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
                     <TextField
                         label="Login name"
                         value={useLogin}
-                        onChange={setUseLogin}
+                        onChange={changeUseLogin}
                         hint="Only an account with the game master system role can use it to start a campaign."
                     />
                     <button type="submit" className="authoring-button authoring-button--primary" disabled={busy}>

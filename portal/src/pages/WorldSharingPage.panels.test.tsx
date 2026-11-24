@@ -325,6 +325,87 @@ describe("C5-C8: what a confirmed change says", () => {
         expect(loginField()).toHaveValue("erin")
     })
 
+    it("C5-1 keeps a newer edit whose trimmed login equals the submitted one (dana, then dana plus a space)", async () => {
+        setup()
+        const gate = deferred()
+        replies[ROLES] = () => gate.promise
+        await ready()
+        giveRole("dana")
+        await waitFor(() => expect(posts(ROLES)).toHaveLength(1))
+        fireEvent.change(loginField(), { target: { value: "dana " } })
+        await act(async () => gate.resolve({ status: 201, body: change() }))
+        await waitFor(() => expect(announcer()).toHaveTextContent("dana now has the Editor role on this world."))
+        expect(loginField()).toHaveValue("dana ")
+        // The request that was confirmed is the one that was submitted, unchanged.
+        expect(posts(ROLES)[0]!.body).toEqual({ login_name: "dana", role_code: "world_editor" })
+    })
+
+    it("C5-1 keeps the hosting field for the same whitespace edit", async () => {
+        setup()
+        const gate = deferred()
+        replies[USE] = () => gate.promise
+        await ready()
+        allowHosting("dana")
+        await waitFor(() => expect(posts(USE)).toHaveLength(1))
+        fireEvent.change(hostField(), { target: { value: "dana " } })
+        await act(async () => gate.resolve({ status: 201, body: change() }))
+        await waitFor(() => expect(announcer()).toHaveTextContent("dana may now host campaigns on this world."))
+        expect(hostField()).toHaveValue("dana ")
+        expect(posts(USE)[0]!.body).toEqual({ login_name: "dana" })
+    })
+
+    it("C5-1 keeps the field when it was edited away and back to the submitted text while the request was pending", async () => {
+        setup()
+        const gate = deferred()
+        replies[ROLES] = () => gate.promise
+        await ready()
+        giveRole("dana")
+        await waitFor(() => expect(posts(ROLES)).toHaveLength(1))
+        fireEvent.change(loginField(), { target: { value: "danaX" } })
+        fireEvent.change(loginField(), { target: { value: "dana" } })
+        await act(async () => gate.resolve({ status: 201, body: change() }))
+        await waitFor(() => expect(announcer()).toHaveTextContent("dana now has the Editor role on this world."))
+        expect(loginField()).toHaveValue("dana")
+    })
+
+    it("C5-1 edit away and back is kept for the hosting field too", async () => {
+        setup()
+        const gate = deferred()
+        replies[USE] = () => gate.promise
+        await ready()
+        allowHosting("dana")
+        await waitFor(() => expect(posts(USE)).toHaveLength(1))
+        fireEvent.change(hostField(), { target: { value: "danaX" } })
+        fireEvent.change(hostField(), { target: { value: "dana" } })
+        await act(async () => gate.resolve({ status: 201, body: change() }))
+        await waitFor(() => expect(announcer()).toHaveTextContent("dana may now host campaigns on this world."))
+        expect(hostField()).toHaveValue("dana")
+    })
+
+    it("C5-1 an untouched confirmed hosting field still clears", async () => {
+        setup()
+        await ready()
+        allowHosting("dana")
+        await waitFor(() => expect(announcer()).toHaveTextContent("dana may now host campaigns on this world."))
+        expect(hostField()).toHaveValue("")
+    })
+
+    it("C5-1 a Retry after an edit sends the exact body and key, and the edit is still kept", async () => {
+        setup()
+        replies[ROLES] = { status: 500, body: {} }
+        await ready()
+        giveRole("dana")
+        await screen.findByText(/cannot tell whether this was saved/)
+        fireEvent.change(loginField(), { target: { value: "dana " } })
+        replies[ROLES] = { status: 201, body: change() }
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+        await waitFor(() => expect(announcer()).toHaveTextContent("dana now has the Editor role on this world."))
+        expect(posts(ROLES)).toHaveLength(2)
+        expect(posts(ROLES)[1]!.body).toEqual(posts(ROLES)[0]!.body)
+        expect(keyOf(posts(ROLES)[1]!)).toBe(keyOf(posts(ROLES)[0]!))
+        expect(loginField()).toHaveValue("dana ")
+    })
+
     it("C5 clears the login when it still holds the confirmed one", async () => {
         setup()
         await ready()
