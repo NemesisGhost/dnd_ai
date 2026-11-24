@@ -2,7 +2,7 @@
 
 Owner register rows: [P15-C07](work-register.md#p15-c07), [P15-C07-S01](work-register.md#p15-c07-s01), [P15-C07-S01-T01](work-register.md#p15-c07-s01-t01). Source finding: [R09](work-register.md#r09--smaller-layout-list-and-form-repairs) and the 2026-11-11 review row S02 ([review-2026-11-11.md](review-2026-11-11.md)): "Scheduled ascending, unscheduled last, stable sequence/id tie; explicit user sort preserved."
 
-Prepared by Opus, 2026-11-24.
+Prepared by Opus, 2026-11-24. **T01 independently reviewed: PASS WITH VERIFICATION LIMITS (§11.4).**
 
 - Starting SHA: `666cf7696bfb93af4ceee13fa20931ccc10c5b8d`, the PR #75 head, clean worktree.
 - Plan-entry head: `73acad3eb92f775bf0667dc64b70566e3dd4a8cb`, the C06 merge (PR #75), reached by fast-forward. Its tree (`3982aed8…`) is identical to `666cf76`'s; no history was rewritten.
@@ -229,3 +229,38 @@ Neither failing test imports or renders `SessionsPage`; each passed on its own. 
 The first M2 and M5 mutations were malformed (a syntax error, "no tests"); they were discarded and redone with an identity wrapper, and the table gives the redone results.
 
 **CI position.** Pending the checkpoint PR; none opened. Not run: browser/AX, zoom, human review, owner acceptance, consumers.
+
+### 11.4 Independent review (Codex, 2026-11-24)
+
+**Verdict:** **T01/S01: PASS WITH VERIFICATION LIMITS.** F1–F13 behavior is supported by the implementation and focused checks. No implementation defect or slice-blocking finding was demonstrated. Review evidence does not replace exact-integration-head CI or the separate browser ordering/AX, human and owner events.
+
+**Ancestry and scope.** Verified `3175c389 -> 6f61188d -> f19d3851`; baseline, implementation and records head are ancestors of current HEAD `f19d3851e969f94050dde5acfd643e08e6560f36`. Worktree was clean before these review-record edits. Implementation changes only `SessionsPage.tsx`, the new order tests, the one allowed adaptation in `SessionsPage.test.tsx`, and the portal-behavior row. The records commit changes only this plan and the register. `SortableTable`, sorting utilities, hooks, API/query, campaign boundary and other consumers are unchanged.
+
+**Behavior review.** The default uses Planned start ascending and displays its ascending marker. The sequence wrapper applies the chosen primary direction first, then always breaks ties by session number ascending and session id using code-unit comparison. It wraps Title, Status, Planned start, Start time and End time; Actions remains unchanged. The existing timestamp comparator compares `Date.getTime()` and handles nulls before direction, keeping missing values last in either direction. Tests inspect displayed row-link IDs, including shuffled input for equal instants, unscheduled sessions, repeated titles, status and other timestamp ties. Explicit sort survives row replacement while mounted; a new mount restores the default. Existing navigation, permission/Run-link, empty/error and focus checks remain in the focused suite.
+
+**F5 assessment.** The recorded F5 baseline pass alone is nondiscriminating: both timestamps have null start times under the baseline default sort, which preserves the fixture order, and that input already equals the expected instant order. In the implemented default Planned-start sort, however, the F5 expected order distinguishes the two instants from their opposite lexical order, so replacing the comparator with lexical timestamp comparison would fail the assertion. To remove any remaining ambiguity, a temporary probe reversed the input order (`19:00Z` before `20:00+02:00`) and confirmed the page displayed the 18:00Z instant first. The probe was removed; the file's SHA-256 was restored exactly (`A665058FD3745C769FAD41FC9A2BC62C2386A0A58CCFAA4727CB6E0B3E0F2DD4`), and its Git blob matches final HEAD. This is an evidence clarification, not a product or acceptance finding.
+
+**Independent verification.** Focused page/table/session run from §7.1: **7 files, 72 passed**. Lint, `npx tsc -b`, build, documentation check and baseline-to-HEAD diff check passed; build emitted the existing large-chunk advisory. The full-run history remains separate and its causes unproven: first full run had one failure in `App.knowledgeClaim.test.tsx` (5,927/5,928), then that file passed alone (150/150); second full run had one failure in `App.characterShell.test.tsx` (5,927/5,928), then that file passed alone (35/35); third full run passed (456 files, 5,928/5,928). The isolated passes do not diagnose either full-run failure, and this review does not call them unrelated merely because they do not directly render `SessionsPage`.
+
+**Actual remaining C07 checkpoint work.** C07 still requires integrated F1–F13 acceptance, one full portal run on the integration head, and CI on that exact head. CI is pending the checkpoint PR. Browser ordering/AX, human and owner acceptance remain separate pending events. No additional general implementation-review gate or consumer work is introduced.
+
+### 11.5 C07 checkpoint integration evidence (Sonnet, 2026-11-24)
+
+**Scope.** Finalizes the checkpoint records on top of Codex's §11.4 and the matching register edits (preserved and committed with this record): T01/S01 **PASS WITH VERIFICATION LIMITS**, with the F5 baseline qualification. No production or test code changes in this step and no further implementation review is needed.
+
+**Executable code.** The last commit that changed any executable or test file is `6f61188d9a5fa7322134c8213a496de5b62e9712`. The records commit `f19d3851e969f94050dde5acfd643e08e6560f36` and this one change only `docs/delivery/` files (`git diff --name-only 6f61188d9a5fa7322134c8213a496de5b62e9712 HEAD` lists the plan and the register only). The tested code is therefore the checkpoint head's code.
+
+**Integration requirements (§7.2).**
+1. *S01 passed independent review:* yes, PASS WITH VERIFICATION LIMITS (§11.4).
+2. *F1–F13 on the integration head, one full portal run:* F1–F12 are the twelve tests of `SessionsPage.order.test.tsx` (one test per case, named F1 to F12); F13 is the unchanged `SessionsPage.test.tsx` cases plus the §6.2 adaptation. The §7.1 focused set (7 files, 72 passed) was run by the implementer (§11.3) and independently by the reviewer (§11.4). The one full portal run required here is the **third** full run of §11.3 (456 files, 5,928 passed, 0 failed), taken on the code of `6f61188d9a5fa7322134c8213a496de5b62e9712`, which is unchanged; it is reused and not repeated for a documentation-only change.
+3. *CI on the exact head:* reported on the draft PR, not recorded by another commit.
+
+**Full-run history, preserved separately and not diagnosed.** Run 1 failed one test (`App.knowledgeClaim.test.tsx` › "…authoring read-back fails (DEF-006) › says the save went through, keeps the editor, holds Save, and recovers by reading only"); that file then passed alone (150/150). Run 2 failed one test (`App.characterShell.test.tsx` › "…gives the defaults after a direct entry and carries no task into the section links"); that file then passed alone (35/35). Run 3 passed (456 files, 5,928). The isolated passes do not diagnose either failure. §11.3 said these tests do not render `SessionsPage`; that is an observation about the files, not a finding that their cause is unrelated, and the causes are unproven. They are open investigation obligations, separate from each other, from the shard-7 backend failure and from the `OrganizationMembersReader` failure.
+
+**Checks for this record.** `uv run python scripts/check_documentation.py` and `git diff --check` pass.
+
+**Limits preserved.**
+- Tests render the real page and `SortableTable` with fixtures; they are not real-browser tests. Browser ordering evidence, AX checks of the sort buttons and `aria-sort`, human review and owner acceptance stay with §7.3 and are not granted.
+- F5 passes at baseline only because its input order already equals its expected order; its value is in the implemented default (§11.4).
+- The session-id key (R-4) is unreachable for valid data and has no case. No sort in the address (R-2).
+- Pending separate events: the owner's merge decision, and the shard-7, `OrganizationMembersReader`, `knowledgeClaim` and `characterShell` investigations. No consumers were started.
