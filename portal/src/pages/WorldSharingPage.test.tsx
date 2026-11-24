@@ -118,7 +118,7 @@ describe("WorldSharingPage", () => {
             body: { world_id: "w1", user_id: "u9", record_id: "m9", role_code: "world_reader", changed: true },
         })
         await screen.findByText("Bob Editor")
-        fireEvent.change(screen.getByRole("textbox", { name: "Login name" }), {
+        fireEvent.change(within(screen.getByRole("form", { name: "Give someone a role" })).getByRole("textbox", { name: "Login name" }), {
             target: { value: " dana " },
         })
         fireEvent.change(screen.getByRole("combobox", { name: "Role" }), {
@@ -250,7 +250,8 @@ describe("WorldSharingPage: last owner, focus and the transfer control (CP-4 smo
         setCurrent(access())
         fireEvent.click(within(dialog).getByRole("button", { name: "Transfer ownership" }))
         expect(await screen.findByText(/You do not have access to the sharing list/)).toBeInTheDocument()
-        await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Sharing" })).toHaveFocus())
+        // The receipt of the transfer now takes the focus the removed controls had (S02), not the page heading.
+        await waitFor(() => expect(screen.getByRole("heading", { level: 2, name: "Ownership transferred" })).toHaveFocus())
     })
 
     it("opens the transfer dialog on one ordinary press-and-release of the button", async () => {
@@ -305,14 +306,14 @@ describe("WorldSharingPage: last owner, focus and the transfer control (CP-4 smo
             body: { world_id: "w1", user_id: "u9", record_id: "m9", role_code: "world_reader", changed: true },
         })
         await screen.findByText("Bob Editor")
-        fireEvent.change(screen.getByRole("textbox", { name: "Login name" }), { target: { value: "dana" } })
+        fireEvent.change(within(screen.getByRole("form", { name: "Give someone a role" })).getByRole("textbox", { name: "Login name" }), { target: { value: "dana" } })
         server.on("GET", "/worlds/w1/access", { status: 500, body: {} })
         fireEvent.click(screen.getByRole("button", { name: "Give role" }))
 
-        expect(await screen.findByText(/Role assigned\. The latest sharing list could not be loaded/)).toBeInTheDocument()
+        expect(await screen.findByText(/dana now has the Editor role on this world\. The latest sharing list could not be loaded/)).toBeInTheDocument()
         const live = screen.getByTestId("authoring-announcer")
         expect(live).toHaveTextContent("Saved, but the latest data could not be loaded.")
-        expect(live).not.toHaveTextContent(/^Role assigned/)
+        expect(live).not.toHaveTextContent(/^dana now has/)
         // The list on screen stays, and nothing can be changed from it until it is read again.
         expect(screen.getByText("Bob Editor")).toBeInTheDocument()
         expect(screen.getByRole("button", { name: "Give role" })).toBeDisabled()
@@ -323,7 +324,7 @@ describe("WorldSharingPage: last owner, focus and the transfer control (CP-4 smo
         server.on("GET", "/worlds/w1/access", () => ({ body: access() }))
         fireEvent.click(screen.getByRole("button", { name: "Try again" }))
         await waitFor(() => expect(screen.getByRole("button", { name: "Give role" })).toBeEnabled())
-        await waitFor(() => expect(live).toHaveTextContent("Role assigned"))
+        await waitFor(() => expect(live).toHaveTextContent("dana now has the Editor role on this world."))
         expect(screen.queryByText(/could not be loaded/)).toBeNull()
         expect(server.callsTo("POST", "/worlds/w1/roles")).toHaveLength(1)
     })
