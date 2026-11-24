@@ -1,4 +1,5 @@
 import {
+    fireEvent,
     render,
     screen,
     within,
@@ -79,8 +80,11 @@ describe("SessionsPage", () => {
         ).not.toBeInTheDocument()
     })
 
-    it("initially sorts sessions by descending start time with missing timestamps last", () => {
+    it("a chosen start-time sort is descending with missing timestamps last", () => {
         renderSessionsPage(sessions)
+
+        fireEvent.click(screen.getByRole("button", { name: /^Start time/ }))
+        fireEvent.click(screen.getByRole("button", { name: /^Start time/ }))
 
         const table = screen.getByRole("table", {
             name: "Sessions",

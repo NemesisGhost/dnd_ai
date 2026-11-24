@@ -26,18 +26,42 @@ function formatTimestamp(timestamp: string): string {
     }).format(new Date(timestamp))
 }
 
-function compareTitles(
+// Tied rows follow session order: session number ascending, then session id in code-unit order. This is always
+// ascending, whatever direction the column was sorted in (like nulls, which stay last), so the same data shows in
+// the same order. `SortableTable` hands each comparator the direction and applies none itself.
+function compareSessionSequence(
     a: CampaignSessionListItem,
     b: CampaignSessionListItem,
-    direction: SortDirection,
 ): number {
-    return applyDirection(
+    if (a.session_number !== b.session_number) {
+        return a.session_number - b.session_number
+    }
+    if (a.session_id === b.session_id) return 0
+    return a.session_id < b.session_id ? -1 : 1
+}
+
+function withSequenceTieBreak(
+    compare: (
+        a: CampaignSessionListItem,
+        b: CampaignSessionListItem,
+        direction: SortDirection,
+    ) => number,
+) {
+    return (
+        a: CampaignSessionListItem,
+        b: CampaignSessionListItem,
+        direction: SortDirection,
+    ): number => compare(a, b, direction) || compareSessionSequence(a, b)
+}
+
+const compareTitles = withSequenceTieBreak((a, b, direction) =>
+    applyDirection(
         direction,
         (a.title ?? "Untitled session").localeCompare(
             b.title ?? "Untitled session",
         ),
-    )
-}
+    ),
+)
 
 function renderTimestamp(timestamp: string | null) {
     return timestamp !== null ? (
@@ -69,11 +93,12 @@ const columnsFor = (state: CrumbState | undefined): SortableTableColumn<Campaign
     {
         key: "session_status",
         label: "Status",
-        compare: (a, b, direction) =>
+        compare: withSequenceTieBreak((a, b, direction) =>
             applyDirection(
                 direction,
                 (a.play_status ?? "").localeCompare(b.play_status ?? ""),
             ),
+        ),
         render: (session) =>
             `${PLAY_STATUS_LABEL[session.play_status ?? "unscheduled"] ?? "Not scheduled"}${
                 session.status_code === "archived" ? " (archived)" : ""
@@ -82,26 +107,29 @@ const columnsFor = (state: CrumbState | undefined): SortableTableColumn<Campaign
     {
         key: "session_scheduled_for",
         label: "Planned start",
-        compare: (a, b, direction) =>
+        compare: withSequenceTieBreak((a, b, direction) =>
             compareNullableTimestamps(
                 a.scheduled_for ?? null,
                 b.scheduled_for ?? null,
                 direction,
             ),
+        ),
         render: (session) => renderTimestamp(session.scheduled_for ?? null),
     },
     {
         key: "session_started_at",
         label: "Start time",
-        compare: (a, b, direction) =>
+        compare: withSequenceTieBreak((a, b, direction) =>
             compareNullableTimestamps(a.started_at, b.started_at, direction),
+        ),
         render: (session) => renderTimestamp(session.started_at),
     },
     {
         key: "session_ended_at",
         label: "End time",
-        compare: (a, b, direction) =>
+        compare: withSequenceTieBreak((a, b, direction) =>
             compareNullableTimestamps(a.ended_at, b.ended_at, direction),
+        ),
         render: (session) => renderTimestamp(session.ended_at),
     },
 ]
@@ -161,7 +189,7 @@ export function SessionsPage({
                     columns={editor ? [...columns, editColumnFor(runState)] : columns}
                     rows={sessions}
                     getRowKey={(session) => session.session_id}
-                    initialSort={{ column: "session_started_at", direction: "desc" }}
+                    initialSort={{ column: "session_scheduled_for", direction: "asc" }}
                 />
             ) : (
                 <p>No sessions are available for this campaign.</p>
