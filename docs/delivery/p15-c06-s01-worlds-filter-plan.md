@@ -230,4 +230,39 @@ T01 is a single commit. Until it lands, the current behavior (§2.1) is shipped;
 
 ### 11.3 Implementation record
 
-Pending (Sonnet).
+Implemented by Sonnet 2026-11-24 at `cdcdc6b43e7a4e0e7aa968cb8243dc3a3bc3acb3` (`P15-C06-S01-T01: list archived worlds alongside active ones without hiding campaign worlds`), baseline `f2a934bc306b48afa4213a165b48293059717823` (HEAD and `origin/phase15/completion`, clean worktree). CI position: **pending the C06 checkpoint PR**; no PR was opened. No browser/AX run, consumer, or human/owner acceptance.
+
+**Changed files (only those of §4).** `portal/src/pages/WorldsPage.tsx`; `WorldsPage.test.tsx` (only the two allowed expectation changes: the archived test now checks **Include archived worlds** and expects `status=all`, and the "does not list campaign-visible worlds under Archived" test became its opposite); new `WorldsPage.filter.test.tsx` (29 tests for F1–F14); the `/worlds` row of `docs/reference/portal-behavior.md`. Nothing changed in `buildWorldChoices`, `contextOptions`, the Infobox, the campaign setup picker, `useAuthoringResource`, `usePageArrival` or the backend.
+
+**What the page does.**
+- One checkbox, "Include archived worlds". Unchecked reads `status=active&limit=100`; checked reads `status=all&limit=100` (one request). `bootstrap.campaigns` is passed to `buildWorldChoices` in both states.
+- Address: checked writes `?archived=1` by REPLACE; unchecked removes it; a legacy `status` parameter is dropped when writing and other parameters are kept; `archived=1` and the legacy `status=archived` read as checked.
+- `usePageArrival(…, "path")`, so a filter change leaves focus on the checkbox. A change records what it asked for (a ref); an effect announces once, only when the list for the state now chosen is ready (the resource is path-keyed, so only that state's answer can be ready), from the count of the **deduplicated listed worlds** (`choices.length`, campaign-visible worlds included): "Showing n worlds, including archived." / "Showing n active worlds." ("1 world", "1 active world"). A newer choice replaces the wait; a failed, denied or unavailable read clears it with no count; nothing is announced on arrival.
+- Empty: "You do not have access to any worlds yet." in both states; the "Create one to start a campaign." hint stays unchecked-only (as before). First-100 note follows `next_cursor`: "Only the first 100 worlds are shown." plus, when checked, " Archived worlds count toward this limit."
+
+**Test-first results at the baseline (the new test file against the unchanged page: 29 tests, 19 failed, 10 passed).**
+- **Failed at baseline (designated):** F1, F2, F3, F4 (two tests), F5 (four rows; each fails at the missing checkbox), F7, F8 (five tests: all need the checkbox to act). Also failed, not designated as guards: F6 on the new `?archived=1` address (the legacy-address row passed), F10, F11's "checked adds the archived-count sentence" test and F11's campaign-supplement wording test. Typical assertion: `Unable to find an accessible element with the role "checkbox" and name "Include archived worlds"`; F3 failed on the explicit world's `href` because `?archived=1` was not read.
+- **Guards passed at baseline (10 tests):** F6 on the legacy `?status=archived` address, F9, F11 (address guard), F11 (no note without `next_cursor`), F12 (denied, unavailable, error, expired), F14 (two tests). F13 is the unchanged picker/Infobox files, run unchanged below.
+- **Correction made before implementing.** My first draft of F6, F9, F11, F12 and F14 drove the new checkbox, so they could not pass at the baseline as a guard must. I rewrote them to drive the state through the address (legacy `?status=archived`, which both the old and the new page honor) so they are genuine baseline guards; the checkbox-driven assertions stay in F1, F4, F5, F7, F8 and the new-address F6 row. No designated failing case already passed.
+
+**Runs (PowerShell, `C:\Users\nemes\dnd_ai\portal`, uppercase `C:`).**
+- §7.1 focused set (the filter file, `WorldsPage.test`, `campaignSetup`, `CampaignSetupPage.hosting`, `contextOptions`, `HierarchyContextPanel.options`, `App.worldVisibility.integration`): 7 files, **138 passed**.
+- Full `npm test`: first run **455 files, 5,913 passed, 0 failed**; no rerun was needed.
+- `npm run lint`, `npx tsc -b` and `npm run build` pass (chunk-size notice only); from the repo root `uv run python scripts/check_documentation.py` and `git diff --check` pass.
+
+**Mutation probes (each applied to `WorldsPage.tsx`, run, and restored from a byte copy; the SHA-256 of the file was equal to the pre-probe hash after every probe).**
+- M1 (`status=archived` when checked): failed F1, F2, F3, F5 (two), F7, F8 (four), F10, F11 (12 tests).
+- M2 (campaigns only when unchecked): failed F2, the F8 dedup-count test and the F11 campaign test (3).
+- M3 (PUSH): failed both F4 tests (2).
+- M4 (legacy `status=archived` not read): failed F4, F5 (legacy row), F6 (legacy row), F9, F11 guard (5).
+- M5 (default `keyBy`): failed F7 (1).
+- M6 (announce on every ready list, not once per settled change: remove the wait gate): failed F8 (arrival), F8 (dedup count), F8 (rapid), F8 (failed read) (4). **An earlier M6 that only removed the effect's dependency list passed all 29 tests** (the once-only guard is the wait ref, not the dependency list), so it was discarded as not a faithful mutation of the stated behavior.
+
+**Requested checks.**
+- *Rapid changes.* The rapid test checks and unchecks before the first answer arrives, releases the held `status=all` answer afterwards, and asserts that "Old World" never appears, that exactly one announcement was made ("Showing 1 active world.") and none mentions archived, and that focus is still on the checkbox. F9 covers the same late-answer rule through the address.
+- *Failed reads.* A 500 on `status=all` shows the existing error and announces nothing; a later successful change announces only its own count.
+- *Truthful count and wording.* The count is the deduplicated worlds actually listed (a world explicit and campaign-visible counts once; campaign-only worlds count). When `next_cursor` is present and a campaign-only world is listed, the note adds " Worlds visible through a campaign are listed in addition." so "Only the first 100 worlds are shown." is not read as a cap on the whole list. This sentence is wording beyond §3.2 item 6's text (the required sentences are unchanged and still exact); it is covered by a test and is a reviewer decision point.
+
+**Residuals.** (1) If a person checks and unchecks before the first answer arrives, the page shows the previous active list immediately (the resource still holds it) while it re-reads, and announces that displayed count; a changed re-read result is applied silently, with no second announcement. Low. (2) The Create hint remains unchecked-only (as before); the plan's empty text for the checked state does not mention creation. (3) Real-browser focus, the announcement and 320 CSS px / 200%/400% zoom remain with §7.3. (4) The recurring shard-7 backend timing failure, if it recurs on the PR, is a separate diagnosis obligation.
+
+**Luna's review range.** `f2a934bc306b48afa4213a165b48293059717823..cdcdc6b43e7a4e0e7aa968cb8243dc3a3bc3acb3` plus the docs-only records commit that follows this section (§11.2: from the plan's commit to the T01 implementation commit plus its records commit). CI: pending the checkpoint PR. Browser/AX, human and owner acceptance remain pending.
