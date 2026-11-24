@@ -22,11 +22,14 @@ import type { RefetchOutcome } from "../hooks/useAuthoringResource"
 import { useAnnounceWhenRead, useConfirmedRefresh } from "../hooks/useConfirmedRefresh"
 import { useKept } from "../hooks/useKeptResource"
 import { usePageArrival } from "../hooks/usePageArrival"
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard"
 import type {
     RetainedWorldRoleCode,
     WorldAccessView,
     WorldRoleAssignment,
     WorldRoleCode,
+    WorldSharingChange,
+    WorldTransferResult,
     WorldUseGrant,
 } from "../types/worldSharing"
 import { WORLD_ROLE_LABEL } from "../types/worldSharing"
@@ -55,9 +58,65 @@ type Pending =
     | { kind: "revoke-use"; grant: WorldUseGrant }
     | { kind: "transfer"; loginName: string; retain: RetainedWorldRoleCode | null }
 
-interface Action {
-    run: (ctx: { csrfToken: string; idempotencyKey: string; signal?: AbortSignal }) => Promise<unknown>
-    announce: string
+// What one write is, as plain data: the operation and its target. The mutation fingerprints it, so the same
+// descriptor is the same request (and key) and a different login, role or row is a new request with a new key. An
+// earlier unresolved attempt can therefore only ever be re-sent for the very operation it was.
+type Operation =
+    | { op: "assign-role"; login: string; role: WorldRoleCode }
+    | { op: "grant-use"; login: string }
+    | { op: "end-role"; membershipId: string; name: string; role: string }
+    | { op: "revoke-use"; grantId: string; name: string }
+    | { op: "transfer"; login: string; retain: RetainedWorldRoleCode | null }
+
+type OperationResult = WorldSharingChange | WorldTransferResult
+
+function roleLabel(code: string): string {
+    return WORLD_ROLE_LABEL[code] ?? "role"
+}
+
+// What the server did, in the person's words. `changed:false` is a no-op and says so. The login is exactly what was
+// typed (never looked up); the name and role come from the row that was acted on.
+function confirmationText(operation: Operation, changed: boolean): string {
+    switch (operation.op) {
+        case "assign-role":
+            return changed
+                ? `${operation.login} now has the ${roleLabel(operation.role)} role on this world.`
+                : `${operation.login} already had the ${roleLabel(operation.role)} role on this world. Nothing changed.`
+        case "grant-use":
+            return changed
+                ? `${operation.login} may now host campaigns on this world.`
+                : `${operation.login} could already host campaigns on this world. Nothing changed.`
+        case "end-role":
+            return `${operation.name}'s ${roleLabel(operation.role)} role on this world has ended.`
+        case "revoke-use":
+            return `${operation.name} can no longer start new campaigns on this world.`
+        case "transfer":
+            return "Ownership transferred"
+    }
+}
+
+// An end-role or revoke-use whose row the access list no longer holds, said as what is now true.
+function goneText(operation: Operation, alreadyBefore: boolean): string {
+    if (operation.op === "end-role") {
+        return alreadyBefore
+            ? `${operation.name}'s ${roleLabel(operation.role)} role had already ended. The list has been updated.`
+            : `${operation.name}'s ${roleLabel(operation.role)} role has ended.`
+    }
+    if (operation.op === "revoke-use") {
+        return alreadyBefore
+            ? `${operation.name}'s permission had already been revoked. The list has been updated.`
+            : `${operation.name} can no longer start new campaigns on this world.`
+    }
+    return ""
+}
+
+// A read of the access list that is still to say whether a row is there: started after a refusal or an unknown
+// outcome of an end-role or revoke-use. It is settled only by the data of a later successful read of the whole list
+// (a read that failed, was denied or was superseded establishes nothing), and dropped when anything newer starts.
+interface Settling {
+    operation: Operation
+    mode: "refused" | "unknown"
+    before: WorldAccessView
 }
 
 // The world's Sharing page: who holds a role on it and who may host campaigns on it. Reached
@@ -77,6 +136,11 @@ export function WorldSharingPage() {
     const stale = access.state.kind === "error" && view !== null
     const headingRef = usePageArrival(access.state.kind !== "loading")
     const worldName = world.state.kind === "ready" ? world.state.data.name : "World"
+    // The signed-in account keys the content below, with the world: nothing typed, shown or unresolved can be carried
+    // to another account or world. (The loading branch below already unmounts it when either changes; the key keeps
+    // that true if the read ever answers without it.)
+    const { state: sessionState } = useSession()
+    const userId = sessionState.status === "authenticated" ? sessionState.bootstrap.user.user_id : ""
     // A change saved without its read-back is announced when a read answers: with the list, or with
     // the denial that is the truth after a transfer.
     const announceWhenRead = useAnnounceWhenRead(
@@ -123,6 +187,7 @@ export function WorldSharingPage() {
                     <>
                         {stale ? <StaleReadNotice what="sharing list" onRetry={() => void access.refetch()} /> : null}
                         <SharingContent
+                            key={`${userId}:${worldId}`}
                             worldId={worldId}
                             view={view}
                             refetch={access.refetch}
@@ -146,6 +211,34 @@ interface ContentProps {
     onUnread: (message: string) => void
 }
 
+// Asked only while leaving would lose the only chance to see or safely retry a change: a write is in flight, or a
+// give-role or hosting grant ended with an unknown outcome. Typed but unsent text is not guarded. One guard for the
+// page: a later reason (S02) is added here, never as a second blocker.
+function SharingDepartureGuard({ reason, login }: { reason: "saving" | "unknown"; login: string }) {
+    const guard = useUnsavedChangesGuard(true)
+    const dialog =
+        reason === "saving"
+            ? {
+                  title: "Leave while this change is being saved?",
+                  description: "It may still be applied. You will not see the result here.",
+              }
+            : {
+                  title: "Leave without knowing whether the change was saved?",
+                  description: `We could not confirm whether ${login} was given access. Check the list on this page later.`,
+              }
+    return (
+        <ConfirmDialog
+            open={guard.blocked}
+            title={dialog.title}
+            description={dialog.description}
+            confirmLabel="Leave"
+            cancelLabel="Stay"
+            onConfirm={guard.discard}
+            onCancel={guard.stay}
+        />
+    )
+}
+
 function SharingContent({ worldId, view, refetch, pageStale, onUnread }: ContentProps) {
     const announce = useAnnounce()
     const { reload } = useSession()
@@ -155,16 +248,50 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
     const [pending, setPending] = useState<Pending | null>(null)
     const [transferLogin, setTransferLogin] = useState("")
     const [retain, setRetain] = useState("")
-    const [lastAnnounce, setLastAnnounce] = useState("")
+    // What the last confirmed change said, for the saved-but-not-read-back notice.
+    const [confirmedText, setConfirmedText] = useState("")
+    // The operation the last send was for (a retry re-sends exactly this one), and what a re-read has said since.
+    const lastOperation = useRef<Operation | null>(null)
+    const [lastOperationState, setLastOperationState] = useState<Operation | null>(null)
+    const [settling, setSettling] = useState<Settling | null>(null)
+    const settlingSeq = useRef(0)
+    const [stillListed, setStillListed] = useState(false)
+    const [settledNote, setSettledNote] = useState<string | null>(null)
+    const shownView = useRef(view)
+    useEffect(() => {
+        shownView.current = view
+    })
 
-    const mutation = useAuthoringMutation<Action, unknown>({
+    const mutation = useAuthoringMutation<Operation, OperationResult>({
         scopeKey: `world-sharing:${worldId}`,
-        request: (action, ctx) => action.run(ctx),
-        onSuccess: async () => {
+        request: (operation, ctx) => {
+            switch (operation.op) {
+                case "assign-role":
+                    return assignWorldRole(worldId, { login_name: operation.login, role_code: operation.role }, ctx)
+                case "grant-use":
+                    return grantWorldUse(worldId, operation.login, ctx)
+                case "end-role":
+                    return endWorldRole(worldId, operation.membershipId, ctx)
+                case "revoke-use":
+                    return revokeWorldUse(worldId, operation.grantId, ctx)
+                case "transfer":
+                    return transferWorldOwnership(
+                        worldId,
+                        { login_name: operation.login, retain_previous_owner_as: operation.retain },
+                        ctx,
+                    )
+            }
+        },
+        onSuccess: async (result, operation) => {
+            const text = confirmationText(operation, "changed" in result ? result.changed : true)
+            setConfirmedText(text)
+            // Cleared only when the field still holds the login that was confirmed: what the person typed since is theirs.
+            if (operation.op === "assign-role") setLogin((current) => (current.trim() === operation.login ? "" : current))
+            if (operation.op === "grant-use") setUseLogin((current) => (current.trim() === operation.login ? "" : current))
             const outcome = await refetch()
             setPending(null)
-            if (outcome === "ok") announce(lastAnnounce)
-            else onUnread(lastAnnounce)
+            if (outcome === "ok") announce(text)
+            else onUnread(text)
             return outcome
         },
     })
@@ -172,7 +299,7 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
         status: mutation.status,
         reset: mutation.reset,
         what: "sharing list",
-        message: lastAnnounce === "" ? null : lastAnnounce,
+        message: confirmedText === "" ? null : confirmedText,
         read: refetch,
         pageStale,
         quietRecovery: true,
@@ -190,64 +317,125 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
             if (active === null || active === document.body) document.getElementById("sharing-roles-heading")?.focus()
         }
     }, [pending])
+    const resetMutation = mutation.reset
     const error = mutation.status.kind === "error" ? mutation.status.error : null
     const pendingWrite = mutation.status.kind === "pending"
     // The lists on screen are behind the saved change, so another change waits for the read.
     const busy = pendingWrite || refreshed.held || pageStale
 
-    function submit(action: Action) {
-        setLastAnnounce(action.announce)
-        mutation.submit(action)
+    // A refusal (403 or 404: the write was not applied) or a lost answer (network or 5xx: it may have been): the list
+    // is read once, read only, so the page shows what the server holds now. For a row's end or revoke the data of that
+    // read then settles what happened (below); for a typed login nothing can be matched without a lookup, so the
+    // outcome stays unknown. The transfer keeps its own feedback (S02).
+    const handledError = useRef<unknown>(null)
+    const status = mutation.status
+    useEffect(() => {
+        if (status.kind !== "error") {
+            handledError.current = null
+            return
+        }
+        if (handledError.current === status) return
+        handledError.current = status
+        const operation = lastOperation.current
+        if (operation === null || operation.op === "transfer") return
+        const kind = status.error.kind
+        const refused = kind === "denied" || kind === "unavailable"
+        if (!refused && kind !== "network" && kind !== "server") return
+        const token = ++settlingSeq.current
+        if (operation.op === "end-role" || operation.op === "revoke-use") {
+            setSettling({ operation, mode: refused ? "refused" : "unknown", before: shownView.current })
+        }
+        void refetch().then((outcome) => {
+            // A failed read says nothing about the row; a superseded one is answered by the newer read.
+            if (outcome === "failed" && settlingSeq.current === token) setSettling(null)
+        })
+    }, [status, refetch])
+
+    // The first list applied after that read started is its own successful, complete answer (the list is every open
+    // role and grant of the world, not a filtered or paged view), so a row id missing from it has ended.
+    // This reacts to data arriving from outside (a completed read), the one case where the state it sets cannot be derived
+    // while rendering: it also announces and closes a dialog, which belong to an effect.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    useEffect(() => {
+        if (settling === null || view === settling.before) return
+        const { operation, mode } = settling
+        setSettling(null)
+        const gone =
+            operation.op === "end-role"
+                ? !view.assignments.some((a) => a.world_membership_id === operation.membershipId)
+                : operation.op === "revoke-use"
+                  ? !view.use_grants.some((g) => g.world_use_grant_id === operation.grantId)
+                  : false
+        if (gone) {
+            const text = goneText(operation, mode === "refused")
+            setSettledNote(text)
+            announce(text)
+            setPending(null)
+            resetMutation()
+        } else if (mode === "unknown") {
+            setStillListed(true)
+        }
+    }, [view, settling, announce, resetMutation])
+    /* eslint-enable react-hooks/set-state-in-effect */
+
+    function submit(operation: Operation) {
+        // Anything a re-read of an earlier operation could still say is no longer this person's question.
+        settlingSeq.current += 1
+        setSettling(null)
+        setStillListed(false)
+        setSettledNote(null)
+        const outcome = mutation.submit(operation)
+        if (outcome !== "ignored") {
+            lastOperation.current = operation
+            setLastOperationState(operation)
+        }
     }
 
     function addRole() {
         if (login.trim() === "") return
-        const loginName = login.trim()
-        submit({
-            run: (ctx) => assignWorldRole(worldId, { login_name: loginName, role_code: role as WorldRoleCode }, ctx),
-            announce: "Role assigned",
-        })
-        setLogin("")
+        submit({ op: "assign-role", login: login.trim(), role: role as WorldRoleCode })
     }
 
     function addUse() {
         if (useLogin.trim() === "") return
-        const loginName = useLogin.trim()
-        submit({ run: (ctx) => grantWorldUse(worldId, loginName, ctx), announce: "Permission to host campaigns granted" })
-        setUseLogin("")
+        submit({ op: "grant-use", login: useLogin.trim() })
     }
 
     function confirmPending() {
         if (pending === null) return
         if (pending.kind === "end-role") {
-            const id = pending.assignment.world_membership_id
-            submit({ run: (ctx) => endWorldRole(worldId, id, ctx), announce: "Role ended" })
+            const a = pending.assignment
+            submit({ op: "end-role", membershipId: a.world_membership_id, name: a.display_name, role: a.role_code })
         } else if (pending.kind === "revoke-use") {
-            const id = pending.grant.world_use_grant_id
-            submit({ run: (ctx) => revokeWorldUse(worldId, id, ctx), announce: "Permission revoked" })
+            const g = pending.grant
+            submit({ op: "revoke-use", grantId: g.world_use_grant_id, name: g.display_name })
         } else {
-            const { loginName, retain: keep } = pending
-            submit({
-                run: (ctx) =>
-                    transferWorldOwnership(
-                        worldId,
-                        { login_name: loginName, retain_previous_owner_as: keep },
-                        ctx,
-                    ),
-                announce: "Ownership transferred",
-            })
+            submit({ op: "transfer", login: pending.loginName, retain: pending.retain })
         }
     }
+
+    const unknownGrant =
+        error !== null &&
+        (error.kind === "network" || error.kind === "server") &&
+        lastOperationState !== null &&
+        (lastOperationState.op === "assign-role" || lastOperationState.op === "grant-use")
+    const departure: "saving" | "unknown" | null = pendingWrite ? "saving" : unknownGrant ? "unknown" : null
+    const departureLogin =
+        lastOperationState !== null && (lastOperationState.op === "assign-role" || lastOperationState.op === "grant-use")
+            ? lastOperationState.login
+            : ""
 
     const dialog = describePending(pending)
 
     return (
         <>
+            {departure !== null ? <SharingDepartureGuard reason={departure} login={departureLogin} /> : null}
             <p className="authoring-page__lead">
                 Share this world with other accounts. A role on the world never makes anyone a
                 member of a campaign, and a campaign role never confers a role on the world.
             </p>
             {refreshed.notice}
+            {settledNote !== null ? <p className="authoring-message">{settledNote}</p> : null}
             {error !== null && pending === null ? (
                 <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
             ) : null}
@@ -287,6 +475,8 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
                                             }`}
                                             onClick={() => {
                                                 mutation.reset()
+                                                setStillListed(false)
+                                                setSettledNote(null)
                                                 setPending({ kind: "end-role", assignment: a })
                                             }}
                                         >
@@ -349,6 +539,8 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
                                     aria-label={`Revoke permission for ${g.display_name}`}
                                     onClick={() => {
                                         mutation.reset()
+                                        setStillListed(false)
+                                        setSettledNote(null)
                                         setPending({ kind: "revoke-use", grant: g })
                                     }}
                                 >
@@ -366,7 +558,12 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
                         addUse()
                     }}
                 >
-                    <TextField label="Login name of a game master" value={useLogin} onChange={setUseLogin} />
+                    <TextField
+                        label="Login name"
+                        value={useLogin}
+                        onChange={setUseLogin}
+                        hint="Only an account with the game master system role can use it to start a campaign."
+                    />
                     <button type="submit" className="authoring-button authoring-button--primary" disabled={busy}>
                         Allow hosting
                     </button>
@@ -418,7 +615,10 @@ function SharingContent({ worldId, view, refetch, pageStale, onUnread }: Content
                 pending={pendingWrite}
                 error={
                     error === null ? null : (
-                        <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
+                        <>
+                            <MutationStatusMessage error={error} onRetry={mutation.retry} onCheckSession={reload} />
+                            {stillListed ? <p>It is still listed.</p> : null}
+                        </>
                     )
                 }
             />

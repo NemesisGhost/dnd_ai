@@ -53,7 +53,7 @@ Out of C05 by construction: the account picker ([account-search](work-register.m
 - Success re-reads the access list and announces the action's fixed text ("Role assigned", "Permission to host campaigns granted", "Role ended", "Permission revoked") whether the server answered `changed:true` or `changed:false`.
 - A refusal shows `MutationStatusMessage` (top of the page; inside the dialog while it is open). No refusal re-reads the list.
 - The hosting field is labelled "Login name of a game master"; the server accepts any active account, and only an account with the system GM role can then host.
-- There is no departure protection. The route has no key, so a change of `worldId` (or account) keeps the same `SharingContent` instance and its typed values.
+- There is no departure protection. The route has no key. (Correction at T01 entry: a change of `worldId` or account does **not** keep `SharingContent`: the access read goes back to loading, and the page's loading branch unmounts it, so nothing survives; see DV-6.)
 
 ### 2.2 Plan-entry reproduction results
 
@@ -76,7 +76,7 @@ Temporary file `portal/src/pages/zzC05S01Repro.test.tsx`, run from `C:\Users\nem
 - **DV-3 (no-op reported as a change).** `changed:false` is announced as a change (P3).
 - **DV-4 (refusals not reconciled).** A 403/404 is shown without re-reading the authoritative list, so withdrawn authority leaves live-looking controls and an ended row stays (P6, P7).
 - **DV-5 (hosting copy).** The label implies the server checks for a game master; it does not, and the grant is useless to an account without the GM system role.
-- **DV-6 (isolation).** Typed values, notices and an open dialog survive a world or account change.
+- **DV-6 (isolation): not reproduced (corrected at T01 entry).** The plan asserted that typed values, notices and an open dialog survive a world or account change; no P-case reproduced it. Sonnet's test-first run at the baseline showed they do not: on a world change the access path differs, and on an account change the owner differs, so `useAuthoringResource` returns the loading state at once and `WorldSharingPage`'s loading branch unmounts `SharingContent` (its typed values, dialog, notices, unresolved attempt and in-flight write go with it, and the mutation's abort-on-unmount drops a late answer). The keyed content (§3.2 item 8) is therefore defense in depth, not a repair. The departure protection DV-6's neighbours need is the guard of §3.2 item 7.
 
 ### 2.4 Reviewed behavior that must not regress
 
@@ -116,12 +116,13 @@ An Owner types an exact login name, chooses a role (or hosting), and is told exa
    - assign-role / grant-use: the login stays; editing it (or the role) and pressing the button is a **new** request with a new key, not a replay. The list is re-read once (read only) so the person can check it; the page does not claim the read settles the outcome (it cannot match a typed login to a row without new discovery).
    - end-role / revoke-use: the list is re-read once (read only). If the row is gone: "‹name›'s ‹Role› role has ended." (or the revoke sentence), announced once, the dialog closes and the mutation is reset (no Retry). If the row is still listed: the dialog keeps the unknown message and Retry; the sentence adds "It is still listed." No claim is made that it was not applied.
    - Choosing a different row's action (P5) sends that row's own descriptor.
+   - **What a re-read may prove (owner-confirmed at T01 entry).** The decision is made from the data of the **successful, complete read itself** (the access list is unfiltered and unpaginated: it returns every open role and every unrevoked grant for the world, `list_world_access`), matched by the row's id. A read that failed, was denied, or was superseded by a newer one establishes nothing: the unknown message and its Retry stay, and no sentence claims the row ended or was still there. Absence from any filtered or partial list would not be proof, and none is used.
 6. **Hosting copy (DV-5).** The field becomes "Login name"; the section hint adds: "Only an account with the game master system role can use it to start a campaign." The existing hint text stays. No client-side GM check is added.
 7. **Departure protection.** One page-level `useUnsavedChangesGuard` + `ConfirmDialog`, mounted only while needed (C04's committed-blocker registration protects first mount):
    - a write is pending: "Leave while this change is being saved?" / "It may still be applied. You will not see the result here.";
    - an assign-role or grant-use outcome is unknown and unresolved: "Leave without knowing whether the change was saved?" / "We could not confirm whether ‹login› was given access. Check the list on this page later."
    Leave/Stay labels as C04. Typed but unsent text is not guarded (R-4). S02 must add its reasons to this same guard, never a second one.
-8. **Isolation (DV-6).** `WorldSharingPage` keys `SharingContent` by `bootstrap.user.user_id` and `worldId`, so typed values, notices, the dialog and any unresolved attempt never appear under another account or world; the existing scope-key abort drops late answers.
+8. **Isolation (DV-6, not reproduced; kept as defense in depth).** `WorldSharingPage` keys `SharingContent` by `bootstrap.user.user_id` and `worldId`, so typed values, notices, the dialog and any unresolved attempt can never appear under another account or world even if the loading branch were ever removed or a read answered synchronously. Today the loading branch already unmounts `SharingContent` on every world or account change, so this key changes no observable behavior and no test can fail without it (§6.1 M7).
 9. **Documentation:** `docs/reference/portal-behavior.md` §4.3a's Sharing bullet gains a sub-list describing items 2–8 ("P15-C05-S01; implemented, awaiting independent review, not accepted" once implemented).
 
 ### 3.3 Exclusions
@@ -155,7 +156,7 @@ Followed by a docs-only records commit (plan §11.3 and the register).
 |---|---|
 | C1 (fails at baseline) | P2: after an unknown give-role for `dana`, giving a role to `erin` sends `erin` with a **different** key; `dana` is not re-sent. |
 | C2 (fails at baseline) | P5: after an unknown end-role for Bob, Cancel, then ending Dan's role sends `/roles/m3/end`; Bob's is not re-sent. Same for two hosting revokes. |
-| C3 (fails at baseline) | Retry after an unknown give-role sends the same body with the same key (replay), exactly once per press. |
+| C3 (partly fails at baseline) | (a) The **Retry button** after an unknown give-role sends the same body with the same key (replay), exactly once per press: **passes at baseline** (inherited `mutation.retry`; a regression guard). (b) Pressing **Give role again** with the unchanged login and role sends the same body and key: **fails at baseline only because the login was cleared on submit** (DV-2), so the press does nothing. |
 | C4 (fails at baseline) | P1/P4: after a 500 and after a 409, the Login name keeps `dana` and the role keeps its choice. |
 | C5 | After a confirmed give-role, the field is empty; if the person edited the field while the request was pending, their edit is kept. |
 | C6 (fails at baseline) | P3: `changed:false` announces "dana already had the Editor role on this world. Nothing changed."; `changed:true` announces "dana now has the Editor role on this world." |
@@ -173,7 +174,7 @@ Followed by a docs-only records commit (plan §11.3 and the register).
 | C18 | Departure while a write is pending asks "Leave while this change is being saved?"; Leave navigates and sends nothing more; Stay keeps the page and the outcome is still shown. |
 | C19 | Departure with an unresolved unknown give-role asks "Leave without knowing whether the change was saved?"; typed but unsent text alone asks nothing. |
 | C20 | One guard only: with a pending write, a path change shows exactly one dialog (no second blocker). |
-| C21 (fails at baseline) | A change of `worldId` (and, separately, of the signed-in account) drops typed values, notices, the dialog and the unresolved attempt; a late answer for the old world is not shown. |
+| C21 (passes at baseline; isolation regression guard) | A change of `worldId` (and, separately, of the signed-in account) drops typed but unsent values, an open dialog with an unknown outcome, notices and the unresolved attempt, and a late answer for the old world is not shown. These assertions need no typed input retention and no departure guard, and all pass at baseline because the loading branch unmounts `SharingContent`. They are kept as a guard against that ever changing. What the plan attributed to isolation that is really DV-2 (input kept) and the guard (a pending write is asked about when the person leaves) is asserted in C4, C18 and C19, not here. |
 | C22 | No request other than the existing reads and the person's own writes is sent while typing or after any outcome (no lookup); messages show only the typed login and listed names. |
 
 Existing `WorldSharingPage.test.tsx` cases stay green (§2.4).
@@ -188,7 +189,7 @@ Existing `WorldSharingPage.test.tsx` cases stay green (§2.4).
 | M4 | Remove the 403/404 re-read | C10, C11 |
 | M5 | Treat a re-read that still lists the row after an unknown end-role as confirmed | C14 |
 | M6 | Retry builds a new descriptor (new key) instead of `mutation.retry` | C3 |
-| M7 | Remove the content key | C21 |
+| M7 | Remove the content key | **no case fails (by design, not run as a failing probe).** The key is defense in depth: the page's loading branch already unmounts `SharingContent` on a world or account change, so removing the key is observably identical and C21 stays green. Recorded in §11.3 as redundant with the existing isolation; no case was invented to fail it |
 | M8 | Mount the guard twice (one per reason) | C20 |
 | M9 | Clear the field on confirmation even when it was edited meanwhile | C5 |
 
@@ -243,14 +244,14 @@ T01 is a single commit. Until it lands, current behavior (§2.1) is shipped; no 
 - **R-3 (re-read after 403/404 and after unknown end/revoke).** The list is the authoritative answer the page already uses; reads never repeat a write. A typed login cannot be matched to a row without new discovery, so an unknown give-role stays unknown with Retry.
 - **R-4 (guard only pending writes and unresolved unknown grants).** Leaving then loses the only chance to see or safely retry the result. Typed but unsent login text is short and re-typable, and the Phase 13 access pages do not guard it either.
 - **R-5 (hosting copy, no client GM check).** The server's contract accepts any active account; the copy states the consequence instead of inventing a rule.
-- **R-6 (key by account and world).** Matches C04's keyed pages; the route itself is unchanged.
+- **R-6 (key by account and world).** Matches C04's keyed pages; the route itself is unchanged. Kept as defense in depth: the loading branch already isolates (DV-6 not reproduced).
 
 ## 11. Handoffs
 
 ### 11.1 Sonnet implementation instructions
 
 1. Confirm the baseline (the commit adding this plan) is HEAD and `origin/phase15/completion`, with a clean worktree.
-2. Read §2 to §9. Write the "(fails at baseline)" cases first, run them on the baseline, and record each failure (test name and assertion).
+2. Read §2 to §9. Write the "(fails at baseline)" cases first (C21 is a baseline-passing guard, C3 passes in part; see §6), run them on the baseline, and record each failure (test name and assertion).
 3. Implement §3.2 in the files of §4 only. Keep §2.4.
 4. Run §7.1. Run M1–M9, record each probe's failing case, and revert every probe (restore exact bytes; note that `git restore` rewrites LF working files as CRLF under `core.autocrlf=true`, so compare hashes).
 5. **Stop and report instead of continuing if:**
