@@ -250,7 +250,8 @@ describe("WorldSharingPage: last owner, focus and the transfer control (CP-4 smo
         setCurrent(access())
         fireEvent.click(within(dialog).getByRole("button", { name: "Transfer ownership" }))
         expect(await screen.findByText(/You do not have access to the sharing list/)).toBeInTheDocument()
-        await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Sharing" })).toHaveFocus())
+        // The receipt of the transfer now takes the focus the removed controls had (S02), not the page heading.
+        await waitFor(() => expect(screen.getByRole("heading", { level: 2, name: "Ownership transferred" })).toHaveFocus())
     })
 
     it("opens the transfer dialog on one ordinary press-and-release of the button", async () => {
