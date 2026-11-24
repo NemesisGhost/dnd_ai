@@ -195,4 +195,37 @@ The review range is from this plan's commit to the T01 implementation commit, pl
 
 ### 11.3 Implementation record
 
-Pending.
+Sonnet, 2026-11-24. Baseline `3175c3899dad7dcbe0cf5b08d3230b28f8780d59` (confirmed as HEAD and `origin/phase15/completion`, clean worktree). Implementation commit `6f61188d9a5fa7322134c8213a496de5b62e9712`: `P15-C07-S01-T01: order planned sessions by planned start with unscheduled last and stable ties`. Review range: `3175c3899dad7dcbe0cf5b08d3230b28f8780d59..6f61188d9a5fa7322134c8213a496de5b62e9712`, plus this records commit.
+
+**Change.** `SessionsPage.tsx`: `initialSort` is `session_scheduled_for` ascending; a page-local `compareSessionSequence` (session number ascending, then session id in code-unit order) is wrapped around the Title, Status, Planned start, Start time and End time comparators by `withSequenceTieBreak`; Actions is unchanged. `SessionsPage.order.test.tsx` is new (F1–F12 in 12 tests; F13 is the existing file). `SessionsPage.test.tsx` has only the §6.2 change (the start-time case now clicks Start time twice and is renamed). `portal-behavior.md` has the ordering sentence. `SortableTable`, `utils/sorting`, `CampaignSessionsPage`, `CampaignSessionsBoundary`, `useCampaignSessions`, the API and the query are untouched.
+
+**Direction (verified before implementing).** `SortableTable` does not reverse rows: it calls `compare(a, b, direction)` and each comparator applies the direction itself (`applyDirection`, nulls last in `compareNullableTimestamps`). A tie-break applied after the primary comparison and not passed through `applyDirection` is therefore ascending in both directions, and F6, F7 and F8 assert this on displayed rows.
+
+**Fixtures.** Shuffled inputs, equal instants written as `Z` and `+00:00`, missing timestamps, repeated titles and play statuses; row order is read from each row's title-link `href`. The session-id key (R-4) is unreachable for valid data and has no case.
+
+**Test-first (unchanged page).** Of 12 tests, 8 failed and 4 passed, exactly as designated: failed F1, F2, F3, F4, F6, F7, F8, F10; passed (guards) F5, F9, F11, F12. F5 passes at baseline only because its input order already equals its expected order; after the change it is what separates instants from timestamp text. F13 is the existing `SessionsPage.test.tsx` and passes after the change.
+
+**After the change.** Focused set of §7.1 (7 files): 72 passed.
+
+**Full portal runs (reported separately).**
+1. First run: 455 files passed, 1 failed (456 files, 5,927 of 5,928 tests): `App.knowledgeClaim.test.tsx` › "a confirmed save whose authoring read-back fails (DEF-006) › says the save went through, keeps the editor, holds Save, and recovers by reading only". That file then passed alone (150 of 150).
+2. Second run: 1 failed (5,927 of 5,928): `App.characterShell.test.tsx` › "direct entry, history and malformed task state › gives the defaults after a direct entry and carries no task into the section links". That file then passed alone (35 of 35).
+3. Third run: **456 files, 5,928 tests passed, 0 failed.**
+Neither failing test imports or renders `SessionsPage`; each passed on its own. Their cause is **not diagnosed** here (both are long App-level files under a loaded full run). They are recorded as two further unexplained single-test failures, distinct from the shard-7 backend investigation and from the `OrganizationMembersReader` failure, and are not resolved by this record.
+
+**Other checks.** `npm run lint`, `npx tsc -b` and `npm run build` pass. `uv run python scripts/check_documentation.py` and `git diff --check` pass.
+
+**Probes (each restored byte-for-byte, SHA-256 compared equal after every probe and at the end).**
+
+| Probe | Failed cases |
+|---|---|
+| M1 | F1, F2 (also F4, F5, F6, F10) |
+| M2 | F3, F4, F6 |
+| M3 | F6, F7, F8 |
+| M4 | F3, F4, F6, F7, F8 |
+| M5 | F7 |
+| M6 | F1, F2 (also F5, F6, F10) |
+
+The first M2 and M5 mutations were malformed (a syntax error, "no tests"); they were discarded and redone with an identity wrapper, and the table gives the redone results.
+
+**CI position.** Pending the checkpoint PR; none opened. Not run: browser/AX, zoom, human review, owner acceptance, consumers.
