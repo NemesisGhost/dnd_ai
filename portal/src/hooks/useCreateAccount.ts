@@ -11,6 +11,9 @@ export type CreateAccountStatus =
     | { kind: "success" }
     | { kind: "denied" }
     | { kind: "error" }
+    // The portal cannot tell whether the account was created: no answer arrived (a transport failure), or the
+    // server answered with an error of its own (5xx). Only a deliberate press sends another request.
+    | { kind: "unknown" }
 
 export interface UseCreateAccountResult {
     status: CreateAccountStatus
@@ -85,8 +88,12 @@ export function useCreateAccount(
                             setStatus({ kind: "denied" })
                             return
                         }
+                        if (cause.status < 500) {
+                            setStatus({ kind: "error" })
+                            return
+                        }
                     }
-                    setStatus({ kind: "error" })
+                    setStatus({ kind: "unknown" })
                 })
         },
         [onSuccess, reload, sessionState, status.kind],

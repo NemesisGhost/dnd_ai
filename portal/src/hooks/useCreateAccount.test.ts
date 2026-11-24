@@ -70,6 +70,84 @@ describe("useCreateAccount", () => {
         })
     })
 
+    it("maps a refusal other than a denial to error", async () => {
+        createAccountMock.mockRejectedValue(new PlatformAccountsRequestError(422, "invalid"))
+        const { result } = renderHook(() => useCreateAccount(vi.fn()))
+
+        act(() => {
+            result.current.submit("new.gm", "New GM", null, ["player"])
+        })
+
+        await waitFor(() => {
+            expect(result.current.status).toEqual({ kind: "error" })
+        })
+    })
+
+    it.each([500, 502, 503, 599])(
+        "maps a %i answer to unknown: the portal cannot tell whether the account was created",
+        async (status) => {
+            createAccountMock.mockRejectedValue(new PlatformAccountsRequestError(status, "boom"))
+            const { result } = renderHook(() => useCreateAccount(vi.fn()))
+
+            act(() => {
+                result.current.submit("new.gm", "New GM", null, ["player"])
+            })
+
+            await waitFor(() => {
+                expect(result.current.status).toEqual({ kind: "unknown" })
+            })
+        },
+    )
+
+    it("maps a transport failure to unknown", async () => {
+        createAccountMock.mockRejectedValue(new TypeError("Failed to fetch"))
+        const { result } = renderHook(() => useCreateAccount(vi.fn()))
+
+        act(() => {
+            result.current.submit("new.gm", "New GM", null, ["player"])
+        })
+
+        await waitFor(() => {
+            expect(result.current.status).toEqual({ kind: "unknown" })
+        })
+    })
+
+    it("sends one more request per submission after an unknown outcome, never on its own", async () => {
+        createAccountMock.mockRejectedValue(new TypeError("Failed to fetch"))
+        const { result } = renderHook(() => useCreateAccount(vi.fn()))
+
+        act(() => {
+            result.current.submit("new.gm", "New GM", null, ["player"])
+        })
+        await waitFor(() => expect(result.current.status).toEqual({ kind: "unknown" }))
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        expect(createAccountMock).toHaveBeenCalledTimes(1)
+
+        act(() => {
+            result.current.submit("new.gm", "New GM", null, ["player"])
+        })
+        await waitFor(() => expect(createAccountMock).toHaveBeenCalledTimes(2))
+        await waitFor(() => expect(result.current.status).toEqual({ kind: "unknown" }))
+        expect(createAccountMock).toHaveBeenCalledTimes(2)
+    })
+
+    it("ignores an answer that arrives after unmount", async () => {
+        let resolve: (value: unknown) => void = () => {}
+        createAccountMock.mockImplementation(() => new Promise((r) => (resolve = r)))
+        const onSuccess = vi.fn()
+        const { result, unmount } = renderHook(() => useCreateAccount(onSuccess))
+
+        act(() => {
+            result.current.submit("new.gm", "New GM", null, ["player"])
+        })
+        unmount()
+        await act(async () => {
+            resolve({ user_id: "u", login_name: "new.gm", raw_activation_token: "t", expires_at: "x" })
+        })
+
+        expect(onSuccess).not.toHaveBeenCalled()
+    })
+
     it("does nothing when not authenticated", () => {
         sessionStateRef.current = { status: "unauthenticated" } as never
         const { result } = renderHook(() => useCreateAccount(vi.fn()))

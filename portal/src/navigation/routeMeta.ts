@@ -113,6 +113,7 @@ export const ROUTE_METAS: readonly RouteMeta[] = [
     unscoped("campaigns.list", "/campaigns", null, "list", "Campaigns"),
     unscoped("campaigns.new", "/campaigns/new", null, "create", "New campaign"),
     unscoped("platform.accounts", "/platform/accounts", null, "other", "Accounts"),
+    unscoped("platform.accounts.new", "/platform/accounts/new", null, "create", "New account"),
     unscoped("account", "/account", null, "other", "Account"),
     unscoped("admin.accounts", "/admin/accounts", null, "redirect", "Accounts"),
 
