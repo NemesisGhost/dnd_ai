@@ -974,18 +974,27 @@ function TransferCheckNote({
     )
 }
 
-// What the person is left with, from the role they chose to keep and the other open roles the list shows for their own
-// account. Those other roles are not removed by a transfer, so they are named, and a person left with none is told
-// they will lose the sharing page.
+// What the person is left with: every other open non-Owner role the list shows for their own account (a transfer ends only
+// the Owner row, so those stay) plus the role they chose to keep, each named once. A person left with none is told they
+// will lose the sharing page.
 function keptSentence(retain: RetainedWorldRoleCode | null, view: WorldAccessView, userId: string): string {
-    if (retain !== null) return `You keep the ${roleLabel(retain)} role on this world.`
-    const others = view.assignments
-        .filter((a) => a.user_id === userId && a.role_code !== "world_owner")
-        .map((a) => roleLabel(a.role_code))
-    if (others.length === 0) {
+    const held: string[] = []
+    for (const a of view.assignments) {
+        if (a.user_id === userId && a.role_code !== "world_owner" && !held.includes(a.role_code)) held.push(a.role_code)
+    }
+    const all = retain !== null && !held.includes(retain) ? [...held, retain] : held
+    if (all.length === 0) {
         return "You will have no role on this world and will lose access to its sharing page."
     }
-    return `You keep your ${others.join(", ")} role on this world.`
+    const labels = all.map((code) => roleLabel(code))
+    if (labels.length === 1) {
+        // The chosen role is "the" role they keep; a role they already hold and did not choose is "your" role.
+        return retain !== null
+            ? `You keep the ${labels[0]} role on this world.`
+            : `You keep your ${labels[0]} role on this world.`
+    }
+    const listed = `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`
+    return `You keep your ${listed} roles on this world.`
 }
 
 function describePending(

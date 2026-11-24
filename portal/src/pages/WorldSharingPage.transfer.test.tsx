@@ -244,6 +244,78 @@ describe("D1: what the dialog says the person keeps", () => {
     })
 })
 
+describe("S02-1: the confirmation names every role the person will have left", () => {
+    const withOwnAndReader = () =>
+        access({
+            assignments: [
+                row("m1", SELF, "Alice Owner", "world_owner", "World owner"),
+                row("m4", SELF, "Alice Owner", "world_reader", "World reader"),
+                row("m2", "u2", "Bob Editor", "world_editor", "World editor"),
+            ],
+        })
+
+    it("S02-1 describes both the existing Reader role and the selected Editor role", async () => {
+        setup({ access: withOwnAndReader() })
+        await ready()
+        const dialog = await openTransfer("erin", "world_editor")
+        expect(within(dialog).getByText(/You keep your Reader and Editor roles on this world\./)).toBeInTheDocument()
+        expect(within(dialog).queryByText(/You will have no role/)).toBeNull()
+    })
+
+    it("S02-1 describes a selected role the person already holds only once", async () => {
+        setup({
+            access: access({
+                assignments: [
+                    row("m1", SELF, "Alice Owner", "world_owner", "World owner"),
+                    row("m4", SELF, "Alice Owner", "world_editor", "World editor"),
+                    row("m5", SELF, "Alice Owner", "world_reader", "World reader"),
+                    row("m2", "u2", "Bob Editor", "world_editor", "World editor"),
+                ],
+            }),
+        })
+        await ready()
+        const dialog = await openTransfer("erin", "world_editor")
+        const text = within(dialog).getByText(/You keep your .* on this world\./).textContent ?? ""
+        expect(text).toContain("You keep your Editor and Reader roles on this world.")
+        expect(text.match(/Editor/g)).toHaveLength(1)
+        expect(text.match(/Reader/g)).toHaveLength(1)
+    })
+
+    it("S02-1 a selected role that is the only role held is described once, as the retained role", async () => {
+        setup({
+            access: access({
+                assignments: [
+                    row("m1", SELF, "Alice Owner", "world_owner", "World owner"),
+                    row("m4", SELF, "Alice Owner", "world_editor", "World editor"),
+                    row("m2", "u2", "Bob Editor", "world_editor", "World editor"),
+                ],
+            }),
+        })
+        await ready()
+        const dialog = await openTransfer("erin", "world_editor")
+        const text = within(dialog).getByText(/You keep the .* on this world\./).textContent ?? ""
+        expect(text).toContain("You keep the Editor role on this world.")
+        expect(text.match(/Editor/g)).toHaveLength(1)
+    })
+
+    it("S02-1 with No role selected still describes the existing Reader role", async () => {
+        setup({ access: withOwnAndReader() })
+        await ready()
+        const dialog = await openTransfer("erin", "")
+        expect(within(dialog).getByText(/You keep your Reader role on this world\./)).toBeInTheDocument()
+        expect(within(dialog).queryByText(/You will have no role/)).toBeNull()
+    })
+
+    it("S02-1 says the person keeps nothing only when no role would remain", async () => {
+        setup()
+        await ready()
+        const dialog = await openTransfer("erin", "")
+        expect(
+            within(dialog).getByText(/You will have no role on this world and will lose access to its sharing page\./),
+        ).toBeInTheDocument()
+    })
+})
+
 describe("D2-D5: the receipt after a confirmed transfer", () => {
     it("D2 keeps a receipt naming the typed login and the role the server kept, above the access explanation", async () => {
         setup()
