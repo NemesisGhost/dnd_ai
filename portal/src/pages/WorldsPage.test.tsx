@@ -107,15 +107,15 @@ describe("WorldsPage", () => {
         expect(screen.queryByRole("link", { name: "Create world" })).not.toBeInTheDocument()
     })
 
-    it("switches to archived worlds and badges them with text", async () => {
+    it("includes archived worlds and badges them with text", async () => {
         const server = installMockServer()
         server.on("GET", /^\/worlds\?status=active/, { body: { items: [], next_cursor: null } })
-        server.on("GET", /^\/worlds\?status=archived/, {
+        server.on("GET", /^\/worlds\?status=all/, {
             body: { items: [world("w9", "Old World", { lifecycle_status: "archived" })], next_cursor: null },
         })
         render()
         await screen.findByText(/You do not have access to any worlds yet/)
-        fireEvent.click(screen.getByRole("radio", { name: "Archived" }))
+        fireEvent.click(screen.getByRole("checkbox", { name: "Include archived worlds" }))
         expect(await screen.findByRole("link", { name: "Old World" })).toBeInTheDocument()
         expect(screen.getByText("Archived", { selector: "span.authoring-badge" })).toBeInTheDocument()
     })
@@ -178,19 +178,24 @@ describe("WorldsPage", () => {
         ])
     })
 
-    it("does not list campaign-visible worlds under Archived", async () => {
+    it("keeps campaign-visible worlds listed when archived worlds are included", async () => {
         const server = installMockServer()
         server.on("GET", /^\/worlds\?status=active/, { body: { items: [], next_cursor: null } })
-        server.on("GET", /^\/worlds\?status=archived/, { body: { items: [], next_cursor: null } })
+        server.on("GET", /^\/worlds\?status=all/, { body: { items: [], next_cursor: null } })
         render(
             bootstrapWith({
                 campaigns: [campaign("camp-a", "Campaign A", "w-hosted", "Hosted World")],
             }),
         )
         await screen.findByRole("link", { name: "Hosted World" })
-        fireEvent.click(screen.getByRole("radio", { name: "Archived" }))
-        expect(await screen.findByText(/You have no archived worlds/)).toBeInTheDocument()
-        expect(screen.queryByRole("link", { name: "Hosted World" })).not.toBeInTheDocument()
+        fireEvent.click(screen.getByRole("checkbox", { name: "Include archived worlds" }))
+        await waitFor(() =>
+            expect(screen.getByRole("checkbox", { name: "Include archived worlds" })).toBeChecked(),
+        )
+        expect(await screen.findByRole("link", { name: "Hosted World" })).toHaveAttribute(
+            "href",
+            "/app/camp-a/world",
+        )
     })
 
     it("shows an unavailable state for a denied or failed list", async () => {
