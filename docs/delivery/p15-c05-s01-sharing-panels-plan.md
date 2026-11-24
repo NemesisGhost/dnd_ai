@@ -1,6 +1,6 @@
 # D/P15-C05-S01 implementation plan: clarify the role and hosting panels
 
-**Status:** Opus plan prepared 2026-11-24. **Ready for Sonnet (T01).** No owner decision blocks the task. Section 10 lists the routine choices made here; none changes a product policy, an API contract, authorization or account discoverability.
+**Status:** Opus plan prepared 2026-11-24. **T01 implemented (§11.3); independent review pending, not accepted.** Corrected at T01 entry (DV-6 not reproduced; C21, C3 and M7 amended). No owner decision blocks the task. Section 10 lists the routine choices made here; none changes a product policy, an API contract, authorization or account discoverability.
 
 **Register rows:**
 - slice [D/P15-C05-S01](work-register.md#p15-c05-s01);
@@ -270,4 +270,40 @@ T01 is a single commit. Until it lands, current behavior (§2.1) is shipped; no 
 
 ### 11.3 Implementation record
 
-Pending (Sonnet).
+#### T01 (Sonnet, 2026-11-24)
+
+**Status:** T01 implemented at `d7e08866050d05235c03fe94ddb8837d2015dfd5` (`P15-C05-S01-T01: tell the truth about each sharing change and never re-send an earlier one`), pushed to `phase15/completion`; **independent review pending; not accepted.** Baseline `60cfd3dc4765f3953b0894316fe5ca61f867067c` (HEAD and origin, clean worktree). CI: **pending the C05 checkpoint PR** (none opened). No PR, S02 work, browser/AX run, consumer or acceptance.
+
+**Plan correction made at T01 entry (owner-approved, in the commit).** The test-first run stopped under §11.1 step 5: C21 could not be made to fail at the baseline. DV-6 is **not reproduced**: on a world change the access path differs and on an account change the owner differs, so `useAuthoringResource` returns the loading state at once and the page's loading branch unmounts `SharingContent`. Typed but unsent values, an open unknown-outcome dialog, an unresolved attempt and an in-flight write do not survive, and the mutation's abort-on-unmount drops a late answer. The plan was amended in §2.1, §2.3, §3.2 item 8, §6 (C3, C21), §6.1 (M7), §10 R-6 and §11.1: C21 is a baseline-passing isolation regression guard; the explicit content key stays as defense in depth; **M7 no longer requires a failing case** (removing the key is observably identical, so no case was invented); C21's isolation assertions are separated from DV-2 input retention and the departure guard (asserted in C4, C18, C19); C3's Retry-button variant is baseline-passing and its Give-role-again variant fails because the login was cleared. §3.2 item 5 also states what a re-read may prove (below).
+
+**What changed.** `WorldSharingPage.tsx`: the `{ run, announce }` body became a serializable `Operation` descriptor (`assign-role`, `grant-use`, `end-role`, `revoke-use`, `transfer`; the transfer request body is unchanged), so a different login, role or row is a new request with a new key and the same descriptor is the same request. Inputs are kept until confirmed and cleared only when the field still holds the confirmed login (`onSuccess(result, body)`). The announcement and the saved-but-not-read notice come from the confirmed descriptor and `changed` (§3.2 item 3). A 403 or 404, and a lost answer (network or 5xx), re-read the access list once (read only); an end or revoke is then settled from that read (below); transfer is left to S02. The hosting field is "Login name" with the hint that only a game master system account can use it to start a campaign (no client GM check). One `SharingDepartureGuard` (the corrected shared guard) is mounted only while a write is pending ("Leave while this change is being saved?") or an unresolved give-role or hosting grant is unknown ("Leave without knowing whether the change was saved?"). `SharingContent` is keyed by account and world. No lookup, search or display-name resolution was added. `portal-behavior.md` §4.3a gains the sub-list.
+
+**What a re-read may prove (reconciliation).** The decision uses the data of the **successful, complete read itself**, matched by row id: the access list (`list_world_access`) is unfiltered and unpaginated (every open role and every unrevoked grant), so a missing id means the row has ended. Implemented by recording the list shown when the re-read starts and acting on the first list applied after it. A read that failed, was denied or was superseded establishes nothing (the unknown message and Retry stay; C15 covers a failed read, and a superseded re-read of an earlier operation cannot replace newer feedback, the added C14 case). Starting anything newer drops the pending settlement. A typed login is never matched to a row, so a give-role or hosting grant stays unknown. The settlement effect carries a scoped `eslint-disable react-hooks/set-state-in-effect` with its reason (it reacts to data arriving from a read and also announces and closes a dialog); there is one earlier precedent in `CampaignLayout.tsx`.
+
+**Test-first failures (baseline `60cfd3dc4765f3953b0894316fe5ca61f867067c`, new file `WorldSharingPage.panels.test.tsx`, first run of 34 cases: 29 failed, 5 passed).**
+- Failed: C1 (a different login, and a different role for the same login, re-sent the earlier attempt: `expected {login_name: 'dana'…} to deeply equal {login_name: 'erin'…}`), C2 (both the roles and the hosting variants: the other row's POST was never sent), **C3b** (pressing Give role again did nothing because the login had been cleared), C4 (the login was gone: `expect(element).toHaveValue(dana)`), C5 (two cases), C6 (two cases, the old fixed "Role assigned" text), C7, C8, **C10** (no re-read after the 403), **C11** (no re-read, the row stayed), C12, C13, C14, C15 (two cases), C16, C17, C18 (two cases: no guard), C19 (asks), C20, C22 (the old announcement), and the two early C21 variants (see below).
+- Passed at the baseline: **C3a** (the Retry button replays the same key: inherited `mutation.retry`), C9 (three refusals: server sentence, no re-read, no Retry) and C19's "typed but unsent text asks nothing".
+- **C21.** The two early variants failed only for unrelated reasons (the login had been cleared before the isolation assertion; no departure guard to answer). They were removed. The isolation cases as finally written (typed unsent values on a world change and on an account change; an open dialog with an unknown outcome on an account change; no late answer for an in-flight end-role after an account change) were re-run against the baseline file and **all four pass there**, as the correction states.
+- A late case added during implementation (C14: a superseded re-read cannot replace newer feedback) and two key assertions added to C2 (a different row has a different key) were written after the first run; M1 initially failed C1 only and failed C2 after those assertions.
+
+**Existing-test edits (§4 and one consequence).** `WorldSharingPage.test.tsx` only: the two give-role queries are scoped to the "Give someone a role" form (the hosting field's accessible name is now also "Login name", which the plan allows; this makes an unscoped query ambiguous), and the saved-but-not-read-back case's old fixed "Role assigned" texts became the §3.2 item 3 sentence. No other assertion changed.
+
+**Runs (PowerShell, `C:\Users\nemes\dnd_ai\portal`).**
+- Focused (§7.1): `WorldSharingPage.panels`, `WorldSharingPage`, `useAuthoringMutation`, `useUnsavedChangesGuard.registration`, `App`: 5 files, **133 passed**.
+- Full `npm test`, first run: **453 files, 5841 passed, 0 failed**. A second full run after the last test assertions were added: 453 files, 5841 passed, 0 failed. No failure to report.
+- `npm run lint`, `npx tsc -b` and `npm run build` pass (chunk-size notice only). `uv run python scripts/check_documentation.py` and `git diff --check` pass.
+
+**Probes (each reverted; `WorldSharingPage.tsx` restored byte-for-byte, SHA-256 prefix `0a8689108ec1`).**
+- M1 (the login or row id dropped from the descriptor, request reads a drifting value): failed C1 and C2 (with the key assertions), plus C18, C19 and C22 as a side effect.
+- M2 (clear the login on submit): failed C4, C3b, C15.
+- M3 (ignore `changed`): failed C6 and C7.
+- M4 (no 403/404 re-read): failed C10, C11, C12.
+- M5 (a re-read that still lists the row treated as confirmed after an unknown end-role): failed C14.
+- M6 (Retry sends a new descriptor, so a new key): failed C3a.
+- M7 (remove the content key): **no case fails**, by design; 53 passed. Redundant with the loading-branch isolation, as the plan correction records.
+- M8 (guard mounted twice): failed C20.
+- M9 (clear the field on confirmation even if edited): failed C5.
+
+**Not done / limits.** No browser or AX check (including the real-browser focus question for C10, C11, C13 and C18). Transfer feedback and any transfer 403/404 re-read are S02's. The departure guard relies on the shared guard's first-commit registration (C18 attempts the departure straight after the write begins, with no wait).
+
+**Review range for Luna (§11.2).** `60cfd3dc4765f3953b0894316fe5ca61f867067c..d7e08866050d05235c03fe94ddb8837d2015dfd5` plus the docs-only records commit that follows it.
