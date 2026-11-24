@@ -13,10 +13,13 @@ import type { FetchCall, MockResponse, MockServer } from "../test/authoringHarne
 import type { SessionBootstrap } from "../types/bootstrap"
 import { WorldSharingPage } from "./WorldSharingPage"
 
-// P15-C05-S02: the ownership transfer through the real page, the real mutation and resource hooks, with only the
-// network (a stubbed fetch), the session and the workspace hierarchy's world read faked. The session is a real,
-// controllable provider, so a receipt is exercised across real session changes (an account switch, an ended session)
-// and real access reads, not only a mocked success callback. Announcements are counted exactly through a spy.
+// P15-C05-S02: the ownership transfer through the real page, the real mutation and resource hooks, with the network (a
+// stubbed fetch), the session and the workspace hierarchy's world read faked. The session is a custom SessionContext
+// provider holding a bootstrap state that a test changes (an account switch, an ended session), with mocked refresh and
+// reload; the sidebar's refetchWorld is a mock supplied through a test WorkspaceHierarchyContext.Provider. These are page
+// tests of how the receipt reacts to those changes, not production session-boundary tests: the real session hook, the
+// route session provider, the authenticated layout and the hierarchy provider's own reads are not exercised.
+// Announcements are counted exactly through a spy.
 
 const SELF = bootstrapWith().user.user_id
 const ACCESS = "/worlds/w1/access"
