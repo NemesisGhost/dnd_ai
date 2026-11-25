@@ -307,4 +307,21 @@ T01 is a single commit and C09's only task, so no intermediate state is merged.
 
 ### 11.3 Implementation record
 
-*(Sonnet records here.)*
+Implemented by Sonnet 5.5, 2026-11-25. Baseline `61dbc2d428e2974726053464b98093c8164c0215` (HEAD and `origin/phase15/completion`, clean worktree). Implementation commit `82027ac5e9852ad3146d3983085bb044a2d7ae73`, pushed. Independent review range: `61dbc2d4..82027ac5e9852ad3146d3983085bb044a2d7ae73` plus this records commit. CI position: pending checkpoint PR (no PR opened).
+
+**Test-first failures at the baseline** (11 failures in 4 files, run before any production change; the new reading module was absent):
+- E5/E15 `utils/worldTimeReading.test.ts`: the suite failed to load ("Failed to resolve import ./worldTimeReading").
+- E7 `worldTimeForm.test.ts > calendarPrecision`: `calendarPrecision is not a function`; E8 `onCalendarChange` (3 tests): `onCalendarChange is not a function`.
+- E2 `WorldTimeForm.test.tsx`: the after-option labels were the server display text, not the shared reading; E6: "Will be recorded as: …" text not found; E8/E16 (2 tests): after a calendar change the Month select/Day/Hour/Minute kept their values (`toHaveValue` mismatch).
+- E1/E4 and E15 (`WorldTimePicker.reading.test.tsx`): option labels equalled `display`, not the reading; E11: kept-input message not found (it named the time by `display`).
+**Guards at the baseline** (existing suites, unchanged): `WorldTimePicker`, `WorldTimesPage.dialog`, `WorldTimesPage`, `FormDialog`, `CampaignClockCard`, `App.partyMembers`, `App.eventCorrections`, `App.sessionRun`: 8 files, 229 passed. E3, E9, E12, E13, E14 and E10 are covered by these suites and by the new tests E3 (form narrative option), E9 and E14 (`WorldTimePicker.reading.test.tsx`); E17 by the existing `holdUnresolved` tests.
+
+**Implementation (§3.2).** New `utils/worldTimeReading.ts` (moved from the page's `recordedTime`); used by `WorldTimesPage`, the picker options, the form's after/before options and the kept-input message. `calendarPrecision`, `PRECISION_DESCRIPTIONS` and `onCalendarChange` in `utils/worldTimeForm.ts`; the "Will be recorded as … Precision: …" paragraph (plain text, not a live region) and the polite `role="status"` calendar-change note in `WorldTimeForm`. `portal-behavior.md` updated (World times/picker row, time-display bullet). No backend, `display_text`, dialog, mutation, guard or selection change.
+
+**Changes to existing tests.** §6.2 required none: every existing picker/caller fixture uses narrative points, so no expectation changed. **One change outside §6.2, reported for review:** `RelationshipsPanel.test.tsx` line 162 mocked the calendars read as `{ items: [], can_create: true }`, which is not the API's shape (`{ calendars }`); the picker now reads `calendars.calendars`, so that mock crashed the picker. The mock was corrected to `{ calendars: [] }`; no expectation changed. **Behavior difference to review:** the old page `recordedTime` printed the literal word "Calendar" when an item's calendar was not in the loaded list; the plan (§3.2, R-5) specifies `display` plus the clock time instead, and no World times test covered the old case.
+
+**Runs.** Focused §7.1 set plus the three new files: 12 files, 251 passed. `npm run lint`, `npx tsc -b`, `npm run build` exit 0. Documentation check and `git diff --check` pass. **Full `npm test`, run 1: 1 failed**, 460 files passed (5,986 passed of 5,987): `RelationshipsPanel.test.tsx > ends a relationship with the version it saw, and asks for a time first` ("Unexpected Application Error": `worldTimeReading` read `.find` of undefined from the mis-shaped mock above; it failed the same way alone). After the mock correction, **rerun (full): 461 files, 5,987 passed, 0 failed.**
+
+**Mutation probes** (each applied to one file, run against the four new test files, then exact bytes restored with the hash compared equal): M1 failed E1/E4 (and E15); M2 failed E2; M3 failed E6 and E7; M4 failed both E8/E16 form tests; M5 failed the E8 form and unit tests (valid values kept); M6 failed E11; M7 failed E15 (picker and unit).
+
+**Not done / pending:** no PR, browser/AX, zoom, pilot-time or acceptance; independent review pending.
