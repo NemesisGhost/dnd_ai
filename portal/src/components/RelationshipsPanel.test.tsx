@@ -159,7 +159,7 @@ function setup(capabilitiesOrOptions: string[] | SetupOptions = ["canon.edit"]) 
     server.on("GET", /authoring\/relationships\?entity_id=/, { body: { as_of: asOf, items: summaries ?? [summary] } })
     server.on("GET", `${BASE}/r1`, () => ({ body: view }))
     server.on("GET", /world-times/, { body: { items: [], next_cursor: null, can_create: true } })
-    server.on("GET", /calendars/, { body: { items: [], can_create: true } })
+    server.on("GET", /calendars/, { body: { calendars: [] } })
     // Like the server, answer only with the entity types asked for.
     server.on("GET", /world\/search/, (call) => {
         const types = new URLSearchParams(call.path.split("?")[1]).getAll("entity_type")

@@ -5,6 +5,7 @@ import { useAuthoringResource } from "../../hooks/useAuthoringResource"
 import { useConfirmedRefresh, useUnreadWrite } from "../../hooks/useConfirmedRefresh"
 import { useKept } from "../../hooks/useKeptResource"
 import type { CalendarListResponse, WorldTimePage, WorldTimeReceipt } from "../../types/worldTime"
+import { worldTimeReading } from "../../utils/worldTimeReading"
 import { SelectField } from "./fields"
 import { PickerRecordTime } from "./PickerRecordTime"
 import "./authoring.css"
@@ -147,7 +148,7 @@ function WorldTimePickerFor({ campaignId, id, label, value, onChange, required, 
                 placeholder="Choose a time"
                 required={required}
                 hint={hint ?? (hasMore ? `Showing the latest ${PICKER_PAGE_SIZE} times.` : undefined)}
-                options={items.map((t) => ({ value: t.world_time_id, label: t.display }))}
+                options={items.map((t) => ({ value: t.world_time_id, label: worldTimeReading(t, heldCalendars.calendars) }))}
                 onChange={onChange}
                 error={error}
             />

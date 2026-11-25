@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 import type { Calendar } from "../types/worldTime"
 import {
+    calendarPrecision,
     emptyWorldTimeForm,
+    onCalendarChange,
     parseWhole,
     toCalendarBody,
     toWorldTimeBody,
@@ -116,5 +118,66 @@ describe("world-time form", () => {
             label: "x",
             after_world_time_id: "t1",
         })
+    })
+})
+
+const SHORT: Calendar = {
+    ...CALENDAR,
+    calendar_id: "cal-2",
+    name: "Short Count",
+    epoch_label: null,
+    months: [{ month_number: 1, name: "Frost", day_count: 20 }],
+}
+const withValues = (over: Partial<ReturnType<typeof emptyWorldTimeForm>>) => ({
+    ...emptyWorldTimeForm([CALENDAR]),
+    ...over,
+})
+
+describe("calendarPrecision (E7)", () => {
+    it("is exact with a day, partial without one, and approximate wins", () => {
+        expect(calendarPrecision(withValues({ year: "3", month: "2", day: "5" }))).toBe("exact")
+        expect(calendarPrecision(withValues({ year: "3", month: "2" }))).toBe("partial")
+        expect(calendarPrecision(withValues({ year: "3" }))).toBe("partial")
+        expect(calendarPrecision(withValues({ year: "3", month: "2", day: "5", approximate: true }))).toBe(
+            "approximate",
+        )
+        expect(calendarPrecision(withValues({ year: "3", approximate: true }))).toBe("approximate")
+    })
+})
+
+describe("onCalendarChange (E8)", () => {
+    const entered = withValues({
+        calendarId: "cal-2",
+        year: "3",
+        month: "2",
+        day: "5",
+        hour: "14",
+        minute: "30",
+        approximate: true,
+        label: "Feast",
+    })
+
+    it("clears a month the new calendar lacks, with its day, hour and minute", () => {
+        const next = onCalendarChange(entered, [CALENDAR, SHORT])
+        expect(next.values).toEqual({
+            ...entered,
+            month: "",
+            day: "",
+            hour: "",
+            minute: "",
+        })
+        expect(next.note).toMatch(/Short Count has no such month/)
+    })
+
+    it("clears a day the month lacks, with its hour and minute, keeping the month", () => {
+        const next = onCalendarChange({ ...entered, month: "1", day: "25" }, [CALENDAR, SHORT])
+        expect(next.values).toEqual({ ...entered, month: "1", day: "", hour: "", minute: "" })
+        expect(next.note).toMatch(/Day, hour and minute were cleared/)
+    })
+
+    it("keeps every value the new calendar has and says nothing", () => {
+        const next = onCalendarChange({ ...entered, month: "1", day: "20" }, [CALENDAR, SHORT])
+        expect(next.values).toEqual({ ...entered, month: "1", day: "20" })
+        expect(next.note).toBeNull()
     })
 })
