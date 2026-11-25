@@ -280,11 +280,33 @@ detail; the tier decisions themselves are unchanged.
 | `GET /campaigns/{campaign_id}/world/search/counts` | Complete per-category totals (all six categories, zeros included) plus their sum for the same `q` and `canon.edit`-only preview flags, under the identical visibility filter (one shared SQL fragment) — not affected by `category`, `limit` or `cursor` | `dnd_ai.queries.world_explorer.count_world_entities` |
 | `GET /campaigns/{campaign_id}/world/relationships` | Relationship list | `.list_world_relationships` |
 | `GET /campaigns/{campaign_id}/world/locations/{location_id}` | Location detail (any `world.locations` row) + containment breadcrumbs | `.get_location_view` |
+| `GET /campaigns/{campaign_id}/world/locations/{location_id}/children` | Visible places directly inside a place (cursor-paged), or with `q` the visible places below it; rules in the note after this table | `.list_location_children` |
 | `GET /campaigns/{campaign_id}/world/religions/{religion_id}` | Religion detail | `.get_religion_view` |
 | `GET /campaigns/{campaign_id}/world/items/{item_instance_id}` | Item-instance detail | `.get_item_view` |
 | `GET /campaigns/{campaign_id}/world/events/{event_id}` | Historical-event detail | `.get_event_view` |
 | `GET /campaigns/{campaign_id}/knowledge` | Audience-filtered Knowledge-screen list, `?view=` | `dnd_ai.queries.knowledge_browse.list_knowledge` |
 | `GET /campaigns/{campaign_id}/knowledge/{knowledge_item_id}` | Existing single-item read — extended (backward-compatibly) for a character-private lookup and a public-lore fallback | `dnd_ai.queries.knowledge.get_knowledge_view` |
+
+**Location children** (`…/world/locations/{location_id}/children`; query `q` ≤ 200 characters, `limit` 1–100
+default 25, `cursor`, `include_noncanon`, `include_archived`):
+
+- The parent must pass the detail route's own test (in the caller's world and not denied in reference mode);
+  otherwise the same 404 as the detail route.
+- A listed place passes `/world/search`'s browse visibility. `include_noncanon` and `include_archived` are
+  honoured only for a `canon.edit` holder that also holds `world.canon.read_private`, and are otherwise
+  ignored.
+- Without `q`: the visible direct children. With `q`: the visible places reachable from the parent through
+  visible places only whose name or summary contains `q` (case-insensitive, `%` and `_` literal). Search
+  never enters a hidden place, so nothing below one is reached through it (hidden-chain truncation). It
+  follows at most 64 levels; a place deeper than that is not returned by search but stays reachable by
+  navigation.
+- Order `(lower(left(name, 200)), location_id)`, as in search, under the `world_location_children`
+  keyset. Hidden places are removed in SQL before the page limit, so a page is never short because of
+  them. A cursor only positions within the current filtered set.
+- Each item: `location_id`, `name`, `location_type_code`, `summary`, `canon_status`, `lifecycle_status`
+  and `path` (the visible places between the parent and the item, top to bottom; empty for a direct
+  child). The response is `{items[], next_cursor}`: no totals, no child counts and no "has children" flag.
+  A dungeon's areas are its children; an area's structural children stay on `/dungeon-areas/{id}`.
 
 Existing detail routes **reused** for their categories:
 `GET /campaigns/{id}/characters/{id}` (+`/inventory`) (deny-hardened),
@@ -502,7 +524,7 @@ for that item.
 
 | UI_DESIGN.md §5.4 category | Covered by |
 |---|---|
-| locations and dungeons | `/world/search?category=location` (all `world.locations` kinds incl. dungeon/dungeon_area) + `/world/locations/{id}`; dungeon-area *structural children* stay on `/dungeon-areas/{id}` |
+| locations and dungeons | `/world/search?category=location` (all `world.locations` kinds incl. dungeon/dungeon_area) + `/world/locations/{id}` + `/world/locations/{id}/children` (places below a place); dungeon-area *structural children* stay on `/dungeon-areas/{id}` |
 | NPCs and player characters | `/world/search?category=character` (bare `character`, `npc`, `player_character`) + existing `/characters/{id}` (+`/inventory`), now honoring the entity-targeted `campaign.view` deny so list and detail agree |
 | organizations, factions, governments, religions, cultures | `category=organization` (business/government/religious_organization/military_unit/political_faction) + `category=religion`; existing `/organizations/{id}` + `/world/religions/{id}`. ("cultures" — `world.cultures` was never built; no schema exists, so no endpoint — see §10.8.) |
 | items and artifacts | `category=item` + `/world/items/{id}` |

@@ -40,6 +40,7 @@ from dnd_ai.queries.entity_lifecycle import (
 from dnd_ai.queries.world_authority import resolve_world_authority
 from dnd_ai.queries.world_explorer import (
     ENTITY_SEARCH_KEYSET,
+    LOCATION_CHILDREN_KEYSET,
     RELATIONSHIP_KEYSET,
     WORLD_CATEGORY_TYPE_CODES,
     CharacterVisibility,
@@ -51,6 +52,7 @@ from dnd_ai.queries.world_explorer import (
     get_organization_detail_view,
     get_religion_view,
     item_instance_in_context,
+    list_location_children,
     list_world_relationships,
     search_world_entities,
 )
@@ -313,6 +315,22 @@ class LocationDetailResponse(BaseModel):
     canon_status: str
     lifecycle_status: str
     superseded_by: "SupersededByResponse | None" = None
+
+
+class LocationChildResponse(BaseModel):
+    location_id: uuid.UUID
+    name: str
+    location_type_code: str
+    summary: str | None
+    canon_status: str
+    lifecycle_status: str
+    # The visible places between the parent (excluded) and this place (excluded), top to bottom.
+    path: list[LocationCrumbResponse]
+
+
+class LocationChildrenResponse(BaseModel):
+    items: list[LocationChildResponse]
+    next_cursor: str | None
 
 
 class ReligionDetailResponse(BaseModel):
@@ -679,6 +697,83 @@ def get_location_endpoint(
         **_status_fields(
             get_entity_status_summary(connection, entity_id=location_id, hidden_entity_ids=denied)
         ),
+    )
+
+
+@router.get(
+    "/campaigns/{campaign_id}/world/locations/{location_id}/children",
+    response_model=LocationChildrenResponse,
+    status_code=200,
+)
+def list_location_children_endpoint(
+    location_id: uuid.UUID,
+    access: Annotated[AccessContext, Depends(require_campaign_capability(_VIEW_CAPABILITY))],
+    connection: Annotated[Connection, Depends(get_connection)],
+    q: Annotated[str | None, Query(max_length=_MAX_QUERY_LEN)] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    cursor: Annotated[str | None, Query()] = None,
+    include_noncanon: Annotated[bool, Query()] = False,
+    include_archived: Annotated[bool, Query()] = False,
+) -> LocationChildrenResponse:
+    """The visible places directly inside a place, a page at a time, or (with `q`) the visible places
+    reachable below it through visible places only whose name or summary contains `q`. The parent must
+    pass the location detail route's own test (same world, not denied in reference mode), otherwise
+    the same 404. A listed place passes `/world/search`'s browse visibility: grant denies plus the
+    lifecycle filter, with `include_noncanon` / `include_archived` honoured only for a `canon.edit`
+    holder that also holds `world.canon.read_private`. Hidden places are removed in SQL before
+    paging. No totals, no child counts and no "has children" flag."""
+    keyset = decode_typed_cursor(cursor, keyset=LOCATION_CHILDREN_KEYSET, fields=("str", "uuid"))
+    after_name = cast(str, keyset[0]) if keyset is not None else None
+    after_location_id = cast(uuid.UUID, keyset[1]) if keyset is not None else None
+
+    world_id = timeline_world_id(connection, access.timeline_id)
+    cards = list_location_children(
+        connection,
+        parent_location_id=location_id,
+        world_id=world_id,
+        parent_denied_entity_ids=_campaign_view_denied_entity_ids(access, connection),
+        hidden_entity_ids=_grant_denied_entity_ids(access)
+        | lifecycle_hidden_entity_ids(
+            connection,
+            world_id=world_id,
+            mode="browse",
+            viewer_user_id=access.user_id,
+            can_edit_canon=access.has_capability(_GM_CAPABILITY),
+            include_noncanon=include_noncanon,
+            include_archived=include_archived,
+        ),
+        query_text=q,
+        limit=limit,
+        after_name=after_name,
+        after_location_id=after_location_id,
+    )
+    page = build_page(
+        cards,
+        limit=limit,
+        keyset=LOCATION_CHILDREN_KEYSET,
+        cursor_key=lambda card: [card.name_sort, card.location_id],
+    )
+    return LocationChildrenResponse(
+        items=[
+            LocationChildResponse(
+                location_id=card.location_id,
+                name=card.name,
+                location_type_code=card.location_type_code,
+                summary=card.summary,
+                canon_status=card.canon_status,
+                lifecycle_status=card.lifecycle_status,
+                path=[
+                    LocationCrumbResponse(
+                        location_id=c.location_id,
+                        name=c.name,
+                        location_type_code=c.location_type_code,
+                    )
+                    for c in card.path
+                ],
+            )
+            for card in page.items
+        ],
+        next_cursor=page.next_cursor,
     )
 
 
