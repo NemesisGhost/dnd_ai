@@ -21,6 +21,7 @@ import { useAnnounce } from "./announcer"
 import { ConfirmDialog } from "./ConfirmDialog"
 import { FormDialog } from "./FormDialog"
 import type { FormDialogPrompt } from "./FormDialog"
+import { worldTimeReading } from "../../utils/worldTimeReading"
 import { WorldTimeForm } from "./WorldTimeForm"
 import "./authoring.css"
 
@@ -283,7 +284,7 @@ export function PickerRecordTime({ campaignId, calendars, items, held, onConfirm
                         <div className="authoring-message authoring-message--success" role="status">
                             <p>
                                 The time you submitted earlier was recorded
-                                {keptItem === undefined ? "" : `: ${keptItem.display}`}. What is in the form now has not
+                                {keptItem === undefined ? "" : `: ${worldTimeReading(keptItem, calendars)}`}. What is in the form now has not
                                 been recorded.
                             </p>
                         </div>

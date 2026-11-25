@@ -167,3 +167,56 @@ export function toWorldTimeBody(values: WorldTimeFormValues): CreateWorldTimeBod
         ...(values.label.trim() === "" ? {} : { label: values.label.trim() }),
     }
 }
+
+export type CalendarPrecision = "exact" | "partial" | "approximate"
+
+// What the server will derive for a calendar date (domain `calendar_precision`): approximate when the box
+// is checked, exact when a day is entered, otherwise partial. For display only; the saved point's own
+// precision is authoritative.
+export function calendarPrecision(values: WorldTimeFormValues): CalendarPrecision {
+    if (values.approximate) return "approximate"
+    return parseWhole(values.day) === null ? "partial" : "exact"
+}
+
+export const PRECISION_DESCRIPTIONS: Readonly<Record<CalendarPrecision, string>> = {
+    exact: "exact (a specific day)",
+    partial: "partial (year or month only)",
+    approximate: "approximate (marked approximate)",
+}
+
+// The values after the calendar was changed to `values.calendarId`: a month the new calendar lacks is
+// cleared with the day, hour and minute that depend on it, and a day the month lacks is cleared with its
+// hour and minute. Nothing is converted, and a value the new calendar has is kept. `note` says what was
+// cleared (null when nothing was).
+export function onCalendarChange(
+    values: WorldTimeFormValues,
+    calendars: Calendar[],
+): { values: WorldTimeFormValues; note: string | null } {
+    const calendar = calendars.find((c) => c.calendar_id === values.calendarId)
+    if (calendar === undefined) return { values, note: null }
+    const month = parseWhole(values.month)
+    if (typeof month === "number" && (month < 1 || month > calendar.months.length)) {
+        const cleared = ["Month"]
+        if (values.day.trim() !== "") cleared.push("day")
+        if (values.hour.trim() !== "") cleared.push("hour")
+        if (values.minute.trim() !== "") cleared.push("minute")
+        return {
+            values: { ...values, month: "", day: "", hour: "", minute: "" },
+            note: `${listNames(cleared)} ${cleared.length === 1 ? "was" : "were"} cleared: ${calendar.name} has no such month.`,
+        }
+    }
+    const day = parseWhole(values.day)
+    const selectedMonth = typeof month === "number" ? calendar.months[month - 1] : undefined
+    if (typeof day === "number" && selectedMonth !== undefined && day > selectedMonth.day_count) {
+        return {
+            values: { ...values, day: "", hour: "", minute: "" },
+            note: `Day, hour and minute were cleared: ${selectedMonth.name} in ${calendar.name} has no such day.`,
+        }
+    }
+    return { values, note: null }
+}
+
+function listNames(names: string[]): string {
+    if (names.length === 1) return names[0]!
+    return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+}

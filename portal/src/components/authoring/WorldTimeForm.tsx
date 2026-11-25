@@ -11,10 +11,14 @@ import type {
     WorldTimeReceipt,
 } from "../../types/worldTime"
 import {
+    PRECISION_DESCRIPTIONS,
+    calendarPrecision,
     emptyWorldTimeForm,
+    onCalendarChange,
     toWorldTimeBody,
     validateWorldTimeForm,
 } from "../../utils/worldTimeForm"
+import { worldTimeReading } from "../../utils/worldTimeReading"
 import type { WorldTimeFormValues, WorldTimeMode } from "../../utils/worldTimeForm"
 import { RadioGroupField, SelectField, TextField } from "./fields"
 import { AuthoringForm, ErrorSummary, FormActions, MutationStatusMessage } from "./feedback"
@@ -96,6 +100,8 @@ export function WorldTimeForm({
     const [attempt, setAttempt] = useState(0)
     // The earlier attempt was sent again first because its outcome was unknown (`holdUnresolved`).
     const [resent, setResent] = useState(false)
+    // What the last calendar change cleared (said once, politely), until the calendar changes again.
+    const [calendarNote, setCalendarNote] = useState<string | null>(null)
 
     const mutation = useAuthoringMutation<CreateWorldTimeBody, WorldTimeReceipt>({
         scopeKey: `create-world-time:${campaignId}`,
@@ -109,6 +115,7 @@ export function WorldTimeForm({
             if (!holdUnresolved || !differsFrom(body)) {
                 setValues(emptyWorldTimeForm(calendars))
                 setErrors([])
+                setCalendarNote(null)
             }
             return onCreated(receipt, { hasUnrecordedInput: () => !isEmptyNow() })
         },
@@ -140,6 +147,13 @@ export function WorldTimeForm({
         return (value: WorldTimeFormValues[K]) => setValues({ ...valuesRef.current, [key]: value })
     }
 
+    // A new calendar keeps only the values it has; what it lacks is cleared and said (never hidden).
+    function changeCalendar(calendarId: string) {
+        const next = onCalendarChange({ ...valuesRef.current, calendarId }, calendars)
+        setValues(next.values)
+        setCalendarNote(next.note)
+    }
+
     // Whether the form now holds something other than `sent` (the body of the attempt just confirmed).
     function differsFrom(sent: CreateWorldTimeBody): boolean {
         const now = valuesRef.current
@@ -158,7 +172,24 @@ export function WorldTimeForm({
         }
     }
 
-    const timeOptions = times.map((t) => ({ value: t.world_time_id, label: t.display }))
+    const timeOptions = times.map((t) => ({ value: t.world_time_id, label: worldTimeReading(t, calendars) }))
+    // How a valid calendar date will be recorded (a preview; the server derives the precision it saves).
+    const previewItem: WorldTimeItem | null =
+        values.mode === "calendar" && validateWorldTimeForm(values, calendars).length === 0
+            ? {
+                  world_time_id: "",
+                  calendar_id: values.calendarId,
+                  year: Number(values.year),
+                  month_number: values.month.trim() === "" ? null : Number(values.month),
+                  day: values.day.trim() === "" ? null : Number(values.day),
+                  hour: values.hour.trim() === "" ? null : Number(values.hour),
+                  minute: values.minute.trim() === "" ? null : Number(values.minute),
+                  label: values.label.trim() === "" ? null : values.label.trim(),
+                  precision: calendarPrecision(values),
+                  sort_key: 0,
+                  display: "",
+              }
+            : null
     const noBackendMessage =
         serverError !== null && serverErrors.length === 0 ? (
             <MutationStatusMessage
@@ -202,7 +233,7 @@ export function WorldTimeForm({
                         placeholder="Choose a calendar"
                         required
                         options={calendars.map((c) => ({ value: c.calendar_id, label: c.name }))}
-                        onChange={set("calendarId")}
+                        onChange={changeCalendar}
                         error={errorFor("time-calendar")}
                     />
                     <TextField
@@ -247,6 +278,7 @@ export function WorldTimeForm({
                         onChange={set("minute")}
                         error={errorFor("time-minute")}
                     />
+                    {calendarNote === null ? null : <p role="status">{calendarNote}</p>}
                     <label className="authoring-checkbox" htmlFor={fid("time-approximate")}>
                         <input
                             id={fid("time-approximate")}
@@ -263,6 +295,11 @@ export function WorldTimeForm({
                         onChange={set("label")}
                         error={errorFor("time-label")}
                     />
+                    {previewItem === null ? null : (
+                        <p className="authoring-note">
+                            {`Will be recorded as: ${worldTimeReading(previewItem, calendars)}. Precision: ${PRECISION_DESCRIPTIONS[calendarPrecision(values)]}.`}
+                        </p>
+                    )}
                 </>
             ) : (
                 <>

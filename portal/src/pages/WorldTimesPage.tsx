@@ -17,6 +17,7 @@ import { useKept } from "../hooks/useKeptResource"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
 import { usePageArrival } from "../hooks/usePageArrival"
 import type { CalendarListResponse, WorldTimeItem, WorldTimePage } from "../types/worldTime"
+import { worldTimeReading } from "../utils/worldTimeReading"
 import { ReadTerminal } from "../components/authoring/ReadState"
 import "../components/authoring/authoring.css"
 
@@ -158,28 +159,8 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
 
     const next = cursor === undefined ? page.next_cursor : cursor
     const shown = [...page.items, ...older]
-    const calendarById = new Map(calendars.calendars.map((calendar) => [calendar.calendar_id, calendar]))
 
-    function recordedTime(item: WorldTimeItem): string {
-        if (item.calendar_id === null || item.year === null) return item.display
-
-        const calendar = calendarById.get(item.calendar_id)
-        const year = calendar?.epoch_label
-            ? `Year ${item.year} (${calendar.epoch_label})`
-            : `Year ${item.year}`
-        const month = item.month_number === null
-            ? null
-            : calendar?.months.find((candidate) => candidate.month_number === item.month_number)?.name ?? null
-        const parts = [year]
-        if (month !== null) parts.push(`${month}${item.day === null ? "" : ` ${item.day}`}`)
-        if (item.hour !== null) {
-            parts.push(
-                `${String(item.hour).padStart(2, "0")}:${String(item.minute ?? 0).padStart(2, "0")}`,
-            )
-        }
-        const date = `${calendar?.name ?? "Calendar"}: ${parts.join(", ")}`
-        return item.label ? `${date} — ${item.label}` : date
-    }
+    const recordedTime = (item: WorldTimeItem): string => worldTimeReading(item, calendars.calendars, { pageFallback: true })
 
     const savedItem = lastId === null ? undefined : shown.find((item) => item.world_time_id === lastId)
 
