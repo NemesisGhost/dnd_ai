@@ -64,4 +64,14 @@ describe("worldTimeReading (E5, E15)", () => {
         expect(worldTimeReading(unknown, [])).toBe("Year 3 (Founding), Bloom 5, 14:30")
         expect(worldTimeReading(item({ calendar_id: "cal-gone" }), [PLAIN])).toBe("Year 3 (Founding), Bloom 5")
     })
+
+    it("gives the World times page its own unchanged fallback, and only when asked (C09-S01-1)", () => {
+        const unknown = item({ calendar_id: "cal-gone", month_number: 2, day: 5, hour: 14, minute: 30, label: "The feast" })
+        expect(worldTimeReading(unknown, [PLAIN], { pageFallback: true })).toBe("Calendar: Year 3, 14:30 — The feast")
+        expect(worldTimeReading(unknown, [PLAIN])).toBe("Year 3 (Founding), Bloom 5, 14:30")
+        // A loaded calendar reads the same either way.
+        const known = item({ month_number: 2, day: 5, hour: 9 })
+        expect(worldTimeReading(known, [COMMON], { pageFallback: true })).toBe(worldTimeReading(known, [COMMON]))
+        expect(worldTimeReading(item({ calendar_id: null, year: null, display: "Vael" }), [], { pageFallback: true })).toBe("Vael")
+    })
 })

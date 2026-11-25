@@ -160,7 +160,7 @@ function WorldTimesContent({ campaignId, page, calendars, refetch, pageStale }: 
     const next = cursor === undefined ? page.next_cursor : cursor
     const shown = [...page.items, ...older]
 
-    const recordedTime = (item: WorldTimeItem): string => worldTimeReading(item, calendars.calendars)
+    const recordedTime = (item: WorldTimeItem): string => worldTimeReading(item, calendars.calendars, { pageFallback: true })
 
     const savedItem = lastId === null ? undefined : shown.find((item) => item.world_time_id === lastId)
 
