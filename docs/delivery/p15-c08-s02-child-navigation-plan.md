@@ -2,7 +2,7 @@
 
 Owner register rows: [P15-C08](work-register.md#p15-c08), [P15-C08-S02](work-register.md#p15-c08-s02), [P15-C08-S02-T01](work-register.md#p15-c08-s02-t01). Source finding: [R16 — Location hierarchy](work-register.md#r16--location-hierarchy). API contract: [S01 plan §3.2](p15-c08-s01-location-children-plan.md#32-in-scope-t01). Checkpoint coordination: [S01 plan §12](p15-c08-s01-location-children-plan.md#12-c08-checkpoint-coordination).
 
-Prepared by Opus, 2026-11-24, against planning baseline `680629b0e9d8193112c1e6378e74fcd41323cac6` (see the S01 plan header). **T01 implemented at `25bc01912d8991ab8bc77603ed90f8163127237e`; independent review pending (§11.3).**
+Prepared by Opus, 2026-11-24, against planning baseline `680629b0e9d8193112c1e6378e74fcd41323cac6` (see the S01 plan header). **T01 independent review: CHANGES REQUIRED (§11.4).** One narrow focus-preservation case is reproduced; the bounded correction is to preserve a user's focus move before the deferred search-focus restoration runs. C08-S02-1 corrected at `041fe4d10b646a29bc8a54b6a545dc4274d42e98`, pending independent confirmation (§11.5).
 
 ## 1. Entry readiness
 
@@ -348,3 +348,55 @@ M2 fails N11 but not N12: with no rows loaded before a first-page refusal, keepi
 - This is not C08 checkpoint readiness (S01 plan §12.4).
 
 **Independent review range:** `041fef3ce9ae6e7171694b0f54c5f16cc42c05ff..25bc01912d8991ab8bc77603ed90f8163127237e`, plus the records commit that adds this section.
+
+### 11.4 Independent review (Codex, 2026-11-24)
+
+**Verdicts:** **T01/S02: CHANGES REQUIRED.** Finding C08-S02-1 below prevents the stated focus-preservation acceptance case. No other implementation finding was demonstrated. S01 and S03 review passes remain intact. This is a slice verdict, not C08 checkpoint acceptance. CI remains pending the checkpoint PR; browser/AX, human and owner acceptance remain pending.
+
+**Ancestry, scope and worktree.** Verified baseline `041fef3ce9ae6e7171694b0f54c5f16cc42c05ff` → implementation `25bc01912d8991ab8bc77603ed90f8163127237e` → records HEAD `9439ba7cfe8021219603cee8134b249769e980aa`; all are ancestors of HEAD, on `phase15/completion`. The worktree was clean before review. Implementation is limited to the listed 11 portal/API-type/test/docs files; no backend change. The records commit is limited to this plan and the register. S01's reviewed §3.2 endpoint contract and S03's §11.5–§11.6 correction record were checked against the implementation. S03's D/E tests and source remain unchanged.
+
+**C08-S02-1 — deferred search-focus restoration can override a user's move.** Track: keyboard interaction. In `LocationChildren.tsx` `apply()`, submitting a search immediately focuses the search field and schedules an unconditional `focusSoon(SEARCH_ID)`. If the user moves focus to another persistent control after the request starts but before that animation-frame callback runs, the callback steals focus back to Search while the read is still loading. A temporary held-read probe reproduced this: submit `q=cave`, wait until the request is observed, focus the Search button, keep the response unresolved, and observe that focus returns to the search input. The temporary test was removed and `LocationChildren.test.tsx` restored byte-for-byte (SHA-256 `C1710CBFF4286877E0A784D9C82CD3D18442C6CCE8B48DB83A7796E8967CE6B`; no source diff remains). **Rubric:** exposure **1** (reader/editor place search with a narrow deferred-focus timing window); impact **1** (bounded keyboard-navigation interruption); triggerability **1** (requires a deliberate focus move before the scheduled callback); detection/recovery **0** (immediately visible and easy to recover); blast radius **0** (one user/page). **Score 3, Low.** Readiness: blocks this slice because the explicit acceptance requires preserving a focus move made while loading. Bounded correction: return focus after page-arrival handling only while focus remains on the element displaced by that arrival (or the search field); skip the delayed focus if another connected control has gained focus. Add a held-read regression that moves focus before deferred restoration and verifies it remains there; retain N5's ordinary search-focus behavior.
+
+**Other contracts and evidence.** Direct-child reads and recursive search consume S01's reviewed response, cursor, visibility and hidden-chain rules. Query state uses `within` with replace, retains other query parameters and router state, and Back/reopen restores it. Result links and Location path links carry the existing task state; path entries come only from the server's visible/truncated crumbs. Tuple ownership and generation checks prevent stale query/place responses; paging uses the returned cursor and deduplicates against loaded IDs; failed reads preserve rows only for recoverable errors and Retry repeats the same read. Optional `SessionContext` is used only for 401 reload compatibility with provider-free tests. In production `AuthenticatedAppLayout` gates the route subtree and `RouteSessionProvider` remounts session scope on campaign changes; place and campaign are also part of the read tuple. The S01 API and S03 behavior are unchanged.
+
+Baseline evidence is limited: missing-panel/module failures show absence, not all later behavior. N15 passed at baseline; N16 truncation passed and its link assertion failed. M2's “keep rows on 403/404” fails N11 but not N12 because a first-page refusal has no prior rows; N11 is the discriminating loaded-rows case and N12 independently verifies first-page refusal and 401 reload. M3 fails N17 but not N13 because editor-to-reader remount clears component state; N17 exercises same-instance query change and asserts immediate row clearing, while N13 protects draft visibility across permission loss. Those results adequately protect the distinct behaviors; no additional issue is assigned for the planned mutation counts. The six provider-free detail-page failures in full run 1 were caused by the required session provider and were corrected to optional context. The `terminalStates` and `WorldsPage.filter` F8 failures remain undiagnosed.
+
+**Verification.** Exact §7.1 focused set: **10 files, 265 passed**, including the S03 workspace regressions. An extra broad focused selection passed **8 files, 230 tests**. Lint, `npx tsc -b` and build passed (build emitted the existing large-chunk advisory). Documentation and diff checks pass after these records are updated. The temporary focus probe failed as described and source was restored byte-exact. Keep full portal evidence separate: run 1 **8 failed, 5,960 passed** (six provider failures corrected; `terminalStates` and `WorldsPage.filter` F8 unproven); isolated **5 files, 75 passed**; run 2 **458 files, 5,968 passed**. No full suite was repeated, and no backend change or shard run occurred.
+
+**Remaining C08 integration requirements.** S02's review finding must be corrected and confirmed. The checkpoint still requires independent S01/S02/S03 passes, integrated A1–A16/N1–N19/D1–D13 acceptance on the integration head, a full portal run and full backend shard run on executable code, and CI on that exact head as stated in S01 plan §12.4. Browser/AX, human and owner acceptance remain separate. No consumer work was started and no checkpoint readiness or acceptance is claimed.
+
+### 11.5 Correction of C08-S02-1 (Sonnet, 2026-11-24)
+
+Luna's §11.4 review (CHANGES REQUIRED, score 3 Low) stays above as history. **C08-S02-1: corrected, pending independent confirmation. S02 is not passed.**
+
+**Baseline and commit.** Baseline `9439ba7cfe8021219603cee8134b249769e980aa` (equal to `origin/phase15/completion`; Luna's uncommitted plan and register edits were present and are preserved in the records commit). Correction commit `041fe4d10b646a29bc8a54b6a545dc4274d42e98`: `P15-C08-S02-T01: keep search focus where the person moved it before the deferred return (C08-S02-1)`. It changes only `LocationChildren.tsx` and `LocationChildren.test.tsx`. No page-arrival hook, API, S01 or S03 file changed.
+
+**Fix.** `apply()` still focuses the search field at once and then schedules one return of focus after the page's own arrival focus. That frame now:
+- runs only while focus is still on the search field, on no element, or on a page heading (the `<h1>` page arrival moved it to); focus on Search, a result, Show more or any other control is left alone;
+- belongs to the latest search: a newer search cancels the earlier frame and an owner counter makes an already-queued stale frame inert;
+- is cancelled when the panel unmounts or the place or campaign changes, and does nothing if the field is no longer connected.
+
+**Regressions written first (`LocationChildren.test.tsx`, "Search focus return").** The animation frames are captured by a `requestAnimationFrame` stub and run by the test, so the race is controlled (no sleep or timer). Against baseline `9439ba7cfe8021219603cee8134b249769e980aa` (22 cases in the file):
+- **Failed before the fix (3):** F1 (focus moved to Search, then a result, while the read is held and after it settles, is stolen back to the field); F3 (a frame from an earlier search steals focus after a newer search); F4 (a frame scheduled before leaving the place moves focus on the next place's page).
+- **Guard that passed at baseline (1):** F2 (focus still on the heading or the field returns to the field); N5 and N18 also keep the ordinary return, unchanged.
+- During test writing a first draft of F3 passed at baseline because it did not exercise a stale frame; it was rewritten to run the earlier frames explicitly and then failed as intended. The final F3 is the version recorded here.
+
+**Verification.**
+- New and S02 cases after the fix: 2 files, 25 passed. §7.1 focused set (10 files, including the S03 workspace regressions): **269 passed**.
+- `npm run lint`, `npx tsc -b` and `npm run build` pass. `uv run python scripts/check_documentation.py` and `git diff --check` pass.
+- **Full portal run 1:** 458 files, 1 failed, 5,971 passed. The failure was `OrganizationMembersReader.test.tsx` "does not show the previous organization's roster while the next one loads" (about 8 s); cause not diagnosed. **Isolated:** that file, 12 passed. **Full portal run 2 (rerun):** 458 files, **5,972 passed**, 0 failed.
+- No backend change, so no backend shard run. C08's integrated backend verification remains outstanding.
+
+**Mutations (source restored byte-exact; SHA-256 before = after `10b74666fab9…`).**
+
+| Probe | Mutation | Failed |
+|---|---|---|
+| MA | The frame focuses the field unconditionally (the reviewed behavior) | F1 |
+| MC | No cancellation and no owner check, so an earlier search's frame still runs | F3 |
+| MB | Owner check alone removed (cancellation kept) | none: cancellation already covers it, so the check is a second guard that no case isolates |
+
+F4 passes under MA because the pending frame is cancelled when the panel unmounts; no mutation removed that unmount cancellation alone, so F4 is a guard on the combined behavior, not a separately mutation-checked case.
+
+**Limitations.** jsdom with a stubbed animation frame: real browser timing, keyboard behavior, zoom and screen readers were not exercised, and a brief heading focus before the return is still possible in a real browser. CI is pending the checkpoint PR; none was opened. Not run: browser/AX, human review, owner acceptance, consumers. This does not establish C08 checkpoint readiness.
+
+**Luna's re-review range:** `9439ba7cfe8021219603cee8134b249769e980aa..041fe4d10b646a29bc8a54b6a545dc4274d42e98`, plus the records commit that adds this section.
