@@ -119,6 +119,18 @@ def _wait_for_expiry(engine: Engine, membership_role_id: uuid.UUID) -> None:
     raise AssertionError("the assignment never expired")
 
 
+def _expiry_margin(engine: Engine, membership_role_id: uuid.UUID) -> object:
+    """How long the assignment still had to run (negative once expired), by the database clock."""
+    with engine.connect() as connection:
+        return connection.execute(
+            text(
+                "SELECT expires_at - clock_timestamp() FROM security.membership_roles "
+                "WHERE membership_role_id = :r"
+            ),
+            {"r": membership_role_id},
+        ).scalar_one()
+
+
 def _run_while_waiting(
     client_factory: Callable[[uuid.UUID], TestClient],
     engine: Engine,
@@ -130,8 +142,22 @@ def _run_while_waiting(
     """Starts the o1 request, parks it on the row it needs, optionally lets o1's assignment
     expire, then releases it and returns the response."""
     hold = _Hold(engine, path.hold_sql, path.hold_params)
+    margin_at_start = _expiry_margin(engine, g.o1_role)
     request = _post(client_factory, g.o1_user_id, path.url, path.body)
-    _wait_until_waiting(engine, 1)
+    try:
+        _wait_until_waiting(engine, 1)
+    except AssertionError as failure:
+        # Say what the request did instead of waiting, so a failure shows whether it was refused
+        # before the lock wait (and why) or simply never reached it.
+        response = request.response
+        raise AssertionError(
+            f"{failure}; request finished={request.done}, "
+            f"status={getattr(response, 'status_code', None)}, "
+            f"elapsed={getattr(response, 'elapsed', None)}, "
+            f"body={getattr(response, 'text', None)!r}, error={request.error!r}, "
+            f"caller's expiry margin when the request started={margin_at_start}, "
+            f"now={_expiry_margin(engine, g.o1_role)}"
+        ) from failure
     if wait_for_caller_expiry:
         _wait_for_expiry(engine, g.o1_role)
     hold.release()
