@@ -2,7 +2,7 @@
 
 Owner register rows: [P15-C10](work-register.md#p15-c10), [P15-C10-S01](work-register.md#p15-c10-s01), [P15-C10-S01-T01](work-register.md#p15-c10-s01-t01). Source finding: [R13 — Quest-objective authoring](work-register.md#r13--quest-objective-authoring), part R13a only. Historical row: [review-2026-11-11.md](review-2026-11-11.md) Q02. Attached records outside this slice: [quest-kind](work-register.md#quest-kind) (R13b) and [quest-eval](work-register.md#quest-eval) (R13c). The companion slice is [S02](p15-c10-s02-quest-completion-plan.md). Checkpoint coordination for both slices is in [section 12](#12-c10-checkpoint-coordination).
 
-Prepared by Opus, 2026-11-25. **Plan only; T01 not started.**
+Prepared by Opus, 2026-11-25. **T01 implemented by Sonnet at `a053515`; review pending (section 11.3).**
 
 - Starting SHA: `deb2760a90c126f73b5c28e7efa8b0a24117bd3c`, the reviewed C09 PR head, with a clean worktree.
 - Plan-entry head: `341c0932d128ff49a0e29ff3e3a87ccdeab982a9`, the C09 merge (PR #78), reached by fast-forward. Its tree equals `deb2760`'s; no history was rewritten.
@@ -221,7 +221,44 @@ Plan commit through the T01 records commit. The reviewer re-runs section 7.1 foc
 
 ### 11.3 Implementation record
 
-Not started.
+Implemented by Sonnet at `a05351529bfa923a20a1d1c5451a21c444003b55` on top of baseline `ff9cf13ec2f803e16c5f3b6ebcb4b5ae8f549c9a` (HEAD and `origin/phase15/completion`, clean worktree at start). Portal and documentation only; no backend, API, schema, `useAuthoringMutation`, `ConfirmDialog`, page-guard or R13b/R13c change. No stop condition was reached. No existing test was changed (section 6.2: none needed).
+
+**Files.** `QuestEditor.tsx` (items 1-7), new `QuestEditor.objectiveActions.test.tsx` (18 tests covering A1-A17; A7 is two tests), `docs/reference/portal-behavior.md` (Quest workspace row). No CSS change.
+
+**Baseline run of the new file (before any implementation): 11 failed, 7 passed.**
+
+| Case | Baseline | Failing assertion or note |
+|---|---|---|
+| A1, A2, A3 | fail | `toHaveFocus` on the opener; focus stayed on the page heading |
+| A4 | fail | no dialog "Discard your changes?" |
+| A6 | fail | no group "Manage objective Find the map" |
+| A7 (only Remove offered) | fail | no group; the none-offered test passes |
+| A9 | fail | Remove not disabled |
+| A10, A11, A17 | fail | quest read once, expected twice (R6 pattern) |
+| A15 | fail | focus moved to `add-objective-s1` in a hidden section |
+| A5, A7 (none offered), A8, A12, A13, A14, A16 | guard pass | unchanged behaviour |
+
+A13's "no `canon.edit` mounts nothing" half is not repeated in the new file (the shared harness has no reader setup); it stays guarded by the existing "Quest workspace: players" cases in QuestWorkspace.test.tsx, which passed.
+
+**After implementation.** New file 18/18. Focused set (section 7.1): 7 files, 149 passed. Full `npm test`, **first run: 463 files, 6,008 passed, 0 failed; no rerun was needed.** `npm run lint`, `npx tsc -b`, `npm run build` (existing chunk-size notice only), `uv run python scripts/check_documentation.py` and `git diff --check` pass. One lint error in the first draft (state set inside an effect) was fixed before the commit by adjusting state during render; the tests passed before and after.
+
+**Probes M1-M8** (new file only; bytes restored and hash equal each time; file hash before and after `BEEEAFA1…CEF184`):
+
+| Probe | Failed cases |
+|---|---|
+| M1 | A1, A2, A3 |
+| M2 | A4 |
+| M3 | A6, A7 |
+| M4 | A10, A11 |
+| M5 | A11 |
+| M6 | A9 |
+| M7 | A15 |
+| M8 | A17 |
+
+**Implementation notes for the reviewer.**
+- Focus moves go through one `focusLater` helper. A late success moves focus only if the target passes `canTakeFocus` (a section no longer shown is `hidden`) and focus is still on the body, where it was when the action began, inside the section, or inside a dialog. The person's own answer to the two dialogs (Keep it, Keep editing) is treated as theirs and always returns focus.
+- The set-back after a lock refusal covers an open existing-objective panel only, as written in item 5; a stage panel's type field is not set back (it is disabled once the read shows the lock).
+- Not covered by jsdom: real browser focus, 320 px layout, AX/screen reader, zoom (pending separate events). CI: pending checkpoint PR.
 
 ## 12. C10 checkpoint coordination
 
