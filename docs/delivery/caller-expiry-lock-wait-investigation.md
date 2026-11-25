@@ -1,6 +1,6 @@
 # Caller expiry during a membership lock wait
 
-2026-11-25 · Reliability support for draft PR #78 · Independent review pending. The C08 work-register row owns the investigation obligation. [Work register](work-register.md#p15-c08)
+2026-11-25 · Reliability support merged with C09 through PR #78 (`341c093`) · Independent review: **PASS** (relayed by the owner, 2026-11-25; the review text is not in the repository or on the PR). The C08 and C09 work-register rows record the history. [C08 row](work-register.md#p15-c08) · [C09 row](work-register.md#p15-c09)
 
 ## Finding
 
@@ -102,4 +102,4 @@ The full-run failure was `test_api_organization_reader.py::test_a_faction_carrie
 
 ## Remaining limits
 
-Request startup, pool checkout and entry authorization precede the four-second window. The window still covers the fixture commit, holder acquisition and the request's remaining database work up to the intended wait. Several branches lock the caller's assignment before reaching that row, so an external update after observing that wait would itself block. The late-dispatch experiment demonstrates the failure the ordering assertion now reports. Existing bounded waits also require a responsive runner. These tests use the real database and HTTP routing with a fixture principal and in-process transport. The direct-command case retains its own timing setup. Historical runner attribution, independent review and the two portal investigations remain open.
+Request startup, pool checkout and entry authorization precede the four-second window. The window still covers the fixture commit, holder acquisition and the request's remaining database work up to the intended wait. Several branches lock the caller's assignment before reaching that row, so an external update after observing that wait would itself block. The late-dispatch experiment demonstrates the failure the ordering assertion now reports. Existing bounded waits also require a responsive runner. These tests use the real database and HTTP routing with a fixture principal and in-process transport. The direct-command case retains its own timing setup. The independent review accepted the four-second arrival bound as a stated limitation: a missed bound fails explicitly. Historical runner attribution and the two portal investigations remain open. The organization-reader raw-text substring collision is a separate investigation; it is not fixed here.
