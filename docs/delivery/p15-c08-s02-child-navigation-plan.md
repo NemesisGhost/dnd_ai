@@ -2,7 +2,7 @@
 
 Owner register rows: [P15-C08](work-register.md#p15-c08), [P15-C08-S02](work-register.md#p15-c08-s02), [P15-C08-S02-T01](work-register.md#p15-c08-s02-t01). Source finding: [R16 — Location hierarchy](work-register.md#r16--location-hierarchy). API contract: [S01 plan §3.2](p15-c08-s01-location-children-plan.md#32-in-scope-t01). Checkpoint coordination: [S01 plan §12](p15-c08-s01-location-children-plan.md#12-c08-checkpoint-coordination).
 
-Prepared by Opus, 2026-11-24, against planning baseline `680629b0e9d8193112c1e6378e74fcd41323cac6` (see the S01 plan header). **Plan only. T01 is not eligible until S01 is independently reviewed.**
+Prepared by Opus, 2026-11-24, against planning baseline `680629b0e9d8193112c1e6378e74fcd41323cac6` (see the S01 plan header). **T01 implemented at `25bc01912d8991ab8bc77603ed90f8163127237e`; independent review pending (§11.3).**
 
 ## 1. Entry readiness
 
@@ -299,4 +299,52 @@ T01 is a single commit. It requires S01's API on the branch, and C08 merges only
 
 ### 11.3 Implementation record
 
-*(Sonnet records here.)*
+**Baseline and eligibility.** Baseline `041fef3ce9ae6e7171694b0f54c5f16cc42c05ff` (the commit recording Luna's S03 confirmation), equal to `origin/phase15/completion`, worktree clean at the start of implementation. S01 has a recorded independent PASS WITH VERIFICATION LIMITS (its plan §11.4; implementation `1f0164481a32fce50f48375752f7d29eb2cee53f`, records `b45736e71aff0ab887fbdce121284863b3257c46`). S03's implementation (`67922e8ce46561240a72e3e25be3134a5c29b6fd`, correction `12ca7ec0616243a027755f070a201f2f5cea3cc5`) and its review records are present (S03 plan §11.4–§11.6). Implementation commit: `25bc01912d8991ab8bc77603ed90f8163127237e` (`P15-C08-S02-T01: browse and search places within a place and follow the containment path back`).
+
+**Revalidation (all matched; no stop condition).**
+- S01 route `GET /campaigns/{campaign_id}/world/locations/{location_id}/children` (`api/world_explorer.py`): `q` (max 200), `limit` 1–100 default 25, `cursor`, `include_noncanon`, `include_archived`; response `{items, next_cursor}`; item keys `location_id, name, location_type_code, summary, canon_status, lifecycle_status, path[{location_id, name, location_type_code}]`; 200, and the detail route's 404 for an unavailable parent. This matches S01 plan §3.2.
+- §2.1 against the code: the Location path was plain text (no links); `LocationPanels` had no `campaignId`; the reader and the workspace's `DetailsSection` were the two hosts; `useWorldDetail` maps 401/403/404 as described; `usePageArrival` is keyed by navigation in the reader.
+- S03's state in `WorldRecordWorkspace.test.tsx` was intact: D1–D10 and E1–E6 present, and `DungeonAreasSection.tsx` keeps the per-field edit counters. None of it was touched.
+
+**Test-first (baseline `041fef3c`, new files only; `LocationChildren.test.tsx` 18 cases, `App.locationChildren.test.tsx` 3).** 21 cases ran: **20 failed, 1 passed**.
+- Failed at baseline: N1, N2 (both variants), N3, N4 (both variants), N5, N6, N8, N9, N11, N12, N13, N14, N17 and N18 on "Unable to find role heading 'Places within The Vale'"; N7 and N19 on the missing "Places within" panel and results; N16 on the missing link "Hollowmere (Settlement)" in the Location path; N10 on `Cannot find module './LocationChildren'` (it imports the panel with a dynamic import, so that one case fails alone and the other cases run).
+- **Guards:** N15 passed at baseline (no panel, no children request) and stayed passing. N16's truncation assertions (the list holds only the server's crumbs, in order) ran before the link assertion and passed at baseline.
+- The cases drive the existing hosts (reader and workspace), so a baseline failure is a missing behavior, not a missing import. N10 is the exception, because it needs the same panel mounted across two places.
+
+**Implementation notes.**
+- New `LocationChildren.tsx` (panel and read ownership in one file), `fetchLocationChildren` in `api/world.ts`, `LocationChild`/`LocationChildrenPage` types, linked crumbs in `LocationPanels` (`campaignId` and `linkState` props), and both hosts render the panel except for `dungeon_area`.
+- Read ownership is one owner object per tuple; an answer is applied only if its owner is still current (the generation check), and a tuple change clears rows at once (rows shown are derived from the tuple).
+- A bug found while making the cases pass and fixed before the commit: the first-page answer was dropped when the snapshot still held the previous tuple's key.
+- The reader's `usePageArrival` moves focus to the heading on any replace of the address. The panel therefore returns focus to the search field with `focusSoon` after submit or clear (the existing hook is unchanged, as §3.3 requires). A short-lived heading focus before the return is possible in a real browser; it was not observed there.
+- The panel reads the session with the optional `SessionContext` instead of `useSession`, because `WorldLocationDetailPage.test.tsx` renders the reader without a `SessionProvider`. See run 1 below.
+
+**Existing tests changed (§6.2 only).** A `…/world/locations/<id>/children` handler returning `{ items: [], next_cursor: null }` in the setups of `WorldRecordWorkspace.test.tsx`, `App.worldNavigation.test.tsx` and `App.locationAuthoring.test.tsx`. No expectation changed. The §7.1 files already passed before these handlers (265 passed with the catch-all 404 or an unmocked read); `WorldRecordWorkspace.breadcrumb.test.tsx` and `.areaNow.test.tsx` were not changed because they have a catch-all 404 and no assertion touches the panel. No `LocationPanels` call in any test needed the new prop.
+
+**Runs (kept separate).**
+- Focused §7.1: 10 files, 265 passed (before the three handlers and again after).
+- **Full run 1:** 458 files, **8 failed**, 5,960 passed. Failures: `WorldLocationDetailPage.test.tsx` ×6, all with `useSession must be used inside SessionProvider`, which this change caused (the panel called `useSession`; fixed as above); `terminalStates.test.tsx` "gives a missing world and a hidden world the same output" (1); `WorldsPage.filter.test.tsx` F8 (1). The cause of the last two is not diagnosed; F8 also failed in the S03 first full run.
+- Isolated: those three files with the two new files, **5 files, 75 passed**.
+- **Full run 2:** 458 files, **5,968 passed**, 0 failed.
+- `npm run lint`, `npx tsc -b` and `npm run build` pass. `uv run python scripts/check_documentation.py` and `git diff --check` pass. No backend change, so no backend or shard run.
+
+**Probes (each source file restored byte-exact; SHA-256 before = after: `LocationChildren.tsx` `62527d23c9a2…`, `WorldLocationDetailPage.tsx` `df3ff880c8a2…`; run over both new files, 21 cases).**
+
+| Probe | Mutation | Failed |
+|---|---|---|
+| M1 | Drop the generation check | N9, N10 |
+| M2 | Keep rows on 403/404 | N11 |
+| M3 | Do not clear rows on a tuple change | N17 |
+| M4 | Show more ignores `next_cursor` | N3, N4, N8, N11, N14 |
+| M5 | Push instead of replace | N5 |
+| M6 | Reader sends the preview flags | N1, N2, N3, N4, N6–N9, N11–N14, N17–N19 |
+| M7 | No focus move after Show more | N4 |
+| M8 | Crumbs as text | N16, N19 |
+
+M2 fails N11 but not N12: with no rows loaded before a first-page refusal, keeping rows is not distinguishable. M3 fails N17 but not N13: an editor-to-reader change remounts the panel, so the cleared rows come from the new mount. Both are narrower than the plan's expectation and are reported as such.
+
+**Limitations and position.**
+- All of this is jsdom with a mock server: no real browser, keyboard, zoom or screen-reader behavior, including the focus return after submit.
+- No backend change and no backend shard run. CI is pending the checkpoint PR; none was opened. Not run: browser/AX, human review, owner acceptance, consumers.
+- This is not C08 checkpoint readiness (S01 plan §12.4).
+
+**Independent review range:** `041fef3ce9ae6e7171694b0f54c5f16cc42c05ff..25bc01912d8991ab8bc77603ed90f8163127237e`, plus the records commit that adds this section.
