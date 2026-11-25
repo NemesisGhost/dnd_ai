@@ -113,6 +113,8 @@ function setup(options: Options = {}) {
     })
     server.on("GET", options.detailPath ?? `/campaigns/${C}/world/locations/${entityId}`, resolve(options.detail ?? locationDetail()))
     server.on("GET", `/campaigns/${C}/entities/${entityId}/lifecycle`, resolve(options.lifecycle ?? lifecycle()))
+    // The "Places within" panel's read of the place's children: none here (P15-C08-S02).
+    server.on("GET", /\/world\/locations\/[^/]+\/children/, { body: { items: [], next_cursor: null } })
     server.on(
         "GET",
         `/campaigns/${C}/authoring/locations/${entityId}`,

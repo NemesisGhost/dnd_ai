@@ -1,3 +1,7 @@
+import { Link } from "react-router"
+import { LocationChildren } from "../components/world/LocationChildren"
+import { worldRecordPath } from "../components/world/worldPaths"
+import { useWorldReturnState } from "../hooks/useWorldBackPath"
 import { WorldRecordBack } from "../components/world/WorldRecordBack"
 import { DetailPanel, PanelFrame } from "../components/DetailPanel"
 import { AuthoringEditLink } from "../components/AuthoringEditLink"
@@ -23,10 +27,15 @@ function describeBoolean(value: boolean | null): string {
 // breadcrumb names for containment rather than the raw parent_location_id — that field is never
 // rendered. `omitCurrentState` is for a host that shows the current state itself.
 export function LocationPanels({
+    campaignId,
     location,
+    linkState,
     omitCurrentState = false,
 }: {
+    campaignId: string
     location: LocationDetail
+    // The state the ancestors' pages are opened with: the page's own task, as its other links carry it.
+    linkState?: object
     omitCurrentState?: boolean
 }) {
     return (
@@ -75,8 +84,9 @@ export function LocationPanels({
                 <ol className="world-detail__breadcrumbs" aria-label="Location path">
                     {location.breadcrumbs.map((crumb) => (
                         <li key={crumb.location_id}>
-                            {crumb.name} (
-                            {humanizeCode(crumb.location_type_code)})
+                            <Link to={worldRecordPath(campaignId, "location", crumb.location_id)} state={linkState}>
+                                {crumb.name} ({humanizeCode(crumb.location_type_code)})
+                            </Link>
                         </li>
                     ))}
                 </ol>
@@ -133,6 +143,7 @@ export function WorldLocationDetailPage({
     location,
 }: WorldLocationDetailPageProps) {
     const headingRef = usePageArrival(true)
+    const returnState = useWorldReturnState()
     return (
         <section aria-labelledby="world-location-heading">
             <WorldRecordBack campaignId={campaignId} current={location.name} />
@@ -156,7 +167,15 @@ export function WorldLocationDetailPage({
                 <p className="world-detail__summary">{location.summary}</p>
             )}
 
-            <LocationPanels location={location} />
+            <LocationPanels campaignId={campaignId} location={location} linkState={returnState} />
+            {location.location_type_code !== "dungeon_area" ? (
+                <LocationChildren
+                    campaignId={campaignId}
+                    location={location}
+                    includeHidden={false}
+                    linkState={returnState}
+                />
+            ) : null}
         </section>
     )
 }

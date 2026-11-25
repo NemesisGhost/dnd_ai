@@ -56,6 +56,7 @@ import { AreaContentsSection } from "./AreaContentsSection"
 import { AreaNowSection } from "./AreaNowSection"
 import { DungeonAreasReview } from "./DungeonAreasReview"
 import { DungeonAreasSection } from "./DungeonAreasSection"
+import { LocationChildren } from "./LocationChildren"
 import { DungeonConnectionsSection } from "./DungeonConnectionsSection"
 import { locationEditPath, locationNoun, locationViewPath } from "./placePaths"
 import { WorldPublicationSection } from "./WorldPublication"
@@ -563,6 +564,7 @@ function Workspace({
                         data={data}
                         changes={changes}
                         editState={editState}
+                        linkState={linkState}
                     />
                 )
             case "areas":
@@ -735,6 +737,7 @@ function Workspace({
                     data={data}
                     changes={changes}
                     editState={editState}
+                    linkState={linkState}
                 />
             </section>
         )
@@ -867,6 +870,7 @@ function DetailsSection({
     data,
     changes,
     editState,
+    linkState,
 }: {
     campaignId: string
     category: WorkspaceCategory
@@ -874,6 +878,7 @@ function DetailsSection({
     data: WorkspaceDetail
     changes: number
     editState: object
+    linkState: object | undefined
 }) {
     const root = `/app/${encodeURIComponent(campaignId)}`
     switch (category) {
@@ -881,7 +886,20 @@ function DetailsSection({
             const location = data as LocationDetail
             return (
                 <>
-                    <LocationPanels location={location} omitCurrentState={kind === "area"} />
+                    <LocationPanels
+                        campaignId={campaignId}
+                        linkState={linkState}
+                        location={location}
+                        omitCurrentState={kind === "area"}
+                    />
+                    {location.location_type_code !== "dungeon_area" ? (
+                        <LocationChildren
+                            campaignId={campaignId}
+                            location={location}
+                            includeHidden
+                            linkState={linkState}
+                        />
+                    ) : null}
                     <AuthoringEditLink
                         campaignId={campaignId}
                         noun={locationNoun(location)}

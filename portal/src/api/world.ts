@@ -1,6 +1,7 @@
 import type {
     EventDetail,
     ItemDetail,
+    LocationChildrenPage,
     LocationDetail,
     OrganizationDetail,
     ReligionDetail,
@@ -165,6 +166,33 @@ export async function fetchLocationDetail(
     return fetchWorldDetail<LocationDetail>(
         `/api/campaigns/${encodeURIComponent(campaignId)}` +
             `/world/locations/${encodeURIComponent(locationId)}`,
+        signal,
+    )
+}
+
+// The places inside a place, a page at a time (25), or with `q` the places below it whose name or
+// summary matches. `includeHidden` asks for drafts and archived places, as World search does; the server
+// decides whether to honor it.
+export async function fetchLocationChildren(
+    campaignId: string,
+    locationId: string,
+    parameters: { q: string; cursor: string | null; includeHidden: boolean },
+    signal?: AbortSignal,
+): Promise<LocationChildrenPage> {
+    const searchParameters = new URLSearchParams({ limit: "25" })
+    if (parameters.q !== "") {
+        searchParameters.set("q", parameters.q)
+    }
+    if (parameters.cursor !== null) {
+        searchParameters.set("cursor", parameters.cursor)
+    }
+    if (parameters.includeHidden) {
+        searchParameters.set("include_noncanon", "true")
+        searchParameters.set("include_archived", "true")
+    }
+    return fetchWorldDetail<LocationChildrenPage>(
+        `/api/campaigns/${encodeURIComponent(campaignId)}` +
+            `/world/locations/${encodeURIComponent(locationId)}/children?${searchParameters.toString()}`,
         signal,
     )
 }

@@ -107,6 +107,8 @@ beforeEach(() => {
   server.on("GET", "/campaigns/mundivita/authoring/locations/l1", { body: AUTHORING_VIEW })
   server.on("GET", /parent-options/, { body: { items: [], next_cursor: null } })
   server.on("GET", "/campaigns/mundivita/world/locations/l1", { body: LOCATION_DETAIL })
+  // The "Places within" panel's read of the place's children: none here (P15-C08-S02).
+  server.on("GET", /\/world\/locations\/[^/]+\/children/, { body: { items: [], next_cursor: null } })
   server.on("GET", "/campaigns/mundivita/entities/l1/lifecycle", {
     body: {
       entity_id: "l1",
