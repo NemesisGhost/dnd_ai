@@ -1086,6 +1086,147 @@ describe("World record workspace: a dungeon", () => {
         expect(server.callsTo("POST", AREAS)).toHaveLength(0)
     })
 
+    // --- input typed while the create is pending (C08-S03-1) ---------------------------------------
+    // The create is held until `release()`; the fields stay editable meanwhile, and a successful
+    // settlement clears only what was not edited since the submission.
+    const heldCreate = (server: MockServer) => {
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => {
+            release = resolve
+        })
+        server.on("POST", AREAS, async () => {
+            await gate
+            return { status: 201, body: { dungeon_area_id: "n", changed: true } }
+        })
+        return release
+    }
+    const settled = async () => {
+        await waitFor(() =>
+            expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Area Shrine of Ash added as a draft"),
+        )
+        // Let any deferred focus run.
+        await new Promise((resolve) => setTimeout(resolve, 60))
+    }
+    const SUBMITTED = {
+        name: " Shrine of Ash ",
+        summary: "  A hall of ash.  ",
+        kind: " chamber ",
+        size: " 30 ft by 40 ft ",
+        environment: "  Smoke, and a cold draught.  ",
+    } as const
+    const field = (form: HTMLElement, which: keyof typeof FIELDS) =>
+        within(form).getByRole("textbox", { name: FIELDS[which] })
+
+    it("E1: Environment typed after submitting survives success, keeps focus, and the rest clear", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        const release = heldCreate(server)
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        fill(form, "environment", "Newer note typed while pending")
+        field(form, "environment").focus()
+        release()
+        await settled()
+        expect(field(form, "environment")).toHaveValue("Newer note typed while pending")
+        expect(field(form, "environment")).toHaveFocus()
+        for (const untouched of ["name", "summary", "kind", "size"] as const) {
+            expect(field(form, untouched)).toHaveValue("")
+        }
+        // The server received only the submitted snapshot, once.
+        expect(server.callsTo("POST", AREAS)).toHaveLength(1)
+        expect(server.callsTo("POST", AREAS)[0]!.body).toEqual(FULL_BODY)
+    })
+
+    for (const edited of ["name", "summary", "kind", "size"] as const) {
+        it(`E2: ${edited} typed after submitting survives success while the other fields clear`, async () => {
+            const { server } = dungeon()
+            const form = await addForm()
+            fillAll(form)
+            const release = heldCreate(server)
+            submitAdd(form)
+            await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+            fill(form, edited, `Newer ${edited}`)
+            release()
+            await settled()
+            for (const which of ["name", "summary", "kind", "size", "environment"] as const) {
+                expect(field(form, which)).toHaveValue(which === edited ? `Newer ${edited}` : "")
+            }
+            expect(server.callsTo("POST", AREAS)[0]!.body).toEqual(FULL_BODY)
+        })
+    }
+
+    it("E3: a field edited away and back to the submitted value, or by whitespace only, still counts as newer input", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        const release = heldCreate(server)
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        fill(form, "summary", "Something else")
+        fill(form, "summary", SUBMITTED.summary)
+        fill(form, "size", `${SUBMITTED.size} `)
+        release()
+        await settled()
+        expect(field(form, "summary")).toHaveValue(SUBMITTED.summary)
+        expect(field(form, "size")).toHaveValue(`${SUBMITTED.size} `)
+        for (const untouched of ["name", "kind", "environment"] as const) {
+            expect(field(form, untouched)).toHaveValue("")
+        }
+    })
+
+    it("E4: with nothing typed after submitting, every field clears and focus returns to Area name", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        const release = heldCreate(server)
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        release()
+        await settled()
+        for (const which of Object.keys(FIELDS) as (keyof typeof FIELDS)[]) {
+            expect(field(form, which)).toHaveValue("")
+        }
+        await waitFor(() => expect(field(form, "name")).toHaveFocus())
+    })
+
+    it("E5: input typed while an unknown outcome is retried survives the retry's success", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        server.on("POST", AREAS, { networkError: true })
+        submitAdd(form)
+        const retry = await screen.findByRole("button", { name: "Retry" })
+        fill(form, "environment", "Typed before retrying")
+        server.on("POST", AREAS, { status: 201, body: { dungeon_area_id: "n", changed: true } })
+        fireEvent.click(retry)
+        await settled()
+        const [first, second] = server.callsTo("POST", AREAS)
+        expect(second!.body).toEqual(first!.body)
+        expect(second!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+        expect(field(form, "environment")).toHaveValue("Typed before retrying")
+        for (const untouched of ["name", "summary", "kind", "size"] as const) {
+            expect(field(form, untouched)).toHaveValue("")
+        }
+    })
+
+    it("E6: a refusal after newer input keeps every value, the newer one included", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        server.on("POST", AREAS, async () => {
+            await new Promise((resolve) => setTimeout(resolve, 30))
+            return REFUSED_422
+        })
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        fill(form, "environment", "Newer note")
+        await waitFor(() => expect(within(form).getByRole("button", { name: "Add area" })).toBeEnabled())
+        expect(field(form, "name")).toHaveValue(SUBMITTED.name)
+        expect(field(form, "summary")).toHaveValue(SUBMITTED.summary)
+        expect(field(form, "environment")).toHaveValue("Newer note")
+    })
+
     it("replaces the old Structure address with Areas, keeping the rest of the address and the state", async () => {
         const { router } = dungeon(
             {},
