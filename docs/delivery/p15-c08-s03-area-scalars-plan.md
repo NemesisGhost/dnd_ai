@@ -2,7 +2,7 @@
 
 Owner register rows: [P15-C08](work-register.md#p15-c08), [P15-C08-S03](work-register.md#p15-c08-s03), [P15-C08-S03-T01](work-register.md#p15-c08-s03-t01). Source finding: [R09 — Smaller layout, list and form repairs](work-register.md#r09--smaller-layout-list-and-form-repairs): "Add area summary/dimensions/environment using existing validation and commands." Checkpoint coordination: [S01 plan §12](p15-c08-s01-location-children-plan.md#12-c08-checkpoint-coordination).
 
-Prepared by Opus, 2026-11-24, against planning baseline `680629b0e9d8193112c1e6378e74fcd41323cac6` (see the S01 plan header). **T01 independent review: CHANGES REQUIRED (§11.4).** C08-S03-1 corrected at `12ca7ec0616243a027755f070a201f2f5cea3cc5`, pending independent confirmation (§11.5). A pending-input loss is reproduced; correction is limited to success settlement for fields edited after submission.
+Prepared by Opus, 2026-11-24, against planning baseline `680629b0e9d8193112c1e6378e74fcd41323cac6` (see the S01 plan header). **T01 independent review: PASS WITH VERIFICATION LIMITS (§11.6).** The original CHANGES REQUIRED disposition and C08-S03-1 score remain in §11.4; §11.6 confirms the bounded correction.
 
 ## 1. Entry readiness
 
@@ -266,6 +266,20 @@ Both first-run failures took about 8 seconds, but their causes are **not diagnos
 The first probe run aborted on a console-encoding error in the probe script (the file was restored by its `finally` block and compared equal to the backup); the table gives the rerun after the script was fixed.
 
 **CI position.** Pending the checkpoint PR; none opened. Not run: browser/AX, human review, owner acceptance, S02, consumers.
+
+### 11.6 Independent confirmation of C08-S03-1 (Codex, 2026-11-24)
+
+**Verdicts:** **C08-S03-1: CONFIRMED CORRECTED. T01/S03: PASS WITH VERIFICATION LIMITS.** The original §11.4 CHANGES REQUIRED verdict and score 6 Medium remain historical. No new implementation finding was demonstrated. This review does not grant checkpoint acceptance. CI remains pending the checkpoint PR; browser/AX, human and owner acceptance remain pending.
+
+**Ancestry, scope and worktree.** Verified baseline `f327c13a1963d6e327d443e26168db70e05827af` → correction `12ca7ec0616243a027755f070a201f2f5cea3cc5` → records HEAD `9037f7f750c0d028c2c0d82bcc6376c6a46c1fc7` on `phase15/completion`; all are ancestors of HEAD, which matches `origin/phase15/completion`. The worktree was clean before these review-record edits. Correction changes only `DungeonAreasSection.tsx` and `WorldRecordWorkspace.test.tsx`; no backend, API, shared hook, or other production boundary changed. The records commit changes this plan and the maintained register.
+
+**Finding disposition and behavior.** The per-field edit counters advance on every input change and the submission snapshots them. Successful settlement clears each field only if its counter still matches; whitespace changes and edits away and back therefore remain newer input even if the value is equivalent. E1/E2 cover newer Environment, Name, Summary, Kind and Size; the untouched fields clear. E3 covers whitespace and away-and-back edits. E4 verifies untouched fields clear and focus returns to Area name. E1 verifies focus remains in a focused field holding newer input. E5 verifies a retry preserves the newer Environment value and repeats the original body and `Idempotency-Key`. Because `useDungeonCommand` disables Add while pending and Retry invokes the existing `useAuthoringMutation` retry path, the original `after` callback retains its submission snapshot while the edit counters continue advancing. E6 verifies refusal preserves input. Existing D4/D6/D8/D10 remain unchanged, retaining success, refusal/retry and Done/reopen behavior. Announcements and submitted body are unchanged. Account/world isolation remains in the existing hook; no hook or scope-key change occurred.
+
+**Test-first and mutation evidence.** E1, E2's four field variants, E3 and E5 failed on the unfixed source because the expected newer input was empty after success (seven failures). E4 and E6 passed before the fix as guards. Both recorded correction mutations were inspected: MA (unconditional clearing) fails E1/E2/E3/E5; MB (always refocus Area name) fails E1. The correction record reports exact byte restoration with equal before/after SHA-256 `4d93d0acb986...`; no mutation was made during this confirmation.
+
+**Current verification.** Re-ran §7.1 focused portal tests: **4 files, 169 passed**. Dungeon-authoring backend guards: **18 passed**. Documentation checker and diff checks pass after this record update. No full portal suite or backend shard was rerun. Keep full portal evidence as separate events: original run 1 **5,936 passed, 2 failed**; the two failing files later passed together in isolation (**44 tests**); original clean rerun **456 files, 5,938 passed**; correction's clean run **456 files, 5,947 passed**. The two initial failure causes remain unproven. No backend shard run was performed for S03. CI remains pending the checkpoint PR.
+
+**Limits and coordination.** This confirmation is focused on the C08-S03-1 correction; it is not browser/AX, human or owner acceptance and does not replace exact-integration-head C08 criteria in S01 plan §12.4. S02 and consumers were not started.
 
 ### 11.4 Independent review (Codex, 2026-11-24)
 
