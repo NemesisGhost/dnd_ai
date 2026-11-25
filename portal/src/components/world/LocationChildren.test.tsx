@@ -447,3 +447,131 @@ describe("Places within a place", () => {
         await waitFor(() => expect(document.activeElement).toBe(searchbox("The Vale")))
     })
 })
+
+// C08-S02-1: the search field's deferred focus return must not override a move the person made. The
+// animation frames are captured and run by the test, so the race is controlled, not slept through.
+describe("Search focus return", () => {
+    function holdFrames() {
+        const queue: Array<{ id: number; run: FrameRequestCallback; live: boolean }> = []
+        const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation((run) => {
+            queue.push({ id: queue.length + 1, run, live: true })
+            return queue.length
+        })
+        const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+            const frame = queue.find((f) => f.id === id)
+            if (frame !== undefined) frame.live = false
+        })
+        return {
+            queue,
+            // Runs the frames from `from` on that were not cancelled.
+            run: (from = 0) => {
+                for (const frame of queue.slice(from)) {
+                    if (frame.live) {
+                        frame.live = false
+                        act(() => frame.run(0))
+                    }
+                }
+            },
+            release: () => {
+                request.mockRestore()
+                cancel.mockRestore()
+            },
+        }
+    }
+
+    async function opened(options: Parameters<typeof setup>[0] = {}) {
+        const ctx = setup(options)
+        ctx.server.on("GET", childPath("l1"), page([child("a", "Alder")]))
+        await panelOpened("The Vale")
+        await waitFor(() => expect(namesIn("The Vale")).toEqual(["Alder"]))
+        return ctx
+    }
+
+    it("F1: focus moved to Search (or a result) before the deferred return stays there while loading and after the answer", async () => {
+        const { server } = await opened()
+        const held = deferred()
+        server.on("GET", childPath("l1", "&q=cave"), () => held.promise)
+        const frames = holdFrames()
+        try {
+            search("The Vale", "cave")
+            await waitFor(() => expect(kidPaths(server)).toContain(childPath("l1", "&q=cave")))
+            const button = screen.getByRole("button", { name: "Search" })
+            button.focus()
+            frames.run()
+            expect(document.activeElement).toBe(button)
+            await act(async () => {
+                held.resolve(page([child("m", "Cave Mouth")]))
+            })
+            await waitFor(() => expect(namesIn("The Vale")).toEqual(["Cave Mouth"]))
+            frames.run()
+            expect(document.activeElement).toBe(button)
+            const link = screen.getByRole("link", { name: "Cave Mouth" })
+            link.focus()
+            frames.run()
+            expect(document.activeElement).toBe(link)
+        } finally {
+            frames.release()
+        }
+    })
+
+    it("F2: with focus still on the search field or on the heading page arrival moved it to, the field gets it back", async () => {
+        const { server } = await opened()
+        server.on("GET", childPath("l1", "&q=cave"), page([child("m", "Cave Mouth")]))
+        const frames = holdFrames()
+        try {
+            search("The Vale", "cave")
+            await waitFor(() => expect(namesIn("The Vale")).toEqual(["Cave Mouth"]))
+            screen.getByRole("heading", { level: 1, name: "The Vale" }).focus()
+            frames.run()
+            expect(document.activeElement).toBe(searchbox("The Vale"))
+            searchbox("The Vale").focus()
+            frames.run()
+            expect(document.activeElement).toBe(searchbox("The Vale"))
+        } finally {
+            frames.release()
+        }
+    })
+
+    it("F3: a return scheduled by an earlier search does nothing once a newer search owns the focus", async () => {
+        const { server } = await opened()
+        server.on("GET", childPath("l1", "&q=a"), page([child("x", "Alpha")]))
+        server.on("GET", childPath("l1", "&q=b"), page([child("y", "Bravo")]))
+        const frames = holdFrames()
+        try {
+            search("The Vale", "a")
+            await waitFor(() => expect(namesIn("The Vale")).toEqual(["Alpha"]))
+            const first = frames.queue.length
+            search("The Vale", "b")
+            await waitFor(() => expect(namesIn("The Vale")).toEqual(["Bravo"]))
+            screen.getByRole("heading", { level: 1, name: "The Vale" }).focus()
+            // The earlier search's frames (before `first`) are stale: cancelled or inert.
+            for (const frame of frames.queue.slice(0, first)) {
+                if (frame.live) act(() => frame.run(0))
+            }
+            expect(document.activeElement).not.toBe(searchbox("The Vale"))
+            frames.run(first)
+            expect(document.activeElement).toBe(searchbox("The Vale"))
+        } finally {
+            frames.release()
+        }
+    })
+
+    it("F4: a return scheduled before leaving the place does not move focus on the next place's page", async () => {
+        const { server, router } = await opened({ places: { l1: detail("l1", "The Vale"), l2: detail("l2", "The Fen") } })
+        server.on("GET", childPath("l1", "&q=cave"), page([child("m", "Cave Mouth")]))
+        server.on("GET", childPath("l2"), page([child("f", "Fen Hut")]))
+        const frames = holdFrames()
+        try {
+            search("The Vale", "cave")
+            await waitFor(() => expect(namesIn("The Vale")).toEqual(["Cave Mouth"]))
+            await act(() => router.navigate(`/app/${C}/world/location/l2`))
+            await waitFor(() => expect(namesIn("The Fen")).toEqual(["Fen Hut"]))
+            const button = screen.getByRole("button", { name: "Search" })
+            button.focus()
+            frames.run()
+            expect(document.activeElement).toBe(button)
+        } finally {
+            frames.release()
+        }
+    })
+})

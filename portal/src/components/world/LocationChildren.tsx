@@ -6,7 +6,6 @@ import { SessionContext } from "../../context/SessionContext"
 import type { LocationChild } from "../../types/world"
 import { humanizeCode } from "../../utils/humanize"
 import { LifecycleBadge } from "../authoring/feedback"
-import { focusSoon } from "../authoring/focusSoon"
 import { DetailPanel } from "../DetailPanel"
 import { plural } from "./areaText"
 import { worldRecordPath } from "./worldPaths"
@@ -165,6 +164,16 @@ export function LocationChildren({ campaignId, location, includeHidden, linkStat
     const onAppended = useCallback((firstNewId: string | null) => {
         focusTarget.current = firstNewId
     }, [])
+    // The one pending return of focus to the search field, owned by the latest search.
+    const returnFrame = useRef<{ id: number; owner: number } | null>(null)
+    const returnOwner = useRef(0)
+    const cancelReturn = useCallback(() => {
+        returnOwner.current += 1
+        if (returnFrame.current !== null) cancelAnimationFrame(returnFrame.current.id)
+        returnFrame.current = null
+    }, [])
+    // Leaving the place (or the page) ends a pending return.
+    useEffect(() => cancelReturn, [cancelReturn, campaignId, location.location_id])
     const { current, showMore, retry } = usePlacesWithin(campaignId, location.location_id, within, includeHidden, onAppended)
 
     // After Show more, focus goes to the first place it added, or to the status line if it added none.
@@ -182,9 +191,23 @@ export function LocationChildren({ campaignId, location, includeHidden, linkStat
         else params.set(WITHIN_PARAM, text)
         const search = params.toString()
         void navigate({ pathname: address.pathname, search: search === "" ? "" : `?${search}` }, { replace: true, state: address.state })
-        // The page's own arrival focus may follow a change of address, so the field is returned to after it.
+        // The page's own arrival focus may follow a change of address, so the field is returned to after it,
+        // but only while focus is still where that arrival left it: on the field, nowhere, or on the page
+        // heading it moved focus to. A control the person has since moved to keeps it.
         inputRef.current?.focus()
-        focusSoon(SEARCH_ID)
+        cancelReturn()
+        const owner = returnOwner.current
+        returnFrame.current = {
+            owner,
+            id: requestAnimationFrame(() => {
+                if (returnOwner.current !== owner) return
+                returnFrame.current = null
+                const input = inputRef.current
+                const active = document.activeElement
+                if (input === null || !input.isConnected) return
+                if (active === null || active === document.body || active === input || active.tagName === "H1") input.focus()
+            }),
+        }
     }
 
     function submit(event: FormEvent) {
