@@ -2,7 +2,7 @@
 
 Owner register rows: [P15-C08](work-register.md#p15-c08), [P15-C08-S03](work-register.md#p15-c08-s03), [P15-C08-S03-T01](work-register.md#p15-c08-s03-t01). Source finding: [R09 — Smaller layout, list and form repairs](work-register.md#r09--smaller-layout-list-and-form-repairs): "Add area summary/dimensions/environment using existing validation and commands." Checkpoint coordination: [S01 plan §12](p15-c08-s01-location-children-plan.md#12-c08-checkpoint-coordination).
 
-Prepared by Opus, 2026-11-24, against planning baseline `680629b0e9d8193112c1e6378e74fcd41323cac6` (see the S01 plan header). **Plan only; T01 not started.**
+Prepared by Opus, 2026-11-24, against planning baseline `680629b0e9d8193112c1e6378e74fcd41323cac6` (see the S01 plan header). **T01 independent review: CHANGES REQUIRED (§11.4).** C08-S03-1 corrected at `12ca7ec0616243a027755f070a201f2f5cea3cc5`, pending independent confirmation (§11.5). A pending-input loss is reproduced; correction is limited to success settlement for fields edited after submission.
 
 ## 1. Entry readiness
 
@@ -264,5 +264,46 @@ Both first-run failures took about 8 seconds, but their causes are **not diagnos
 | M6 | D6, D8 (also D7) |
 
 The first probe run aborted on a console-encoding error in the probe script (the file was restored by its `finally` block and compared equal to the backup); the table gives the rerun after the script was fixed.
+
+**CI position.** Pending the checkpoint PR; none opened. Not run: browser/AX, human review, owner acceptance, S02, consumers.
+
+### 11.4 Independent review (Codex, 2026-11-24)
+
+**Verdicts:** **T01/S03: CHANGES REQUIRED.** Finding C08-S03-1 below prevents the newer-input contract from being met. No second implementation finding was demonstrated. The review disposition blocks this slice only; it does not grant checkpoint acceptance. CI remains pending the checkpoint PR; browser/AX, human and owner acceptance remain pending.
+
+**Ancestry, scope and governing contract.** Verified `ba73a88f -> 67922e8c -> f327c13a`; baseline, implementation and records head are ancestors of current HEAD `f327c13a1963d6e327d443e26168db70e05827af` on `phase15/completion`. The worktree was clean before these review-record edits. Production changes are limited to `DungeonAreasSection.tsx`, its `add_area` body type, and the dungeon-authoring documentation row. Backend changes are tests only (`test_api_dungeon_authoring.py`). The only additional file is the disclosed test-only acceptance-guard pin. No API, command, schema, validation limit, `useDungeonCommand`, `useAuthoringMutation`, permission-loss code, area edit page or S01 route changed. Reviewed R09, the area-scalar contract, the governing API/command/editor implementations and the maintained register.
+
+**C08-S03-1 — successful completion erases newer, unsent form input.** Track: application behavior. Location: `portal/src/components/world/DungeonAreasSection.tsx`, `submit()` success callback. Trigger: an editor submits an area, then changes one of the still-enabled fields while the request is pending, before the response succeeds. The callback unconditionally clears all five fields. A temporary probe held the POST response, changed Environment to `Newer note typed while pending`, then released a successful create. The area and normal success announcement appeared, but the Environment input was empty; the later text was never included in the submitted request and was silently lost. The probe was removed and the test file restored byte-for-byte (SHA-256 `04C9D1B1EA033E55CBA2D68D6706605306D3F248D4FE5FD48F5E8BCBF9C099EB`; final Git blob matches HEAD).
+
+**Rubric and readiness.** Supported-path exposure **2** (ordinary editor create flow; the controls remain editable while the request is pending); impact **1** (one user's unsent field content is lost and can be re-entered); triggerability **2** (readily repeatable during a pending request); detection/recovery **1** (the form silently clears and appears settled even though newer input was not submitted); blast radius **0** (bounded to that form/user). **Score 6, Medium.** No database corruption or partial write: the server creates only the submitted body. Readiness: **blocks this slice** because the task explicitly requires newer input to remain correct. Bounded correction: associate successful clearing with the submitted values and clear only fields that have not changed since submission; preserve newer values and avoid moving focus away from a field containing newer input. Add a held-success regression that edits a field after submit, verifies the created body is the original snapshot, verifies the newer field remains, and checks focus; retain D4's no-new-edit success behavior and D6/D8 refusal/retry cases.
+
+**A1–A16-style evidence review (D1–D13).** The record's D1–D10 baseline failures mostly stop at the absent Summary textbox; they establish missing form controls, not every success/refusal/retry behavior. D10's old behavior premise was separately demonstrated at baseline (Done/reopen retained name and kind). D1's revised test tests the shared character counters against limits rather than a nonexistent `maxlength` attribute; D6's revised focus assertion waits for the opening focus effect before testing a later refusal. Both revised tests were rerun against byte-restored baseline source and still fail at the missing Summary field. D11–D13 are genuine baseline guards with positive controls where appropriate and exercise server-side normalization, 422/no-write limits and refusal/no-write authorization. `test_api_dungeon_authoring.py` adds tests only. The §6.2 adaptation changes the old add-area body expectation to include the three null optionals required by the five-key contract; its mock now echoes submitted summary so D4 can assert the listed result. No other existing test expectation was weakened in the diff.
+
+**Mutation evidence.** Independently reran valid targeted M1–M6 mutations; each failed its named D case and restored `DungeonAreasSection.tsx` byte-for-byte (SHA-256 `982CB8F47EA25E4BB34D17F7DA3903C56CE62E0D631FA25B5A0F745C1F58B5DC`): M1 omitted summary and failed D2; M2 sent empty string and failed D3; M3 omitted new fields from unsaved reporting and failed D5; M4 omitted retained Summary and failed D7; M5 omitted new-field clearing and failed D4; M6 cleared new fields before send and failed D6. One reviewer M6 attempt was malformed at PowerShell argument parsing and ran no tests; it is excluded. The valid rerun failed D6. The implementation record's earlier probe-script console-encoding attempt is also excluded; only its corrected rerun is evidence.
+
+**Independent checks and separate historical runs.** Focused §7.1 portal set: **4 files, 160 passed**. Dungeon-authoring backend guards: **18 passed**. Portal lint, `npx tsc -b`, build, `ruff format --check`, `ruff check`, documentation and diff checks passed; build emitted the existing large-chunk advisory. No backend shard run was performed for S03, and I did not repeat either full portal run. Preserve the recorded events separately: full run 1 had **5,936 passed, 2 failed** (`OrganizationMembersReader` and `WorldsPage.filter` F8); both files then passed together in isolation (**44 tests**); full run 2 passed (**456 files, 5,938 tests**). The causes of both first-run failures remain unproven. CI is pending the checkpoint PR.
+
+**Coordination.** No other slice or consumer was started. S02's recorded implementation prerequisites (S01 review and S03 records commit) are now met, but C08 remains blocked on independent S02 and S03 passes and the integrated requirements in S01 plan §12.4. This finding does not change S01's reviewed endpoint contract. No browser/AX, human or owner acceptance was performed or granted.
+
+### 11.5 Correction of C08-S03-1 (Sonnet, 2026-11-24)
+
+**Status: C08-S03-1 corrected, pending independent confirmation.** S03 is not passed; §11.4's CHANGES REQUIRED stays as the review history. Baseline `f327c13a1963d6e327d443e26168db70e05827af` (confirmed as HEAD and `origin/phase15/completion`; Luna's uncommitted §11.4 and register edits preserved in the records commit). Correction commit `12ca7ec0616243a027755f070a201f2f5cea3cc5`: `P15-C08-S03-T01: keep add-area input typed after submitting when the create succeeds (C08-S03-1)`. Re-review range: `f327c13a1963d6e327d443e26168db70e05827af..12ca7ec0616243a027755f070a201f2f5cea3cc5`, plus this records commit.
+
+**Change.** `DungeonAreasSection.tsx` only (plus tests). The fields stay editable while the create is pending. Each field has an edit count (a ref bumped on every change, whatever the new value), and the submission snapshots the counts. On success a field is cleared only when its count is unchanged since the submission, so a value changed and changed back, or by whitespace only, counts as newer input and is kept. Focus returns to Area name as before, except when the focused element is a field that holds newer input. The submitted body, the retry identity, the announcement, the refusal paths and Done/reopen are untouched. No field is disabled; no backend, API, `useDungeonCommand` or `useAuthoringMutation` change.
+
+**Regressions written first (held create, unfixed code).** New cases in the dungeon block of `WorldRecordWorkspace.test.tsx`, each holding the POST until released.
+- **Failed before the fix (7):** E1 (Environment typed after submitting survives, keeps focus, other fields clear, one POST with the submitted snapshot), E2 for Name, Summary, Kind and Size (four cases: the newer value survives and the other four clear), E3 (a field edited away and back, and one changed by whitespace only, survive), E5 (newer input survives the success of a retry of an unknown outcome, same body and same `Idempotency-Key`). Each failed at `toHaveValue` with the newer value expected and the field empty.
+- **Passed before the fix, kept as guards (2):** E4 (nothing typed after submitting: every field clears and focus returns to Area name) and E6 (a refusal after newer input keeps every value, the newer one included). The existing D4, D6, D8 and D10 are unchanged and pass.
+
+**After the fix.** Dungeon block: 75 passed. Focused §7.1 set (4 files): 169 passed. `test_api_dungeon_authoring.py`: 18 passed. `npm run lint`, `npx tsc -b`, `npm run build`, `ruff format --check`, `ruff check`, `scripts/check_documentation.py` and `git diff --check` pass.
+
+**Full portal run.** First run: **456 files, 5,947 tests passed, 0 failed** (no rerun needed). The earlier full runs (5,936 of 5,938 with two failures, then a clean 5,938) are recorded in §11.3 and are separate history; their causes remain unproven. No backend shard run (no backend change).
+
+**Mutations (each restored byte-for-byte; SHA-256 `4d93d0acb986...` equal before and after).**
+
+| Mutation | Failed cases |
+|---|---|
+| MA: clear every field unconditionally on success (the old behavior) | E1, E2 (Name, Summary, Kind, Size), E3, E5 |
+| MB: always refocus Area name on success | E1 |
 
 **CI position.** Pending the checkpoint PR; none opened. Not run: browser/AX, human review, owner acceptance, S02, consumers.
