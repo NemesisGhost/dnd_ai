@@ -260,7 +260,40 @@ T01 adds an API with no portal consumer until S02. That is acceptable as an inte
 
 ### 11.3 Implementation record
 
-*(Sonnet records here.)*
+Sonnet, 2026-11-24. Baseline `12cc87d626f5e74f4cb9f0ef26b06d765ee8f0c5` (confirmed as HEAD and `origin/phase15/completion`, clean worktree). Implementation commit `1f0164481a32fce50f48375752f7d29eb2cee53f`: `P15-C08-S01-T01: add authorized location child reads with stable cursors and hidden-chain truncation`. Review range: `12cc87d626f5e74f4cb9f0ef26b06d765ee8f0c5..1f0164481a32fce50f48375752f7d29eb2cee53f`, plus this records commit.
+
+**Change.** `queries/world_explorer.py`: `LOCATION_CHILDREN_KEYSET`, `_MAX_CHILD_DEPTH` (64), `LocationChildCard` (reusing `LocationCrumb`) and `list_location_children`: the parent check (reference-mode denied set and the caller's world, otherwise `WorldResourceNotFoundError`), then one recursive CTE that is depth 1 without `q`, filters hidden places in both the base and the recursive step, then applies the text filter, the keyset condition, the order `(lower(left(name, 200)), location_id)` and `LIMIT limit + 1`; one bounded follow-up query names the path entries. `api/world_explorer.py`: the route, `LocationChildResponse` and `LocationChildrenResponse` (the parent test uses `_campaign_view_denied_entity_ids`; listed places use the grant denies plus `lifecycle_hidden_entity_ids(mode="browse", ...)`, as `/world/search` does). `docs/api/READ_API.md` (matrix row, rule note, category-coverage row) and `docs/api/world-and-authoring.md` (catalog row). No schema, migration, command, trigger, capability, existing route, `lifecycle_hidden_entity_ids` or pagination-helper change.
+
+**Deviation from §4's file list (disclosed).** `tests/scenario/test_phase15_acceptance_guards.py` pins the number of member-read routes (`EXPECTED_MEMBER_READS`, "adding or removing a route ... forces a conscious update"); the new route is a member read, so the pin went from 34 to 35 (a one-line change with a comment, as P15-C02-S03 did for its read). Shard run 1 found this (below). It is not one of the §2.5 files and no expectation was weakened.
+
+**Test-first (baseline `12cc87d626f5e74f4cb9f0ef26b06d765ee8f0c5`, route absent).** All 15 new tests (A1-A15, one test per case in `tests/database/test_api_location_children.py`) failed: each at its first call to the missing route: `404 not_found` where 200 was expected (`assert 404 == 200` or the helper's status assertion), `KeyError: 'items'` on the 404 body, or, for A12, `assert {'error'} == {'items', 'next_cursor'}`. Fixture setup completed in every case, so no failure is a fixture error. A16 guards (`test_api_world_explorer.py`, `test_world_explorer_canon_visibility.py`, `test_api_location_authoring.py`, `test_locations.py`, `test_content_authoring_concurrency.py`, `test_api_dungeon.py`, `test_api_dungeon_authoring.py`): 200 passed on the baseline.
+
+**After the change.** Focused §7.1 set (8 files): 215 passed (15 new + 200 guards), taken before the later test edits below; after them the new file alone passes (15) and the acceptance guard file passes (30 with it).
+
+**Full shard runs (reported separately).**
+1. First run (before the pin and test edits): 11,354 passed, 6 skipped, **2 failed**, both in `tests/scenario/test_phase15_acceptance_guards.py` (`test_the_manifest_covers_every_phase15_family_and_its_size_is_pinned`, `test_player_safe_reads_are_not_refused_to_a_player_and_not_found_by_an_outsider`), each `assert 35 == 34` on the member-read pin. Neither matches an open investigation. After the pin edit, that file passed (with the new tests, 30 passed).
+2. Second run, on the final code: **11,356 passed, 6 skipped, 0 failed** (11,362 collected and executed; shards 3,018 + 2,188 + 2,781 + 3,369 passed). Between the runs the pin changed, and two test-only edits were made (below).
+
+**Test edits after run 1, from the probes.** A7 now uses six equal names (11 children, pages 2/2/2/2/2/1) so the id tie-break is observable (with two equal names, insertion order matched id order half the time); A5 gained a hidden place below a visible one (Gate, Hidden Stair, Cellar), because M1 failed only A14 on its first run (the plan names A5 and A14), since the original A5 chain hid its place at depth 1.
+
+**Other checks.** `ruff format --check`, `ruff check`, `mypy src`, `uv lock --check` and `alembic -c database/alembic.ini check` ("No new upgrade operations detected"; the plain `alembic check` has no `script_location`) pass, as do `scripts/check_documentation.py` and `git diff --check`.
+
+**Probes (each restored byte-for-byte; SHA-256 compared equal after every probe).**
+
+| Probe | Failed cases |
+|---|---|
+| M1 | A5, A14 (first run, before the A5 addition: A14 only) |
+| M2 | A2, A3, A5, A8, A13, A14 |
+| M3 | A4, A10 |
+| M4 | A7 |
+| M5 | A7, A8, A14, A15 |
+| M6 | A3 |
+| M7 | A4 |
+| M8 | A5, A6, A12 |
+
+The first M4 mutation did not apply (a line-ending mismatch in the probe script: `queries/world_explorer.py` is CRLF in the working copy); the script was corrected and M4 redone.
+
+**CI position.** Pending checkpoint PR; none opened. Not run: browser/AX, human review, owner acceptance, S02, S03, consumers. A portal run was not required (no portal file changed).
 
 ## 12. C08 checkpoint coordination
 
