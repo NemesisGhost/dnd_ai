@@ -1,15 +1,11 @@
 # ruff: noqa: F811 - the imported `g` and `client_factory` are pytest fixtures used by parameter name
 """DEF-013: a caller whose built-in owner assignment expires while a gated command waits on a lock.
 
-The D3 gate judges the caller when the command starts and locks the assignment, but a finite
-`expires_at` still passes while the command waits on its other locks. Each gated command now judges
-the caller again, at a fresh database instant, after its last lock wait and before its first
-protected write (design §3, "Time boundary"). A caller who expired meanwhile gets 403
-`campaign_owner_required` with nothing written and no audit row; one who is still live completes.
-
-Deterministic: the test holds the row the command waits for, waits on the database clock until the
-caller's assignment has expired, and only then releases the command. The other order, expiry
-between the first re-check and the transfer's revoke, is made by delaying `assign_membership_role`.
+The HTTP routes check access.manage at entry, lock their rows, then judge ownership as of
+transaction start and at a fresh database instant before writing. Park the real request just
+before its first role lock to set up a finite expiry. PostgreSQL must report that this request
+started waiting on the held target row before expiry and still waits when the deadline passes.
+The final case drives the direct transfer command and lets time pass after the recipient write.
 """
 
 import time
@@ -19,6 +15,7 @@ from dataclasses import dataclass
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 from sqlalchemy import Engine, text
 
 from dnd_ai.commands import memberships as memberships_module
@@ -30,15 +27,8 @@ from tests.database.test_campaign_owner_gate import (  # noqa: F401 - fixtures u
     client_factory,
     g,
 )
-from tests.database.test_campaign_owner_lock_order import (  # noqa: F401 - autouse fixture
-    _Hold,
-    _owners,
-    _post,
-    _release_everything,
-    _status,
-    _urls,
-    _wait_until_waiting,
-)
+from tests.database.test_campaign_owner_lock_order import _owners, _urls
+from tests.http_race_support import WAIT_SECONDS, Request, StatementGate, run_in_thread
 
 pytestmark = pytest.mark.database
 
@@ -90,45 +80,52 @@ def _paths(g: Gate) -> dict[str, _Path]:
 _PATH_NAMES = ["assign", "change", "add_member", "transfer", "transfer_keeping_ownership"]
 
 
-def _set_o1_expiry(engine: Engine, g: Gate, *, seconds: int | None) -> None:
+def _set_o1_expiry(engine: Engine, g: Gate, *, seconds: int) -> None:
     with engine.begin() as connection:
         connection.execute(
             text("""
                 UPDATE security.membership_roles
-                SET expires_at = CASE WHEN CAST(:s AS int) IS NULL THEN NULL
-                                      ELSE clock_timestamp() + make_interval(secs => :s) END
+                SET expires_at = clock_timestamp() + make_interval(secs => :s)
                 WHERE membership_role_id = :r
             """),
             {"s": seconds, "r": g.o1_role},
         )
 
 
-def _wait_for_expiry(engine: Engine, membership_role_id: uuid.UUID) -> None:
-    deadline = time.monotonic() + 30
+def _observe_target_wait(
+    engine: Engine,
+    request: Request,
+    *,
+    request_pid: int,
+    holder_pid: int,
+    role_id: uuid.UUID,
+    wait_for_caller_expiry: bool,
+) -> None:
+    deadline = time.monotonic() + WAIT_SECONDS
     while time.monotonic() < deadline:
-        with engine.connect() as connection:
-            if connection.execute(
-                text(
-                    "SELECT clock_timestamp() > expires_at FROM security.membership_roles "
-                    "WHERE membership_role_id = :r"
-                ),
-                {"r": membership_role_id},
-            ).scalar_one():
+        assert not request.finished(), request.describe()
+        with engine.connect() as observer:
+            wait = observer.execute(
+                text("""
+                    SELECT l.waitstart, mr.expires_at, clock_timestamp() AS observed_at
+                    FROM pg_locks l CROSS JOIN security.membership_roles mr
+                    WHERE l.pid = :request AND NOT l.granted AND l.waitstart IS NOT NULL
+                      AND :holder = ANY(pg_blocking_pids(l.pid))
+                      AND mr.membership_role_id = :role
+                """),
+                {"request": request_pid, "holder": holder_pid, "role": role_id},
+            ).one_or_none()
+        if wait:
+            assert wait.waitstart < wait.expires_at, (
+                f"caller already expired at lock arrival: {wait}"
+            )
+            if not wait_for_caller_expiry or wait.expires_at < wait.observed_at:
                 return
-        time.sleep(0.05)
-    raise AssertionError("the assignment never expired")
-
-
-def _expiry_margin(engine: Engine, membership_role_id: uuid.UUID) -> object:
-    """How long the assignment still had to run (negative once expired), by the database clock."""
-    with engine.connect() as connection:
-        return connection.execute(
-            text(
-                "SELECT expires_at - clock_timestamp() FROM security.membership_roles "
-                "WHERE membership_role_id = :r"
-            ),
-            {"r": membership_role_id},
-        ).scalar_one()
+        time.sleep(0.02)
+    raise AssertionError(
+        f"expected request pid {request_pid} blocked by {holder_pid}, "
+        f"wait_for_caller_expiry={wait_for_caller_expiry}; {request.describe()}"
+    )
 
 
 def _run_while_waiting(
@@ -138,30 +135,40 @@ def _run_while_waiting(
     path: _Path,
     *,
     wait_for_caller_expiry: bool,
-) -> object:
-    """Starts the o1 request, parks it on the row it needs, optionally lets o1's assignment
-    expire, then releases it and returns the response."""
-    hold = _Hold(engine, path.hold_sql, path.hold_params)
-    margin_at_start = _expiry_margin(engine, g.o1_role)
-    request = _post(client_factory, g.o1_user_id, path.url, path.body)
-    try:
-        _wait_until_waiting(engine, 1)
-    except AssertionError as failure:
-        # Say what the request did instead of waiting, so a failure shows whether it was refused
-        # before the lock wait (and why) or simply never reached it.
-        response = request.response
-        raise AssertionError(
-            f"{failure}; request finished={request.done}, "
-            f"status={getattr(response, 'status_code', None)}, "
-            f"elapsed={getattr(response, 'elapsed', None)}, "
-            f"body={getattr(response, 'text', None)!r}, error={request.error!r}, "
-            f"caller's expiry margin when the request started={margin_at_start}, "
-            f"now={_expiry_margin(engine, g.o1_role)}"
-        ) from failure
-    if wait_for_caller_expiry:
-        _wait_for_expiry(engine, g.o1_role)
-    hold.release()
-    return request.join()
+) -> Response:
+    def post() -> Response:
+        with client_factory(g.o1_user_id) as client:
+            return client.post(path.url, json=path.body)
+
+    _set_o1_expiry(engine, g, seconds=3600)
+    # All five routes lock the actor's role rows after entry. A fixture UPDATE after those
+    # locks could itself block. Arm just before the first such SELECT goes to PostgreSQL.
+    role_lock = r"^SELECT security\.membership_roles\.membership_role_id FROM security\.membership_roles .* FOR "
+    with StatementGate(engine, role_lock, strict=True) as gate:
+        request = gate.track(run_in_thread("owner request", post))
+        try:
+            gate.wait_reached()
+            assert gate.pid is not None
+            if wait_for_caller_expiry:
+                _set_o1_expiry(engine, g, seconds=_EXPIRES_IN_SECONDS)
+            # Arm before taking the target lock: committing the fixture UPDATE can itself
+            # acquire the campaign row through the deferred access-manager retention trigger.
+            with engine.begin() as holder:
+                holder_pid = holder.execute(text("SELECT pg_backend_pid()")).scalar_one()
+                holder.execute(text(path.hold_sql), path.hold_params).one()
+                gate.release()
+                _observe_target_wait(
+                    engine,
+                    request,
+                    request_pid=gate.pid,
+                    holder_pid=holder_pid,
+                    role_id=g.o1_role,
+                    wait_for_caller_expiry=wait_for_caller_expiry,
+                )
+        except AssertionError as failure:
+            failure.add_note(request.describe())
+            raise
+        return request.wait("after releasing the target row")
 
 
 @pytest.mark.parametrize("name", _PATH_NAMES)
@@ -171,7 +178,6 @@ def test_a_caller_who_expires_during_the_lock_wait_is_refused_and_nothing_is_wri
     g: Gate,
     name: str,
 ) -> None:
-    _set_o1_expiry(postgres_engine, g, seconds=_EXPIRES_IN_SECONDS)
     before = _snapshot(postgres_engine, g)
     owners_before = _owners(postgres_engine, g)
 
@@ -179,8 +185,8 @@ def test_a_caller_who_expires_during_the_lock_wait_is_refused_and_nothing_is_wri
         client_factory, postgres_engine, g, _paths(g)[name], wait_for_caller_expiry=True
     )
 
-    assert _status(response) == 403, response.text  # type: ignore[attr-defined]
-    assert "campaign_owner_required" in response.text  # type: ignore[attr-defined]
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "campaign_owner_required", response.text
     assert _snapshot(postgres_engine, g) == before
     assert _owners(postgres_engine, g) == owners_before
     with postgres_engine.connect() as connection:
@@ -194,14 +200,13 @@ def test_a_caller_who_is_still_live_after_the_same_wait_completes(
     g: Gate,
     name: str,
 ) -> None:
-    _set_o1_expiry(postgres_engine, g, seconds=3600)
     before = _snapshot(postgres_engine, g)
 
     response = _run_while_waiting(
         client_factory, postgres_engine, g, _paths(g)[name], wait_for_caller_expiry=False
     )
 
-    assert _status(response) in (200, 201), response.text  # type: ignore[attr-defined]
+    assert response.status_code in (200, 201), response.text
     after = _snapshot(postgres_engine, g)
     # Adding a member audits the membership and its role separately; every other path audits once.
     assert after[2] == before[2] + (2 if name == "add_member" else 1)
