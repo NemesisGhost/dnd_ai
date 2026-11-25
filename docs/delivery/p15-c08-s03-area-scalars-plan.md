@@ -233,4 +233,36 @@ T01 is a single commit. It is independently mergeable in substance, but C08 merg
 
 ### 11.3 Implementation record
 
-*(Sonnet records here.)*
+Sonnet, 2026-11-24. Baseline `ba73a88f4b76388f377e4245d11cf95527953bdc` (the S01 review records commit; confirmed as HEAD and `origin/phase15/completion` with a clean worktree before starting). Implementation commit `67922e8ce46561240a72e3e25be3134a5c29b6fd`: `P15-C08-S03-T01: add summary, size and environment to the add-area form`. Review range: `ba73a88f4b76388f377e4245d11cf95527953bdc..67922e8ce46561240a72e3e25be3134a5c29b6fd`, plus this records commit.
+
+**Revalidation of §2.1 at the baseline (no difference).** `CreateAreaRequest` (via `_AreaFields`) takes `name` (1 to `NAME_MAX_LENGTH`), `summary` (`DESCRIPTION_MAX_LENGTH`), `area_type` and `dimensions` (`SHORT_TEXT_MAX_LENGTH`) and `environmental_properties` (`NOTES_MAX_LENGTH`); `DungeonAreasSection` had only Area name and Kind of area; the `add_area` command body was typed `{ name; area_type }`; the existing test asserted exactly `{ name: "Shrine of Ash", area_type: "chamber" }`; the edit page already has Summary, Kind of area, Size (hint "For example 30 ft by 40 ft.") and Environment with the same limits. No API, command, schema or limit change was needed.
+
+**Change.** `DungeonAreasSection.tsx`: Summary (`TextAreaField`, `area-add-summary`), Size (`TextField`, `area-add-dimensions`, the edit page's hint) and Environment (`TextAreaField`, `area-add-environment`) after Kind of area, with the options' `summary_max_length`, `short_text_max_length` and `notes_max_length`; the body is the five keys with each optional value trimmed and empty sent as null; the unsaved report and the retained input (labels Name, Summary, Kind, Size, Environment, empty values left out) include all five; all five clear and focus returns to Area name only on success. `types/dungeonAuthoring.ts`: `add_area` now carries the existing `AreaFieldsBody`. `portal-behavior.md`: the Add area sentence of the dungeon authoring row. `test_api_dungeon_authoring.py`: D11-D13. No API, command, `useDungeonCommand`, `useAuthoringMutation`, permission-loss or area edit page change.
+
+**Test-first (unchanged form).** In `WorldRecordWorkspace.test.tsx` ("World record workspace: a dungeon") D1-D10 were written first. At the baseline all ten failed: D1-D9 and D10 at `Unable to find an accessible element with the role "textbox" and name "Summary"`, and the §6.2-adapted existing test ("adds an area, stays on the list, ...") failed on the body `toEqual` (the form sent two keys). D10's premise was confirmed before it was kept: a temporary case (name and kind typed, Done, reopen) passed at the baseline and was deleted. D1 and D6 were revised after that first baseline run (see below) and the revised versions were run again against the unmodified source (restored byte-for-byte, SHA-256 equal): both failed at the same Summary lookup. D11-D13 (backend guards, test-only) passed on the unchanged backend (3 passed), as did the other 15 cases of the file (18 in all).
+
+**Two corrections to my own new tests (disclosed).** D1 first asserted a `maxlength` attribute; the shared fields do not set one (the limit is shown by the counter near the end), so D1 now types 3,990, 195 and 3,980 characters and asserts "10", "5" and "20 characters remaining", which distinguishes the options' 4,000, 200 and 4,000. D6 first moved focus to Environment right after opening the form, but opening the form moves focus to Area name later (deferred), so D6 now waits for that and then moves focus; it asserts that a refusal leaves focus where it was. No assertion was weakened to match the implementation.
+
+**After the change.** Focused set of §7.1 (4 files): 160 passed. The dungeon block of `WorldRecordWorkspace.test.tsx`: 66 passed.
+
+**Full portal runs (reported separately).**
+1. First run: 454 files passed, 2 failed (456 files, 5,936 of 5,938 tests): `OrganizationMembersReader.test.tsx` > "does not show the previous organization's roster while the next one loads" (8,122 ms; the open C06 investigation) and `WorldsPage.filter.test.tsx` > "F8: counts the deduplicated worlds actually displayed, campaign-visible ones included, and says 1 world" (8,138 ms). Both files then passed together (44 of 44).
+2. Second run: **456 files, 5,938 tests passed, 0 failed.**
+Both first-run failures took about 8 seconds, but their causes are **not diagnosed** here. The `OrganizationMembersReader` failure is the open C06 obligation; the `WorldsPage.filter` F8 failure is a further unexplained single-test failure, distinct from it, and neither is resolved by this record.
+
+**Other checks.** `npm run lint`, `npx tsc -b` and `npm run build` pass. Backend: `uv run pytest tests/database/test_api_dungeon_authoring.py` (18 passed); `ruff format --check` and `ruff check` pass. `uv run python scripts/check_documentation.py` and `git diff --check` pass. No full backend shard run was made (test-only addition to one file, per §7.1); no CPU-heavy verification overlapped another.
+
+**Probes (each restored byte-for-byte; SHA-256 compared equal after every probe).**
+
+| Probe | Failed cases |
+|---|---|
+| M1 | D2 (also D3, D4, D8 and the adapted existing test) |
+| M2 | D3 (also the adapted existing test) |
+| M3 | D5 |
+| M4 | D7 |
+| M5 | D4 |
+| M6 | D6, D8 (also D7) |
+
+The first probe run aborted on a console-encoding error in the probe script (the file was restored by its `finally` block and compared equal to the backup); the table gives the rerun after the script was fixed.
+
+**CI position.** Pending the checkpoint PR; none opened. Not run: browser/AX, human review, owner acceptance, S02, consumers.
