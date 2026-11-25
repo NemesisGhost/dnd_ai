@@ -367,3 +367,25 @@ Luna's review (§11.4, CHANGES REQUIRED) is kept as history. S01 is **not** mark
 **Independent verification and run history.** Verified ancestry: baseline `7ad49ab8231499d4716eb2f1748a416013073994` → correction `7bf14b492c673d0dda4db801f6ddbbdccc9b7f98` → records/current `2738cfbb56d87d79b8037958637f188cbe17a9ef`, on `phase15/completion`. The worktree was clean before this review's documentation edits. Correction scope is four portal files; records scope is this plan and the register. Reviewer focused plan set plus new tests: 13 files, 254 passed. Documentation check and `git diff --check` passed. Correction implementation evidence remains distinct: full run 1 had two failures (`App.knowledgeClaim` and `CampaignRevealAuthorityPage.write` M9), causes unproven; those files passed 173 tests in isolation; separate full rerun passed 462 files/5,990 tests. Earlier implementation run history remains in §§11.3–11.4 and is not replaced by these runs. No full suite was repeated by the reviewer. CI remains pending the checkpoint PR.
 
 **Remaining requirements.** The correction clears the independent-review gate and the recorded E1–E17/full-portal evidence is available on the correction's executable code. C09 still requires CI passing on the exact integration/PR head under §7.2. Browser/AX, zoom, pilot-time adoption, human review and owner acceptance remain separate later events; none is granted here. No pilot-time or consumer work was started.
+
+## 12. Integration record (2026-11-25)
+
+**Scope.** Checkpoint C09 is one slice and one task. Integration head before this record: `a23c1347ee7efb56ea84f32c99f71f8ce0b9dea1` (Luna's re-review, §11.6, committed; equal to `origin/phase15/completion`). The last commit that changed an executable or test file is `7bf14b492c673d0dda4db801f6ddbbdccc9b7f98` (the C09-S01-1 correction); every later commit changes the plan or the register only. Review outcomes: T01/S01 PASS WITH VERIFICATION LIMITS (§11.6); the original CHANGES REQUIRED finding C09-S01-1 (score 3, Low) and its historical runs are kept in §11.4 and §11.5.
+
+**§7.2 requirement 1 (S01 independently reviewed, correction confirmed).** Met: §11.4 (CHANGES REQUIRED), §11.5 (correction), §11.6 (PASS WITH VERIFICATION LIMITS).
+
+**§7.2 requirement 2 (E1–E17 and one full portal run on the executable code).**
+| Case | Evidence |
+|---|---|
+| E1, E4 | `WorldTimePicker.reading.test.tsx` (same-day options; labelled point) |
+| E2, E3 | `WorldTimeForm.test.tsx` (after/before options; narrative point keeps display); narrative display also in `worldTimeReading.test.ts` and the page suites |
+| E5 | `worldTimeReading.test.ts`; existing `WorldTimesPage` suites; `WorldTimesPage.missingCalendar.test.tsx` (page text, including the missing-calendar fallback) |
+| E6, E8, E16 | `WorldTimeForm.test.tsx`; E8 also `worldTimeForm.test.ts` (`onCalendarChange`) |
+| E7 | `worldTimeForm.test.ts` (`calendarPrecision`) |
+| E9, E14, E11, E15 | `WorldTimePicker.reading.test.tsx` (E15 also in `worldTimeReading.test.ts`) |
+| E10, E12, E13, E17 | existing guard suites, unchanged: `WorldTimePicker.test.tsx`, `WorldTimesPage.dialog.test.tsx`, `WorldTimesPage.test.tsx`, `FormDialog.test.tsx`, the caller integration tests (`CampaignClockCard`, `App.partyMembers`, `App.eventCorrections`, `App.sessionRun`) |
+The plan's focused set plus the new tests ran at the correction (13 files, 254 passed, and again by the reviewer). The mutation probes M1–M7 (§11.3) and MC1 (§11.5) each failed their named cases with bytes restored and hashes equal. **Full portal run on the final executable code (`7bf14b49`):** run 1 had 2 failures (`App.knowledgeClaim.test.tsx` DEF-006 read-back case and `CampaignRevealAuthorityPage.write.test.tsx` M9; causes unproven; the two files passed together, 173 tests, in isolation); the full rerun passed, **462 files, 5,990 tests, 0 failed**. The earlier implementation-stage full runs (run 1: 1 failure from the mis-shaped `RelationshipsPanel` calendars mock, fixed; rerun 461 files/5,987 passed) are kept in §11.3 as history. Because only the plan and the register changed after `7bf14b49`, that clean run is reused for the integration head (not rerun). No backend file changed, so no backend run is required (§7.2).
+
+**Checks.** `npm run lint`, `npx tsc -b`, `npm run build` passed at the correction. The documentation check and `git diff --check` pass at this record.
+
+**§7.2 requirement 3 (CI on the exact PR head)** is recorded on the pull request, not here; no CI result is claimed. **Limits and pending, none granted:** portal tests use jsdom and mock servers; browser keyboard, 320 px layout, AX/screen reader, actual 200% and 400% zoom for the dialog, the precision line and the calendar-change note; pilot-time adoption; human review; owner acceptance. The open reliability investigations on the C04, C06, C07 and C08 rows (including the C08 shard-5 caller-expiry failure) are not C09 prerequisites and nothing here establishes their causes. No consumer work started.
