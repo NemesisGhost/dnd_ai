@@ -50,7 +50,7 @@ jobs:
   portal-check:
     name: Portal tests, lint, and build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     # portal/ is the React/TypeScript admin client (docs/DEVELOPMENT.md's
     # toolchain table): Vite build, Vitest tests, ESLint. It has its own
     # npm dependency tree and lockfile and talks only to the application
