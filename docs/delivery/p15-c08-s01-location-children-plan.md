@@ -369,3 +369,28 @@ Merge, browser verification and owner acceptance are separate events with separa
 - [browser](work-register.md#browser), per C08's criteria: keyboard reach of the panel, search, links and Show more; narrow layout at 320 CSS px; authorized navigation down and back up with player and GM personas.
 - [ax](work-register.md#ax): screen-reader output of the status messages, actual 200% and 400% zoom, and the add-area form's layout.
 - Human review, [p15-integration](work-register.md#p15-integration) and `p15-owner`. Nothing in these plans grants them.
+
+### 12.6 Integrated verification of the checkpoint (2026-11-24)
+
+**Scope and SHA.** Run at `a6ccc0a6ee1b9ca17c4a2a8529b71d48204c616e` on `phase15/completion` (equal to `origin`, worktree clean). The executable code and tests are those of `041fe4d10b646a29bc8a54b6a545dc4274d42e98` (the last commit that changed a non-documentation file); `cd4372c0…` and `a6ccc0a6…` after it changed documentation only. The three slices' independent reviews are all recorded: S01 PASS WITH VERIFICATION LIMITS (§11.4); S03 PASS WITH VERIFICATION LIMITS (S03 plan §11.6, original §11.4 CHANGES REQUIRED kept as history); S02 PASS WITH VERIFICATION LIMITS (S02 plan §11.6, original §11.4 CHANGES REQUIRED kept as history). Suites ran one after another, never overlapping. This is evidence for §12.4 items 1–3; item 4 (CI on the exact head) is recorded on the pull request, not here.
+
+**Integrated acceptance (A1–A16, N1–N19, D1–D13).**
+- A1–A16: `tests/database/test_api_location_children.py` and the pin in `tests/scenario/test_phase15_acceptance_guards.py`; together with `tests/database/test_api_dungeon_authoring.py` (D11–D13): **48 passed** in a labelled run, and the same files inside the shard runs below.
+- N1–N19 plus S02's F1–F4 focus regressions: `LocationChildren.test.tsx` and `App.locationChildren.test.tsx`.
+- D1–D10 plus S03's E1–E6 input-preservation regressions: `WorldRecordWorkspace.test.tsx`.
+- The plans' §7.1 focused set of 10 portal files (these files and the existing workspace and navigation files): **269 passed**.
+
+**Portal.** `npm run lint`, `npx tsc -b` and `npm run build` pass. Full `npm test`: **458 files, 5,972 passed, 0 failed** (one run; no rerun was needed).
+
+**Backend.** `ruff format --check`, `ruff check`, `mypy src` and `uv lock --check` pass. `alembic check` passes against a throwaway database migrated to head (no schema diff; it printed the existing mutually-dependent-foreign-key advisory). The documentation check and `git diff --check` pass.
+
+**Full backend shard runs (kept separate).**
+- **Run 1:** 11,365 collected and executed, **2 failed**, 11,357 passed, 6 skipped (about 32 minutes; slower than the usual 17). Failures, both reported by their own deadline diagnostics as "the request never reached the gated statement" after about 15 s with no non-idle backend:
+  - shard 1: `tests/database/test_r01_s4b_routes.py::test_a_revocation_requested_after_the_request_has_written_is_serialised_after_it_or_seen_by_it[source_register-membership]`;
+  - shard 4: `tests/database/test_r01_e4_reference_corpus.py::test_a_lapse_before_the_final_check_refuses_rolls_everything_back_and_a_retry_succeeds[revoke-membership_ended-final]`.
+  Neither file is a C08 file. No cause is claimed. Both belong to the R01 reliability area that the register already tracks as an open investigation.
+- **Isolated:** those two test functions run together: **36 passed** (all parametrizations of both).
+- **Run 2 (one full rerun):** **11,359 passed, 6 skipped, 0 failed**, RESULT: PASSED (about 31 minutes).
+- Run 1's failures are not erased by the pass; whether the gate timeouts recur under load is unresolved.
+
+**Not established by this section.** Checkpoint CI on the exact PR head (recorded on the pull request); the separate open reliability investigations (the C04, C06 and C07 rows, and the R01 gate-timeout tests above) remain open and are not C08 prerequisites; browser keyboard, narrow-layout (320 CSS px), authorized-navigation checks, AX/screen-reader output, actual 200% and 400% zoom, human review and owner acceptance are still pending and are not granted here. Everything in the portal was tested in jsdom with mock servers. No consumer work was started.
