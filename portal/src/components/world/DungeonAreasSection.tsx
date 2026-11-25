@@ -7,7 +7,7 @@ import { focusSoon } from "../authoring/focusSoon"
 import { useRetainedInput } from "../authoring/permissionLoss"
 import { useDungeonCommand } from "../authoring/useDungeonCommand"
 import { contentsText, plural } from "./areaText"
-import { TextField } from "../authoring/fields"
+import { TextAreaField, TextField } from "../authoring/fields"
 import { LifecycleBadge } from "../authoring/feedback"
 import { useUnsavedReport } from "../quests/useUnsavedReport"
 import type { ReportUnsaved } from "../quests/useUnsavedReport"
@@ -39,16 +39,23 @@ const ADD_AREA_NAME_ID = "area-add-name"
 export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, linkState, editState, onUnsaved }: Props) {
     const [open, setOpen] = useState(false)
     const [name, setName] = useState("")
+    const [summary, setSummary] = useState("")
     const [kind, setKind] = useState("")
+    const [dimensions, setDimensions] = useState("")
+    const [environment, setEnvironment] = useState("")
     const [problem, setProblem] = useState<string | null>(null)
     const command = useDungeonCommand({ campaignId, dungeonId, areaId: null, scope: "areas", refetch: refresh, pageStale: read.stale })
-    useUnsavedReport(onUnsaved, "new-area", name.trim() !== "" || kind.trim() !== "" ? ["a new area"] : [])
+    const typed = [name, summary, kind, dimensions, environment].some((value) => value.trim() !== "")
+    useUnsavedReport(onUnsaved, "new-area", typed ? ["a new area"] : [])
     useRetainedInput(
         "new-area",
         "New area",
         [
             { label: "Name", value: name.trim() },
+            { label: "Summary", value: summary.trim() },
             { label: "Kind", value: kind.trim() },
+            { label: "Size", value: dimensions.trim() },
+            { label: "Environment", value: environment.trim() },
         ].filter((c) => c.value !== ""),
     )
 
@@ -79,12 +86,25 @@ export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, link
             return
         }
         setProblem(null)
+        const optional = (value: string) => (value.trim() === "" ? null : value.trim())
         command.send(
-            { op: "add_area", body: { name: clean, area_type: kind.trim() === "" ? null : kind.trim() } },
+            {
+                op: "add_area",
+                body: {
+                    name: clean,
+                    summary: optional(summary),
+                    area_type: optional(kind),
+                    dimensions: optional(dimensions),
+                    environmental_properties: optional(environment),
+                },
+            },
             `Area ${clean} added as a draft`,
             () => {
                 setName("")
+                setSummary("")
                 setKind("")
+                setDimensions("")
+                setEnvironment("")
                 focusSoon(ADD_AREA_NAME_ID)
             },
         )
@@ -151,6 +171,13 @@ export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, link
                             maxLength={options.limits.name_max_length}
                             error={problem}
                         />
+                        <TextAreaField
+                            id="area-add-summary"
+                            label="Summary"
+                            value={summary}
+                            onChange={setSummary}
+                            maxLength={options.limits.summary_max_length}
+                        />
                         <TextField
                             id="area-add-kind"
                             label="Kind of area"
@@ -158,6 +185,21 @@ export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, link
                             value={kind}
                             onChange={setKind}
                             maxLength={options.limits.short_text_max_length}
+                        />
+                        <TextField
+                            id="area-add-dimensions"
+                            label="Size"
+                            hint="For example 30 ft by 40 ft."
+                            value={dimensions}
+                            onChange={setDimensions}
+                            maxLength={options.limits.short_text_max_length}
+                        />
+                        <TextAreaField
+                            id="area-add-environment"
+                            label="Environment"
+                            value={environment}
+                            onChange={setEnvironment}
+                            maxLength={options.limits.notes_max_length}
                         />
                     </div>
                     <div className="row-actions">

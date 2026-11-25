@@ -193,7 +193,7 @@ export interface StateReceipt {
 }
 
 export type DungeonCommand =
-    | { op: "add_area"; body: { name: string; area_type: string | null } }
+    | { op: "add_area"; body: AreaFieldsBody }
     | {
           op: "add_connection"
           body: ConnectionFields & {

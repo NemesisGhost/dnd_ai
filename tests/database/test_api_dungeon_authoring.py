@@ -6,7 +6,9 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Connection, text
 
+from dnd_ai.domain.content_authoring import SHORT_TEXT_MAX_LENGTH
 from dnd_ai.domain.data_classification import replay_body
+from dnd_ai.domain.dungeon_authoring import NOTES_MAX_LENGTH
 from tests.authoring_support import AuthoringHarness, harness_fixture_factory
 from tests.content_support import ContentSetup
 from tests.database.test_api_campaign_clock import Times, _advance
@@ -613,3 +615,95 @@ def test_authority_replay_and_foreign_dungeons(s: ContentSetup) -> None:
         == 400
     )
     assert dungeon["dungeon_id"]
+
+
+# --- the create round trip the portal's add-area form relies on (P15-C08-S03 D11-D13) ---------
+
+
+def area_read(s: ContentSetup, area: dict) -> dict:
+    response = s.gm.get(s.url(f"dungeon-areas/{area['dungeon_area_id']}"))
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_d11_create_trims_all_five_fields_and_stores_whitespace_only_as_null(
+    s: ContentSetup,
+) -> None:
+    dungeon = new_dungeon(s)
+    full = new_area(
+        s,
+        dungeon,
+        "  Shrine of Ash  ",
+        summary="  A hall of ash.  ",
+        area_type=" chamber ",
+        dimensions=" 30 ft by 40 ft ",
+        environmental_properties="  Smoke, and a cold draught.  ",
+    )
+    for body in (full, area_read(s, full)):
+        assert body["name"] == "Shrine of Ash"
+        assert body["summary"] == "A hall of ash."
+        assert body["area_type"] == "chamber"
+        assert body["dimensions"] == "30 ft by 40 ft"
+        assert body["environmental_properties"] == "Smoke, and a cold draught."
+    blank = new_area(
+        s,
+        dungeon,
+        "Blank",
+        summary="   ",
+        area_type=" ",
+        dimensions="\n ",
+        environmental_properties="  \t ",
+    )
+    for body in (blank, area_read(s, blank)):
+        assert body["summary"] is None and body["area_type"] is None
+        assert body["dimensions"] is None and body["environmental_properties"] is None
+    listed = {a["name"]: a for a in view(s, dungeon["dungeon_id"])["areas"]}
+    assert (
+        listed["Shrine of Ash"]["summary"] == "A hall of ash."
+        and listed["Blank"]["summary"] is None
+    )
+
+
+def test_d12_create_refuses_overlong_size_and_environment_and_stores_nothing(
+    s: ContentSetup,
+) -> None:
+    dungeon = new_dungeon(s)
+    url = dungeon_url(s, dungeon["dungeon_id"], "/areas")
+    for field, limit in (
+        ("dimensions", SHORT_TEXT_MAX_LENGTH),
+        ("environmental_properties", NOTES_MAX_LENGTH),
+    ):
+        refused = s.gm.post(
+            url, {"name": "Too long", field: "x" * (limit + 1)}, key=s.gm.fresh_key()
+        )
+        assert refused.status_code == 422, (field, refused.text)
+    assert view(s, dungeon["dungeon_id"])["areas"] == []
+    assert s.audit("create_dungeon_area") == []
+    # positive control: values exactly at the limits are accepted
+    accepted = new_area(
+        s,
+        dungeon,
+        "At the limits",
+        dimensions="x" * SHORT_TEXT_MAX_LENGTH,
+        environmental_properties="y" * NOTES_MAX_LENGTH,
+    )
+    assert len(area_read(s, accepted)["environmental_properties"]) == NOTES_MAX_LENGTH
+
+
+def test_d13_create_without_canon_edit_is_refused_and_stores_nothing(s: ContentSetup) -> None:
+    dungeon = new_dungeon(s)
+    refused = s.player.post(
+        dungeon_url(s, dungeon["dungeon_id"], "/areas"),
+        {
+            "name": "Sneaky",
+            "summary": "A summary",
+            "area_type": "room",
+            "dimensions": "10 ft",
+            "environmental_properties": "Damp",
+        },
+        key=s.player.fresh_key(),
+    )
+    assert refused.status_code == 403, refused.text
+    assert view(s, dungeon["dungeon_id"])["areas"] == []
+    assert s.audit("create_dungeon_area") == []
+    assert new_area(s, dungeon, "Allowed", summary="A summary")["summary"] == "A summary"
