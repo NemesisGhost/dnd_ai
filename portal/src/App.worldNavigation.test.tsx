@@ -131,6 +131,8 @@ beforeEach(() => {
     }
     locationGate = () => ({ body: locationDetail() })
     server.on("GET", `${API}/world/locations/l1`, () => locationGate())
+    // The "Places within" panel's read of the place's children: none here (P15-C08-S02).
+    server.on("GET", /\/world\/locations\/[^/]+\/children/, { body: { items: [], next_cursor: null } })
     server.on("GET", `${API}/world/organizations/o1`, { body: organizationDetail() })
     server.on("GET", `${API}/entities/l1/lifecycle`, { body: lifecycle("l1", "location", "Old Mill") })
     server.on("GET", `${API}/entities/o1/lifecycle`, { body: lifecycle("o1", "organization", "The Guild") })

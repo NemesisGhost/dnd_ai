@@ -1,5 +1,5 @@
 import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Link } from "react-router"
 import type { DungeonAuthoringView } from "../../types/dungeonAuthoring"
 import { describeBlockedReason } from "../../utils/blockedReason"
@@ -7,7 +7,7 @@ import { focusSoon } from "../authoring/focusSoon"
 import { useRetainedInput } from "../authoring/permissionLoss"
 import { useDungeonCommand } from "../authoring/useDungeonCommand"
 import { contentsText, plural } from "./areaText"
-import { TextField } from "../authoring/fields"
+import { TextAreaField, TextField } from "../authoring/fields"
 import { LifecycleBadge } from "../authoring/feedback"
 import { useUnsavedReport } from "../quests/useUnsavedReport"
 import type { ReportUnsaved } from "../quests/useUnsavedReport"
@@ -32,6 +32,16 @@ const connectionCount = (view: DungeonAuthoringView, areaId: string): number =>
 
 const ADD_AREA_NAME_ID = "area-add-name"
 
+type AreaField = "name" | "summary" | "kind" | "dimensions" | "environment"
+const AREA_FIELDS: readonly AreaField[] = ["name", "summary", "kind", "dimensions", "environment"]
+const AREA_FIELD_ID: Readonly<Record<AreaField, string>> = {
+    name: ADD_AREA_NAME_ID,
+    summary: "area-add-summary",
+    kind: "area-add-kind",
+    dimensions: "area-add-dimensions",
+    environment: "area-add-environment",
+}
+
 // The areas of a dungeon as a compact list in the server's order (by name; areas do not nest and
 // have no stored order). Each area is its own record with its own status, so nothing here implies
 // the dungeon's publication reaches them. Adding an area reveals one small form above the list and
@@ -39,16 +49,28 @@ const ADD_AREA_NAME_ID = "area-add-name"
 export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, linkState, editState, onUnsaved }: Props) {
     const [open, setOpen] = useState(false)
     const [name, setName] = useState("")
+    const [summary, setSummary] = useState("")
     const [kind, setKind] = useState("")
+    const [dimensions, setDimensions] = useState("")
+    const [environment, setEnvironment] = useState("")
     const [problem, setProblem] = useState<string | null>(null)
+    // How many times each field has been edited. A successful create clears only the fields whose count
+    // is what it was at the submission: the fields stay editable while the request is pending, and what
+    // was typed after it is not part of it. Counting edits (not comparing values) keeps a field changed
+    // and changed back, or by whitespace only, as newer input.
+    const edits = useRef<Record<AreaField, number>>({ name: 0, summary: 0, kind: 0, dimensions: 0, environment: 0 })
     const command = useDungeonCommand({ campaignId, dungeonId, areaId: null, scope: "areas", refetch: refresh, pageStale: read.stale })
-    useUnsavedReport(onUnsaved, "new-area", name.trim() !== "" || kind.trim() !== "" ? ["a new area"] : [])
+    const typed = [name, summary, kind, dimensions, environment].some((value) => value.trim() !== "")
+    useUnsavedReport(onUnsaved, "new-area", typed ? ["a new area"] : [])
     useRetainedInput(
         "new-area",
         "New area",
         [
             { label: "Name", value: name.trim() },
+            { label: "Summary", value: summary.trim() },
             { label: "Kind", value: kind.trim() },
+            { label: "Size", value: dimensions.trim() },
+            { label: "Environment", value: environment.trim() },
         ].filter((c) => c.value !== ""),
     )
 
@@ -71,6 +93,12 @@ export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, link
     const blocked = view.blocked_actions.find((b) => b.action === "update")?.reason
     const root = `/app/${encodeURIComponent(campaignId)}/world/dungeon/${encodeURIComponent(dungeonId)}`
 
+    // Every change a person makes counts as an edit, whatever the new value is.
+    function edit(field: AreaField, set: (value: string) => void, value: string) {
+        edits.current[field] += 1
+        set(value)
+    }
+
     function submit() {
         const clean = name.trim()
         if (clean === "") {
@@ -79,13 +107,31 @@ export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, link
             return
         }
         setProblem(null)
+        const submitted = { ...edits.current }
+        const optional = (value: string) => (value.trim() === "" ? null : value.trim())
         command.send(
-            { op: "add_area", body: { name: clean, area_type: kind.trim() === "" ? null : kind.trim() } },
+            {
+                op: "add_area",
+                body: {
+                    name: clean,
+                    summary: optional(summary),
+                    area_type: optional(kind),
+                    dimensions: optional(dimensions),
+                    environmental_properties: optional(environment),
+                },
+            },
             `Area ${clean} added as a draft`,
             () => {
-                setName("")
-                setKind("")
-                focusSoon(ADD_AREA_NAME_ID)
+                const unchanged = (field: AreaField) => edits.current[field] === submitted[field]
+                if (unchanged("name")) setName("")
+                if (unchanged("summary")) setSummary("")
+                if (unchanged("kind")) setKind("")
+                if (unchanged("dimensions")) setDimensions("")
+                if (unchanged("environment")) setEnvironment("")
+                // Focus goes back to Area name, except from a field that holds newer input.
+                const focused = document.activeElement?.id
+                const typingNewer = AREA_FIELDS.some((f) => !unchanged(f) && AREA_FIELD_ID[f] === focused)
+                if (!typingNewer) focusSoon(ADD_AREA_NAME_ID)
             },
         )
     }
@@ -147,17 +193,39 @@ export function DungeonAreasSection({ campaignId, dungeonId, read, refresh, link
                             label="Area name"
                             required
                             value={name}
-                            onChange={setName}
+                            onChange={(value) => edit("name", setName, value)}
                             maxLength={options.limits.name_max_length}
                             error={problem}
+                        />
+                        <TextAreaField
+                            id="area-add-summary"
+                            label="Summary"
+                            value={summary}
+                            onChange={(value) => edit("summary", setSummary, value)}
+                            maxLength={options.limits.summary_max_length}
                         />
                         <TextField
                             id="area-add-kind"
                             label="Kind of area"
                             hint="A room, corridor, cavern…"
                             value={kind}
-                            onChange={setKind}
+                            onChange={(value) => edit("kind", setKind, value)}
                             maxLength={options.limits.short_text_max_length}
+                        />
+                        <TextField
+                            id="area-add-dimensions"
+                            label="Size"
+                            hint="For example 30 ft by 40 ft."
+                            value={dimensions}
+                            onChange={(value) => edit("dimensions", setDimensions, value)}
+                            maxLength={options.limits.short_text_max_length}
+                        />
+                        <TextAreaField
+                            id="area-add-environment"
+                            label="Environment"
+                            value={environment}
+                            onChange={(value) => edit("environment", setEnvironment, value)}
+                            maxLength={options.limits.notes_max_length}
                         />
                     </div>
                     <div className="row-actions">

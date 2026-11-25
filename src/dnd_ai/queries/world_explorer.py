@@ -160,6 +160,7 @@ def world_category_for_type_code(entity_type_code: str) -> str | None:
 # — see `dnd_ai.api.pagination`).
 ENTITY_SEARCH_KEYSET = "world_entities"
 RELATIONSHIP_KEYSET = "world_relationships"
+LOCATION_CHILDREN_KEYSET = "world_location_children"
 
 
 class WorldResourceNotFoundError(DomainAuthorizationError):
@@ -887,6 +888,165 @@ def get_location_view(
         is_destroyed=row["is_destroyed"],
         alarm_level=row["alarm_level"],
         condition_notes=row["condition_notes"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Children of a place: bounded navigation and search below it (P15-C08-S01)
+# ---------------------------------------------------------------------------
+
+# Defensive only: the containment triggers already forbid cycles. A place deeper than this below the
+# searched one is not returned by a search from it, but stays reachable by navigation.
+_MAX_CHILD_DEPTH = 64
+
+
+@dataclass(frozen=True)
+class LocationChildCard:
+    """One visible place below the parent. `path` holds the visible intermediate places between the
+    parent (excluded) and the place (excluded), top to bottom; empty for a direct child. `name_sort`
+    is the SQL's own ordering key, echoed into the pagination cursor (see `_NAME_SORT_PREFIX`)."""
+
+    location_id: uuid.UUID
+    name: str
+    location_type_code: str
+    summary: str | None
+    name_sort: str
+    canon_status: str
+    lifecycle_status: str
+    path: tuple[LocationCrumb, ...]
+
+
+def list_location_children(
+    connection: Connection,
+    *,
+    parent_location_id: uuid.UUID,
+    world_id: uuid.UUID,
+    parent_denied_entity_ids: frozenset[uuid.UUID],
+    hidden_entity_ids: frozenset[uuid.UUID],
+    query_text: str | None,
+    limit: int,
+    after_name: str | None,
+    after_location_id: uuid.UUID | None,
+) -> tuple[LocationChildCard, ...]:
+    """Up to `limit + 1` visible places below `parent_location_id`, ordered `(lower(left(name, N)),
+    location_id)` like `search_world_entities`.
+
+    The parent must pass the detail route's own test: in `world_id` and not in
+    `parent_denied_entity_ids` (the reference-mode denied set). Otherwise
+    `WorldResourceNotFoundError`, the detail route's identical answer.
+
+    A place is listed only when it is in `world_id` and not in `hidden_entity_ids` (the browse-mode
+    denied set). Without `query_text` those are the direct children. With it, the places reachable
+    through visible places only (the traversal never enters a hidden place, so nothing below one is
+    reached through it, to `_MAX_CHILD_DEPTH` levels) whose name or summary contains the text. All
+    filtering is in SQL, before ordering and `LIMIT`."""
+    if parent_location_id in parent_denied_entity_ids:
+        raise WorldResourceNotFoundError(f"location {parent_location_id} denied to caller")
+    parent_world = connection.execute(
+        text("""
+            SELECT e.world_id
+            FROM world.locations l
+            JOIN core.entities e ON e.entity_id = l.location_id
+            WHERE l.location_id = :parent
+        """),
+        {"parent": parent_location_id},
+    ).scalar()
+    if parent_world != world_id:
+        raise WorldResourceNotFoundError(f"location {parent_location_id} not in world {world_id}")
+
+    rows = (
+        connection.execute(
+            text(f"""
+                WITH RECURSIVE reach AS (
+                    SELECT l.location_id, 1 AS depth, ARRAY[]::uuid[] AS path_ids
+                    FROM world.locations l
+                    JOIN core.entities pe ON pe.entity_id = l.location_id
+                    WHERE l.parent_location_id = :parent
+                      AND pe.world_id = :world_id
+                      AND NOT (l.location_id = ANY(CAST(:hidden AS uuid[])))
+                  UNION ALL
+                    SELECT l.location_id, r.depth + 1, r.path_ids || r.location_id
+                    FROM reach r
+                    JOIN world.locations l ON l.parent_location_id = r.location_id
+                    JOIN core.entities pe ON pe.entity_id = l.location_id
+                    WHERE CAST(:descend AS boolean)
+                      AND r.depth < {_MAX_CHILD_DEPTH}
+                      AND pe.world_id = :world_id
+                      AND NOT (l.location_id = ANY(CAST(:hidden AS uuid[])))
+                )
+                SELECT e.entity_id, e.canonical_name, e.summary, et.code AS location_type_code,
+                       lower(left(e.canonical_name, {_NAME_SORT_PREFIX})) AS name_sort,
+                       cs.code AS canon_status, lst.code AS lifecycle_status, r.path_ids
+                FROM reach r
+                JOIN core.entities e ON e.entity_id = r.location_id
+                JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+                JOIN core.canon_statuses cs ON cs.canon_status_id = e.canon_status_id
+                JOIN core.lifecycle_statuses lst ON lst.lifecycle_status_id = e.lifecycle_status_id
+                WHERE (
+                        CAST(:like_pattern AS text) IS NULL
+                        OR e.canonical_name ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
+                        OR e.summary ILIKE CAST(:like_pattern AS text) ESCAPE '\\'
+                      )
+                  AND (
+                        NOT CAST(:has_cursor AS boolean)
+                        OR (lower(left(e.canonical_name, {_NAME_SORT_PREFIX})), e.entity_id)
+                           > (CAST(:after_name AS text), CAST(:after_location_id AS uuid))
+                      )
+                ORDER BY lower(left(e.canonical_name, {_NAME_SORT_PREFIX})), e.entity_id
+                LIMIT :limit_plus_one
+            """),
+            {
+                "parent": parent_location_id,
+                "world_id": world_id,
+                "hidden": list(hidden_entity_ids),
+                "descend": bool(query_text),
+                "like_pattern": f"%{_escape_like(query_text)}%" if query_text else None,
+                "has_cursor": after_name is not None and after_location_id is not None,
+                "after_name": after_name,
+                "after_location_id": after_location_id,
+                "limit_plus_one": limit + 1,
+            },
+        )
+        .mappings()
+        .all()
+    )
+
+    # One bounded follow-up for the names on the page's paths. Every id is a place the traversal
+    # entered, so it is visible by construction.
+    crumb_ids = {crumb for row in rows for crumb in row["path_ids"]}
+    crumbs: dict[uuid.UUID, LocationCrumb] = {}
+    if crumb_ids:
+        for crumb in (
+            connection.execute(
+                text("""
+                    SELECT e.entity_id, e.canonical_name, et.code AS location_type_code
+                    FROM core.entities e
+                    JOIN core.entity_types et ON et.entity_type_id = e.entity_type_id
+                    WHERE e.entity_id = ANY(CAST(:ids AS uuid[]))
+                """),
+                {"ids": list(crumb_ids)},
+            )
+            .mappings()
+            .all()
+        ):
+            crumbs[crumb["entity_id"]] = LocationCrumb(
+                location_id=crumb["entity_id"],
+                name=crumb["canonical_name"],
+                location_type_code=crumb["location_type_code"],
+            )
+
+    return tuple(
+        LocationChildCard(
+            location_id=row["entity_id"],
+            name=row["canonical_name"],
+            location_type_code=row["location_type_code"],
+            summary=row["summary"],
+            name_sort=row["name_sort"],
+            canon_status=row["canon_status"],
+            lifecycle_status=row["lifecycle_status"],
+            path=tuple(crumbs[crumb_id] for crumb_id in row["path_ids"]),
+        )
+        for row in rows
     )
 
 

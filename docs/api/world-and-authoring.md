@@ -275,6 +275,7 @@
 | `GET /campaigns/{campaign_id}/world/events/{event_id}` | — → 200 EventDetailResponse | campaign.view |
 | `GET /campaigns/{campaign_id}/world/items/{item_instance_id}` | — → 200 ItemDetailResponse | campaign.view |
 | `GET /campaigns/{campaign_id}/world/locations/{location_id}` | — → 200 LocationDetailResponse | campaign.view |
+| `GET /campaigns/{campaign_id}/world/locations/{location_id}/children` | — → 200 LocationChildrenResponse | campaign.view |
 | `GET /campaigns/{campaign_id}/world/organizations/{organization_id}` | — → 200 OrganizationDetailResponse | campaign.view |
 | `GET /campaigns/{campaign_id}/world/relationships` | — → 200 RelationshipListResponse | campaign.view |
 | `GET /campaigns/{campaign_id}/world/religions/{religion_id}` | — → 200 ReligionDetailResponse | campaign.view |

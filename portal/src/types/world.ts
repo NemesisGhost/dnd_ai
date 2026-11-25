@@ -98,6 +98,23 @@ export interface LocationDetail {
     condition_notes: string | null
 }
 
+// One place from the "places within" read: where it sits below the parent is `path` (the visible
+// places between them, top to bottom; empty for a direct child).
+export interface LocationChild {
+    location_id: string
+    name: string
+    location_type_code: string
+    summary: string | null
+    canon_status: string
+    lifecycle_status: string
+    path: LocationCrumb[]
+}
+
+export interface LocationChildrenPage {
+    items: LocationChild[]
+    next_cursor: string | null
+}
+
 export interface OrganizationLink {
     entity_id: string
     name: string

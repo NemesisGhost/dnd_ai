@@ -113,6 +113,8 @@ function setup(options: Options = {}) {
     })
     server.on("GET", options.detailPath ?? `/campaigns/${C}/world/locations/${entityId}`, resolve(options.detail ?? locationDetail()))
     server.on("GET", `/campaigns/${C}/entities/${entityId}/lifecycle`, resolve(options.lifecycle ?? lifecycle()))
+    // The "Places within" panel's read of the place's children: none here (P15-C08-S02).
+    server.on("GET", /\/world\/locations\/[^/]+\/children/, { body: { items: [], next_cursor: null } })
     server.on(
         "GET",
         `/campaigns/${C}/authoring/locations/${entityId}`,
@@ -666,12 +668,15 @@ describe("World record workspace: a dungeon", () => {
                 server.on("GET", `/campaigns/${C}/authoring/dungeons/options`, { body: OPTIONS })
                 server.on("GET", `/campaigns/${C}/authoring/dungeons/l1`, () => ({ body: state.view }))
                 server.on("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`, (call) => {
-                    const body = call.body as { name: string; area_type: string | null }
+                    const body = call.body as { name: string; summary?: string | null; area_type: string | null }
                     state.view = {
                         ...state.view,
                         areas: [
                             ...state.view.areas,
-                            areaRow(`n${state.view.areas.length}`, body.name, { area_type: body.area_type }),
+                            areaRow(`n${state.view.areas.length}`, body.name, {
+                                area_type: body.area_type,
+                                summary: body.summary ?? null,
+                            }),
                         ],
                     }
                     return { status: 201, body: { dungeon_area_id: "n", changed: true } }
@@ -835,7 +840,10 @@ describe("World record workspace: a dungeon", () => {
         await waitFor(() => expect(server.callsTo("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`)).toHaveLength(1))
         expect(server.callsTo("POST", `/campaigns/${C}/authoring/dungeons/l1/areas`)[0]!.body).toEqual({
             name: "Shrine of Ash",
+            summary: null,
             area_type: "chamber",
+            dimensions: null,
+            environmental_properties: null,
         })
         expect(await (await areaList()).findByRole("link", { name: "Shrine of Ash" })).toBeVisible()
         expect(within(form).getByRole("textbox", { name: /Area name/ })).toHaveValue("")
@@ -868,6 +876,357 @@ describe("World record workspace: a dungeon", () => {
         fireEvent.click(screen.getByRole("link", { name: "Back to World" }))
         const dialog = await screen.findByRole("dialog", { name: "Discard unsaved input?" })
         expect(dialog).toHaveTextContent("a new area")
+    })
+
+    // --- the add-area form's summary, size and environment (P15-C08-S03, D1-D10) -----------------
+    const AREAS = `/campaigns/${C}/authoring/dungeons/l1/areas`
+    const addForm = async () => {
+        await openSection("Areas")
+        fireEvent.click(screen.getByRole("button", { name: "Add area" }))
+        return screen.findByRole("form", { name: "Add an area" })
+    }
+    const FIELDS = {
+        name: /Area name/,
+        summary: "Summary",
+        kind: "Kind of area",
+        size: /^Size/,
+        environment: "Environment",
+    } as const
+    const fill = (form: HTMLElement, field: keyof typeof FIELDS, value: string) =>
+        fireEvent.change(within(form).getByRole("textbox", { name: FIELDS[field] }), { target: { value } })
+    const fillAll = (form: HTMLElement) => {
+        fill(form, "name", " Shrine of Ash ")
+        fill(form, "summary", "  A hall of ash.  ")
+        fill(form, "kind", " chamber ")
+        fill(form, "size", " 30 ft by 40 ft ")
+        fill(form, "environment", "  Smoke, and a cold draught.  ")
+    }
+    const FULL_BODY = {
+        name: "Shrine of Ash",
+        summary: "A hall of ash.",
+        area_type: "chamber",
+        dimensions: "30 ft by 40 ft",
+        environmental_properties: "Smoke, and a cold draught.",
+    }
+    const submitAdd = (form: HTMLElement) => fireEvent.click(within(form).getByRole("button", { name: "Add area" }))
+    const REFUSED_422 = { status: 422, body: { error: { code: "validation_failed", message: "m", correlation_id: "c" } } }
+
+    it("D1: the add form has labelled Summary, Size (with its hint) and Environment fields with the options' limits", async () => {
+        dungeon()
+        const form = await addForm()
+        const summary = within(form).getByRole("textbox", { name: FIELDS.summary })
+        const size = within(form).getByRole("textbox", { name: FIELDS.size })
+        const environment = within(form).getByRole("textbox", { name: FIELDS.environment })
+        expect(within(form).getByText("For example 30 ft by 40 ft.")).toBeVisible()
+        // The limit is shown by the field's counter near the end: the options' 4000, 200 and 4000.
+        fireEvent.change(summary, { target: { value: "x".repeat(3990) } })
+        fireEvent.change(size, { target: { value: "x".repeat(195) } })
+        fireEvent.change(environment, { target: { value: "x".repeat(3980) } })
+        expect(within(form).getByText("10 characters remaining")).toBeVisible()
+        expect(within(form).getByText("5 characters remaining")).toBeVisible()
+        expect(within(form).getByText("20 characters remaining")).toBeVisible()
+    })
+
+    it("D2: all five values are sent trimmed", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        expect(server.callsTo("POST", AREAS)[0]!.body).toEqual(FULL_BODY)
+    })
+
+    it("D3: empty or whitespace-only summary, size and environment are sent as null", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fill(form, "name", "Shrine")
+        fill(form, "summary", "   ")
+        fill(form, "size", " ")
+        fill(form, "environment", "\n  ")
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        expect(server.callsTo("POST", AREAS)[0]!.body).toEqual({
+            name: "Shrine",
+            summary: null,
+            area_type: null,
+            dimensions: null,
+            environmental_properties: null,
+        })
+    })
+
+    it("D4: after success every field is empty, focus is in Area name, the announcement is unchanged and the summary is listed", async () => {
+        dungeon()
+        const form = await addForm()
+        fillAll(form)
+        submitAdd(form)
+        expect(await (await areaList()).findByText("A hall of ash.")).toBeVisible()
+        for (const field of Object.keys(FIELDS) as (keyof typeof FIELDS)[]) {
+            expect(within(form).getByRole("textbox", { name: FIELDS[field] })).toHaveValue("")
+        }
+        await waitFor(() => expect(within(form).getByRole("textbox", { name: FIELDS.name })).toHaveFocus())
+        expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Area Shrine of Ash added as a draft")
+    })
+
+    it("D5: a typed Summary alone is named before leaving", async () => {
+        dungeon()
+        const form = await addForm()
+        fill(form, "summary", "Only a summary")
+        fireEvent.click(screen.getByRole("link", { name: "Back to World" }))
+        const dialog = await screen.findByRole("dialog", { name: "Discard unsaved input?" })
+        expect(dialog).toHaveTextContent("a new area")
+    })
+
+    it("D6: a 422 and a limit refusal keep every typed value, and neither clears, refocuses nor announces", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        server.on("POST", AREAS, REFUSED_422)
+        const announcer = screen.getByTestId("authoring-announcer")
+        const announced = announcer.textContent
+        // Opening the form moves focus to Area name (deferred); wait for that, then put focus elsewhere.
+        await waitFor(() => expect(within(form).getByRole("textbox", { name: FIELDS.name })).toHaveFocus())
+        within(form).getByRole("textbox", { name: FIELDS.environment }).focus()
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        await waitFor(() => expect(within(form).getByRole("button", { name: "Add area" })).toBeEnabled())
+        const keptValues = () => ({
+            name: within(form).getByRole("textbox", { name: FIELDS.name }),
+            summary: within(form).getByRole("textbox", { name: FIELDS.summary }),
+            kind: within(form).getByRole("textbox", { name: FIELDS.kind }),
+            size: within(form).getByRole("textbox", { name: FIELDS.size }),
+            environment: within(form).getByRole("textbox", { name: FIELDS.environment }),
+        })
+        const expectKept = () => {
+            const fields = keptValues()
+            expect(fields.name).toHaveValue(" Shrine of Ash ")
+            expect(fields.summary).toHaveValue("  A hall of ash.  ")
+            expect(fields.kind).toHaveValue(" chamber ")
+            expect(fields.size).toHaveValue(" 30 ft by 40 ft ")
+            expect(fields.environment).toHaveValue("  Smoke, and a cold draught.  ")
+        }
+        expectKept()
+        expect(keptValues().environment).toHaveFocus()
+        expect(announcer.textContent).toBe(announced)
+        server.on("POST", AREAS, {
+            status: 409,
+            body: { error: { code: "dungeon_limit_reached", message: "m", correlation_id: "c" } },
+        })
+        submitAdd(form)
+        expect(await screen.findByText("This dungeon has reached its limit for that.")).toBeVisible()
+        expectKept()
+        expect(announcer.textContent).toBe(announced)
+    })
+
+    it("D7: on permission loss the retained panel shows the typed summary, size and environment and no private names", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        server.on("POST", AREAS, REVOKED)
+        submitAdd(form)
+        const panel = await alertPanel()
+        expect(panel).toHaveTextContent("Shrine of Ash")
+        expect(panel).toHaveTextContent("A hall of ash.")
+        expect(panel).toHaveTextContent("30 ft by 40 ft")
+        expect(panel).toHaveTextContent("Smoke, and a cold draught.")
+        expect(panel).toHaveTextContent("chamber")
+        expect(panel).not.toHaveTextContent("Entry Hall")
+        expect(screen.queryByRole("list", { name: "Areas" })).not.toBeInTheDocument()
+        expect(screen.queryByRole("textbox", { name: FIELDS.summary })).not.toBeInTheDocument()
+    })
+
+    it("D8: after an unknown outcome the retry sends the same body with the same key, and an edited body gets a new key", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        server.on("POST", AREAS, { networkError: true })
+        submitAdd(form)
+        const retry = await screen.findByRole("button", { name: "Retry" })
+        expect(server.callsTo("POST", AREAS)).toHaveLength(1)
+        fireEvent.click(retry)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(2))
+        const [first, second] = server.callsTo("POST", AREAS)
+        expect(second!.body).toEqual(first!.body)
+        expect(first!.body).toEqual(FULL_BODY)
+        expect(second!.headers["Idempotency-Key"]).toBeTruthy()
+        expect(second!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+        // Edit the Environment and send again: a different request, so a different key.
+        await screen.findByRole("button", { name: "Retry" })
+        fill(form, "environment", "Smoke only.")
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(3))
+        const third = server.callsTo("POST", AREAS)[2]!
+        expect(third.body).toEqual({ ...FULL_BODY, environmental_properties: "Smoke only." })
+        expect(third.headers["Idempotency-Key"]).not.toBe(first!.headers["Idempotency-Key"])
+    })
+
+    it("D9: an empty name with a filled Summary sends nothing and asks for a name", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fill(form, "summary", "A hall of ash.")
+        submitAdd(form)
+        expect(await screen.findByText("Enter a name.")).toBeVisible()
+        expect(writes(server)).toHaveLength(0)
+        expect(within(form).getByRole("textbox", { name: FIELDS.summary })).toHaveValue("A hall of ash.")
+    })
+
+    it("D10: Done closes the form and reopening it shows the values not yet sent", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        fireEvent.click(within(form).getByRole("button", { name: "Done" }))
+        await waitFor(() => expect(screen.queryByRole("form", { name: "Add an area" })).not.toBeInTheDocument())
+        fireEvent.click(screen.getByRole("button", { name: "Add area" }))
+        const reopened = await screen.findByRole("form", { name: "Add an area" })
+        // Name and kind are kept today; the new fields must be kept the same way.
+        expect(within(reopened).getByRole("textbox", { name: FIELDS.name })).toHaveValue(" Shrine of Ash ")
+        expect(within(reopened).getByRole("textbox", { name: FIELDS.kind })).toHaveValue(" chamber ")
+        expect(within(reopened).getByRole("textbox", { name: FIELDS.summary })).toHaveValue("  A hall of ash.  ")
+        expect(within(reopened).getByRole("textbox", { name: FIELDS.size })).toHaveValue(" 30 ft by 40 ft ")
+        expect(within(reopened).getByRole("textbox", { name: FIELDS.environment })).toHaveValue(
+            "  Smoke, and a cold draught.  ",
+        )
+        expect(server.callsTo("POST", AREAS)).toHaveLength(0)
+    })
+
+    // --- input typed while the create is pending (C08-S03-1) ---------------------------------------
+    // The create is held until `release()`; the fields stay editable meanwhile, and a successful
+    // settlement clears only what was not edited since the submission.
+    const heldCreate = (server: MockServer) => {
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => {
+            release = resolve
+        })
+        server.on("POST", AREAS, async () => {
+            await gate
+            return { status: 201, body: { dungeon_area_id: "n", changed: true } }
+        })
+        return release
+    }
+    const settled = async () => {
+        await waitFor(() =>
+            expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Area Shrine of Ash added as a draft"),
+        )
+        // Let any deferred focus run.
+        await new Promise((resolve) => setTimeout(resolve, 60))
+    }
+    const SUBMITTED = {
+        name: " Shrine of Ash ",
+        summary: "  A hall of ash.  ",
+        kind: " chamber ",
+        size: " 30 ft by 40 ft ",
+        environment: "  Smoke, and a cold draught.  ",
+    } as const
+    const field = (form: HTMLElement, which: keyof typeof FIELDS) =>
+        within(form).getByRole("textbox", { name: FIELDS[which] })
+
+    it("E1: Environment typed after submitting survives success, keeps focus, and the rest clear", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        const release = heldCreate(server)
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        fill(form, "environment", "Newer note typed while pending")
+        field(form, "environment").focus()
+        release()
+        await settled()
+        expect(field(form, "environment")).toHaveValue("Newer note typed while pending")
+        expect(field(form, "environment")).toHaveFocus()
+        for (const untouched of ["name", "summary", "kind", "size"] as const) {
+            expect(field(form, untouched)).toHaveValue("")
+        }
+        // The server received only the submitted snapshot, once.
+        expect(server.callsTo("POST", AREAS)).toHaveLength(1)
+        expect(server.callsTo("POST", AREAS)[0]!.body).toEqual(FULL_BODY)
+    })
+
+    for (const edited of ["name", "summary", "kind", "size"] as const) {
+        it(`E2: ${edited} typed after submitting survives success while the other fields clear`, async () => {
+            const { server } = dungeon()
+            const form = await addForm()
+            fillAll(form)
+            const release = heldCreate(server)
+            submitAdd(form)
+            await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+            fill(form, edited, `Newer ${edited}`)
+            release()
+            await settled()
+            for (const which of ["name", "summary", "kind", "size", "environment"] as const) {
+                expect(field(form, which)).toHaveValue(which === edited ? `Newer ${edited}` : "")
+            }
+            expect(server.callsTo("POST", AREAS)[0]!.body).toEqual(FULL_BODY)
+        })
+    }
+
+    it("E3: a field edited away and back to the submitted value, or by whitespace only, still counts as newer input", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        const release = heldCreate(server)
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        fill(form, "summary", "Something else")
+        fill(form, "summary", SUBMITTED.summary)
+        fill(form, "size", `${SUBMITTED.size} `)
+        release()
+        await settled()
+        expect(field(form, "summary")).toHaveValue(SUBMITTED.summary)
+        expect(field(form, "size")).toHaveValue(`${SUBMITTED.size} `)
+        for (const untouched of ["name", "kind", "environment"] as const) {
+            expect(field(form, untouched)).toHaveValue("")
+        }
+    })
+
+    it("E4: with nothing typed after submitting, every field clears and focus returns to Area name", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        const release = heldCreate(server)
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        release()
+        await settled()
+        for (const which of Object.keys(FIELDS) as (keyof typeof FIELDS)[]) {
+            expect(field(form, which)).toHaveValue("")
+        }
+        await waitFor(() => expect(field(form, "name")).toHaveFocus())
+    })
+
+    it("E5: input typed while an unknown outcome is retried survives the retry's success", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        server.on("POST", AREAS, { networkError: true })
+        submitAdd(form)
+        const retry = await screen.findByRole("button", { name: "Retry" })
+        fill(form, "environment", "Typed before retrying")
+        server.on("POST", AREAS, { status: 201, body: { dungeon_area_id: "n", changed: true } })
+        fireEvent.click(retry)
+        await settled()
+        const [first, second] = server.callsTo("POST", AREAS)
+        expect(second!.body).toEqual(first!.body)
+        expect(second!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
+        expect(field(form, "environment")).toHaveValue("Typed before retrying")
+        for (const untouched of ["name", "summary", "kind", "size"] as const) {
+            expect(field(form, untouched)).toHaveValue("")
+        }
+    })
+
+    it("E6: a refusal after newer input keeps every value, the newer one included", async () => {
+        const { server } = dungeon()
+        const form = await addForm()
+        fillAll(form)
+        server.on("POST", AREAS, async () => {
+            await new Promise((resolve) => setTimeout(resolve, 30))
+            return REFUSED_422
+        })
+        submitAdd(form)
+        await waitFor(() => expect(server.callsTo("POST", AREAS)).toHaveLength(1))
+        fill(form, "environment", "Newer note")
+        await waitFor(() => expect(within(form).getByRole("button", { name: "Add area" })).toBeEnabled())
+        expect(field(form, "name")).toHaveValue(SUBMITTED.name)
+        expect(field(form, "summary")).toHaveValue(SUBMITTED.summary)
+        expect(field(form, "environment")).toHaveValue("Newer note")
     })
 
     it("replaces the old Structure address with Areas, keeping the rest of the address and the state", async () => {
