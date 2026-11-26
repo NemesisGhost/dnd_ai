@@ -260,6 +260,44 @@ A13's "no `canon.edit` mounts nothing" half is not repeated in the new file (the
 - The set-back after a lock refusal covers an open existing-objective panel only, as written in item 5; a stage panel's type field is not set back (it is disabled once the read shows the lock).
 - Not covered by jsdom: real browser focus, 320 px layout, AX/screen reader, zoom (pending separate events). CI: pending checkpoint PR.
 
+### 11.4 Independent review record
+
+Reviewed `ff9cf13ec2f803e16c5f3b6ebcb4b5ae8f549c9a..a05351529bfa923a20a1d1c5451a21c444003b55`, with records at `7338ff08874ec19282e507d0677c56a0a9953ede`. The three commits are in ancestry order; `phase15/completion` and `origin/phase15/completion` both point at the records commit. The worktree was clean before review. The implementation scope is the three files listed in 11.3; records changes are confined to this plan and the register.
+
+**T01 verdict: CHANGES REQUIRED. S01 verdict: NOT READY.** One Low finding blocks the slice because the specific late-focus acceptance contract in section 3.2 item 7 is not met. No other material defect was demonstrated.
+
+**C10-S01-1 — Late save response can take focus from an independent control in the same section (Low, 3/10).** Trigger: while an objective save is pending, move focus to the still-enabled stage toggle in that section; let the save succeed and close the form. The response then moves focus to the objective heading, despite the user's move. A temporary deferred-response probe reproduced this: expected the stage toggle to retain focus, received focus on `objective-o1`. The helper currently treats every descendant of `sectionRef` (and any dialog) as focus still owned by the action. A15 covers navigation to the Details heading outside that section, so it does not cover this trigger. The toggle is still focusable during save; its handler safely does nothing while the panel is open.
+
+Rubric: supported-path exposure 1 (rare, constrained authenticated editor action during an in-flight save); impact 1 (bounded focus disruption); triggerability 1 (requires this timing and deliberate focus move); detection/recovery 0 (visible and easily recovered); blast radius 0 (one editor action); total 3, Low. Readiness disposition: blocks this slice because item 7 expressly promises that focus moved elsewhere is preserved. Bounded correction: restrict late-response ownership to the originating form/trigger and its own closing dialog, rather than the entire section or any dialog; add a deferred-save regression that moves focus to the enabled stage toggle (and keep A15 and the explicit-answer focus tests).
+
+The §7.1 focused set passed: 7 files, 149 tests. Lint and `tsc -b` passed; build passed with the existing chunk-size notice. The temporary focus probe failed as described and was removed; no production source was changed. The recorded implementation baseline failures and M1-M8 results were inspected, not rerun. The recorded full portal run (463 files/6,008 passed) remains implementation evidence; no full suite was repeated. `uv run python scripts/check_documentation.py` and `git diff --check` pass on the review records. CI remains pending the checkpoint PR; browser/AX/zoom, human review, S02 and acceptance remain outstanding events or gates as specified in section 12.
+
+### 11.5 Correction of C10-S01-1 (Sonnet)
+
+**C10-S01-1: corrected, pending independent confirmation.** Luna's finding, score and verdict in section 11.4 stay as history; S01 is not marked passed.
+
+Correction `d8d0f261c4e90cdf06d871176ffe33de01ff9049` on baseline `7338ff08874ec19282e507d0677c56a0a9953ede` (HEAD and origin agreed at start; Luna's uncommitted section 11.4 and register edits were preserved unchanged and are committed here with these records). Portal only: `QuestEditor.tsx` and the new-case file. No shared hook, `ConfirmDialog`, page guard, backend or API change; save, retry, reconciliation and draft behavior are untouched.
+
+**Change.** `focusLater` no longer treats the whole section and any dialog as focus the action owns. A late settlement moves focus only if focus is on the page body, still on the control the action began from, or inside the form or dialog that control was in (the one the action is closing). Another control, including one in the same section, and an unrelated dialog are not owned. A target in a section no longer shown still cannot take focus (`canTakeFocus`). The person's own dialog answers (Keep it, Keep editing) and Cancel-to-opener still restore focus. The same helper serves objective save, stage save, removal and reorder.
+
+**Regressions added before the fix**, using gated server responses and one zero-delay timer flush (no fixed sleep):
+
+| Case | Baseline (`7338ff08`) | After correction |
+|---|---|---|
+| R1 objective save settles while the stage toggle has focus; focus stays; "Objective saved" announced once | fail | pass |
+| R2 stage save settles while Expand/Collapse all has focus; focus stays | fail | pass |
+| R3 objective removal settles while the stage toggle has focus; focus stays, not on Add objective | fail | pass |
+| R4 nothing moved focus: the heading still receives it (guard) | pass | pass |
+| A1-A17 (18 tests, including A15's outside-section case and the dialog-answer cases A4 and A10) | pass | pass |
+
+R2's first draft focused **Add stage**, which is disabled while a save is pending and so cannot hold focus; it was corrected to the enabled Expand/Collapse all button and the baseline was rerun against the pre-correction file (swapped in and restored, hash equal) to record the failures above.
+
+**Verification.** Focused set (section 7.1): 7 files, 153 passed. Lint, `tsc -b`, build, `uv run python scripts/check_documentation.py` and `git diff --check` pass. **Full `npm test`, first run: 463 files, 6,012 passed, 0 failed; no rerun needed and no failure to attribute.** **Mutation MC1** (restore section-wide ownership: any descendant of the section, or any dialog, counts as owned): R1, R2 and R3 failed; bytes restored, hash equal (`cbd321d3...`).
+
+**Not covered.** An unrelated dialog is not exercised as its own case: while a save is pending the opening controls are disabled, so a competing dialog cannot be opened in jsdom; the ownership test excludes it by construction (only the originating form or dialog is in scope). Real browser focus, AX, zoom, human review and owner acceptance remain separate events. CI: pending checkpoint PR.
+
+**Re-review range for Luna:** `7338ff08874ec19282e507d0677c56a0a9953ede..` the C10-S01-1 records commit (correction `d8d0f261` plus this records commit).
+
 ## 12. C10 checkpoint coordination
 
 ### 12.1 Order and shared files
