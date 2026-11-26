@@ -298,6 +298,20 @@ R2's first draft focused **Add stage**, which is disabled while a save is pendin
 
 **Re-review range for Luna:** `7338ff08874ec19282e507d0677c56a0a9953ede..` the C10-S01-1 records commit (correction `d8d0f261` plus this records commit).
 
+### 11.6 Independent re-review of C10-S01-1 (Codex)
+
+Reviewed baseline `7338ff08874ec19282e507d0677c56a0a9953ede`, correction `d8d0f261c4e90cdf06d871176ffe33de01ff9049`, and records/current `89fc473aab7185243a57bb0ed7acf0b222f8aeeb`. Ancestry is ordered; `phase15/completion` and origin agree at the records commit. The starting worktree was clean. The correction changes only `QuestEditor.tsx` and its objective-actions test; records since the correction change only this plan and the register.
+
+**C10-S01-1 verdict: CONFIRMED CORRECTED. T01 verdict: PASS WITH VERIFICATION LIMITS. S01 verdict: PASS WITH VERIFICATION LIMITS.** The original 3/10 Low score and CHANGES REQUIRED disposition in §11.4 remain historical; this review confirms the correction against that contract. This is not C10 checkpoint acceptance.
+
+**Behavior confirmed.** The shared `focusLater` captures the nearest form/dialog containing the originating element and only considers the current focus owned when it remains on that origin, inside that captured scope, or on the page body (the established lost-focus fallback). The section-wide and arbitrary-dialog ownership branches are gone. Thus a still-enabled stage toggle or Expand/Collapse control receives no late focus from objective save, stage save or removal (R1-R3); when focus has not moved, R4 retains the intended heading focus. The same helper is used for stage/objective writes, removals and reordering. `canTakeFocus` refuses detached, hidden, inert and disabled targets. Quest section navigation moves focus to the newly active heading; A15 verifies a pending removal does not take it back. The mutation hook aborts an in-flight request on unmount/scope change. These controls prevent stale restoration in the exercised navigation path and reject detached targets.
+
+The unrelated-dialog branch was assessed by source inspection, as allowed: `scope.contains(active)` can only match the form/dialog that contained the original control, so an unrelated dialog is not owned. No artificial UI path was added. Explicit Keep it/Keep editing answers use the deliberate `own` path; Cancel still returns to its opener and uses the existing eligible fallback when that opener is unavailable. Correction changes only focus ownership and its regression tests; retry identity, request/save flow, lock reconciliation and newer drafts remain unchanged.
+
+**Evidence.** R1-R3 failed at the correction baseline and passed after the correction; R4 and all 18 A-cases passed at baseline and after. Restoring section-wide/arbitrary-dialog ownership (MC1) failed R1-R3. These are the correction record's controlled-response results; they were inspected, not rerun. The reviewer reran §7.1 focused tests: 7 files, 153 passed. Documentation and diff checks pass. The corrected full run, first run, remains separately recorded as 463 files/6,012 passed; it was not repeated. The earlier implementation run remains historical and is not substituted for correction evidence.
+
+Verification limits: jsdom does not establish real browser focus, AX/screen-reader behavior, layout or zoom. The unrelated-dialog exclusion is source-inspected, not an exercised user path. CI is pending the checkpoint PR. Remaining C10 gates are S02's independent review and B/C cases, one full portal run on final integration executable code, and CI on that exact head; browser/AX/zoom, human review and owner acceptance remain separate events. No acceptance is granted here.
+
 ## 12. C10 checkpoint coordination
 
 ### 12.1 Order and shared files
