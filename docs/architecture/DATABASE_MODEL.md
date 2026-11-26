@@ -434,11 +434,10 @@ The AI context service assembles prompts from the current portrayal profile and 
 ### 7.3 Player character extension
 
 - `character.player_characters`
-- **Design only** · `character.character_controllers`
-- `security.membership_character_relationships`
+- `security.membership_character_relationships` (also stores control assignments, §19.4)
 - `security.character_relationship_type_capabilities`
 
-A player character can participate in multiple campaigns and timelines. Ownership does not duplicate the character definition. The earlier `character_controllers` proposal would record operational control by a human, service account, external VTT actor, or AI agent, including temporary control handoffs; the table is absent. ADR 0021 governs the accepted campaign-control model.
+A player character can participate in multiple campaigns and timelines. Ownership does not duplicate the character definition. The earlier `character_controllers` proposal would record operational control by a human, service account, external VTT actor, or AI agent, including temporary control handoffs; the table is absent and is **retired** by [ADR 0021 §2.1](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md): campaign control assignments are stored as marked rows of `security.membership_character_relationships` (§19.4). ADR 0021 governs the accepted campaign-control model.
 
 Human relationships to characters are modeled separately by `security.membership_character_relationships` (§19). A campaign membership may own, primarily control, co-control, portray, or view many characters, and a character may have each relationship with many memberships. Relationship types provide default capabilities through `security.character_relationship_type_capabilities`; direct grants may add or explicitly restrict a capability for a particular membership. In-world character knowledge remains in the knowledge model (§15) and is not created merely because a user can administer or view the character.
 
@@ -1147,8 +1146,22 @@ Key columns:
 - `expires_at TIMESTAMPTZ NULL`
 - `revoked_at TIMESTAMPTZ NULL`
 - `notes TEXT NULL`
+- `is_control_assignment BOOLEAN NOT NULL DEFAULT false` — true for a control assignment (below); false for every legacy row
+- `campaign_id UUID FK NOT NULL` — the membership's campaign, denormalized, filled by the scope trigger and immutable
+- `is_primary BOOLEAN NOT NULL DEFAULT false` — derived by the trigger from the type (`primary_controller`), never client-authoritative
+- `assignment_period_kind TEXT NULL` — `ongoing` or `dated`, present exactly when `is_control_assignment`; immutable
+- `revoked_by_membership_id UUID FK NULL` and `revocation_reason TEXT NULL` — the actor and the 1–1000 character reason of an explicit revocation
 
 The membership's campaign, the character's world, and an optional timeline must agree. Fictional-time bounds use the ADR 0010 shape when supplied; real-time `expires_at` separately supports temporary operational access. Active duplicate relationships of the same type are rejected. A transfer of ownership or control closes the prior relationship and creates a new row rather than overwriting history.
+
+**Control assignments (P15-C11-S01-T01, migration `150_control_assignments`; [ADR 0021 §2.2–§2.3](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md)).** A row with `is_control_assignment` true is a campaign-scoped control assignment of a `primary_controller` or `co_controller` for an `ongoing` period (no world-time endpoints) or a `dated` period (a start world time and an optional end, half-open `[from, to)` in `effective_period`). The table enforces:
+
+- the type is one of the two controller types, and kind is present exactly when the row is an assignment;
+- an assignment has no `expires_at` and no `timeline_id`; `ongoing` has no endpoints and `dated` has a start;
+- `campaign_id` equals the membership's campaign and, with `is_control_assignment` and `assignment_period_kind`, never changes after insert; a revoker belongs to the same campaign, and a revocation reason or revoker exists only on a revoked row (a revoked assignment may have neither, as when membership end revokes it);
+- at most one live primary per campaign and character (`ux_membership_character_relationships_live_primary`) and one live assignment per membership and character (`ux_membership_character_relationships_live_assignment`).
+
+The legacy uniqueness index keeps its name, `ux_membership_character_relationships_active_type`, and now applies to non-assignment rows only, so legacy rows behave exactly as before and a membership may hold a legacy row and an assignment on one character. Migration 150 changes no resolver and no reader: until the resolver slice lands, an assignment row is not yet excluded from the legacy readers, and nothing but tests creates one. The two legacy relationship writers (grant and change) state `campaign_id` explicitly, and the R01 declarations for the relationship steps list both assignment indexes as never entered by a legacy write (the closing updates and membership end leave them). Downgrading 150 refuses while any assignment row exists.
 
 ##### `security.character_relationship_type_capabilities`
 
@@ -1182,7 +1195,7 @@ The relationship records semantic meaning; this mapping supplies defaults. A dir
 
 `edit_narrative`, `edit_mechanical_state`, `control`, and `interact` are deliberately withheld from every type until Phase 16 (no route consumes them today). A character is listed as a perspective in the session bootstrap only when the user holds `character.view_knowledge` for it. The upgrade migration reconciles the seven built-in types to this matrix (adds missing pairs, removes unsupported pairs and records the removals in a NOTICE and one maintenance `audit.change_log` row); custom-type rows are left in place.
 
-The earlier `security.character_permissions` sketch is superseded by these semantic relationships plus typed resource grants. `character.character_controllers` remains the operational controller assignment described in §7.3 and may include AI, service, or external-system controllers; it is not interchangeable with a user's campaign authorization.
+The earlier `security.character_permissions` sketch is superseded by these semantic relationships plus typed resource grants. `character.character_controllers` was the earlier operational-controller proposal (§7.3), retired by ADR 0021 §2.1 in favour of the assignment rows above; it is not interchangeable with a user's campaign authorization.
 
 #### 19.5 Access groups
 
@@ -1652,7 +1665,7 @@ The principal naming and ownership decisions are:
 - Global `security.user_roles` becomes campaign-scoped `security.membership_roles`.
 - `security.permissions` is clarified as reusable `security.capabilities`, assigned through `security.role_capabilities` and evaluated by application commands and queries.
 - `security.character_permissions` is superseded by semantic `security.membership_character_relationships`, relationship-type capability defaults and explicit typed resource grants.
-- **Design only** · `character.character_controllers` remains a distinct operational-control concept because it also supports AI, service and external-system control; it does not by itself authorize a human portal request.
+- **Design only** · `character.character_controllers` was the earlier operational-control proposal (AI, service and external-system control); it is retired by ADR 0021 §2.1 and does not by itself authorize a human portal request.
 - Facts remain canonical claims and in-world beliefs in `knowledge.*`; user visibility derives through an authorized perspective or explicit administrative access and never rewrites fictional knowledge.
 - Explicit resource access uses real typed foreign keys in `security.resource_grants`, not an unenforced text resource type plus opaque UUID.
 

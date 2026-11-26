@@ -20,6 +20,8 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    and_,
+    not_,
     text,
 )
 from sqlalchemy.dialects.postgresql import INT8RANGE, JSONB, TIMESTAMP, UUID
@@ -571,6 +573,66 @@ membership_character_relationships = Table(
     Column("expires_at", TIMESTAMP(timezone=True)),
     Column("revoked_at", TIMESTAMP(timezone=True)),
     Column("notes", Text()),
+    Column(
+        "is_control_assignment",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "True for a control assignment (ADR 0021 section 2.2): a primary_controller or "
+            "co_controller held for an ongoing or dated period, resolved by the dedicated, "
+            "clock-aware rule and never by the legacy relationship rule. False for every legacy "
+            "row. Immutable after insert."
+        ),
+    ),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="CASCADE"),
+        nullable=False,
+        comment=(
+            "The campaign of campaign_membership_id, denormalized so uniqueness and resolution "
+            "can be scoped to one campaign without a join. Filled by the scope trigger (a "
+            "different supplied value is refused) and immutable."
+        ),
+    ),
+    Column(
+        "is_primary",
+        Boolean(),
+        nullable=False,
+        server_default=text("false"),
+        comment=(
+            "Derived, never client-authoritative: true when the relationship type is "
+            "primary_controller. Maintained by the scope trigger on every insert and update; "
+            "the live-primary unique index uses it for assignment rows."
+        ),
+    ),
+    Column(
+        "assignment_period_kind",
+        Text(),
+        comment=(
+            "ongoing (no world-time endpoints) or dated (a start world time and an optional "
+            "end), present exactly when is_control_assignment is true and NULL otherwise. "
+            "Immutable after insert."
+        ),
+    ),
+    Column(
+        "revoked_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),
+        comment=(
+            "The membership that revoked the assignment, in the same campaign. NULL when the "
+            "row is unrevoked, or revoked without an actor (for example by membership end)."
+        ),
+    ),
+    Column(
+        "revocation_reason",
+        Text(),
+        comment=(
+            "The recorded reason (1-1000 characters) for an explicit revocation; NULL when the "
+            "row is unrevoked or was revoked without one."
+        ),
+    ),
     schema="security",
     comment=(
         "Many-to-many, typed relationship between an active campaign membership "
@@ -625,7 +687,40 @@ Index(
     membership_character_relationships.c.character_id,
     membership_character_relationships.c.character_relationship_type_id,
     unique=True,
-    postgresql_where=membership_character_relationships.c.revoked_at.is_(None),
+    postgresql_where=and_(
+        membership_character_relationships.c.revoked_at.is_(None),
+        not_(membership_character_relationships.c.is_control_assignment),
+    ),
+)
+Index(
+    "ux_membership_character_relationships_live_primary",
+    membership_character_relationships.c.campaign_id,
+    membership_character_relationships.c.character_id,
+    unique=True,
+    postgresql_where=and_(
+        membership_character_relationships.c.is_control_assignment,
+        membership_character_relationships.c.is_primary,
+        membership_character_relationships.c.revoked_at.is_(None),
+    ),
+)
+Index(
+    "ux_membership_character_relationships_live_assignment",
+    membership_character_relationships.c.campaign_membership_id,
+    membership_character_relationships.c.character_id,
+    unique=True,
+    postgresql_where=and_(
+        membership_character_relationships.c.is_control_assignment,
+        membership_character_relationships.c.revoked_at.is_(None),
+    ),
+)
+Index(
+    "ix_membership_character_relationships_campaign_id",
+    membership_character_relationships.c.campaign_id,
+)
+Index(
+    "ix_membership_character_relationships_revoked_by",
+    membership_character_relationships.c.revoked_by_membership_id,
+    postgresql_where=membership_character_relationships.c.revoked_by_membership_id.isnot(None),
 )
 
 character_relationship_type_capabilities = Table(

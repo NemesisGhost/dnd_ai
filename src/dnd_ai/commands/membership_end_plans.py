@@ -307,9 +307,25 @@ RELATIONSHIP_TRIGGERS = frozenset(
             "tr_membership_character_relationships_enforce_scope",
             "security",
             "enforce_membership_character_relationship_scope",
-            "55e6250b7716c86dd78d80414645bdd0",
-        )
+            "91065820eeab803c9a42a13511a93523",
+            events=frozenset({Event.INSERT, Event.UPDATE}),
+        ),
+        # revision 150: campaign_id, is_control_assignment and assignment_period_kind never change
+        _pin(
+            "tr_membership_character_relationships_enforce_immutable",
+            *_IMMUTABLE_FN,
+            events=frozenset({Event.UPDATE}),
+            args=("campaign_id", "is_control_assignment", "assignment_period_kind"),
+        ),
     }
+)
+#: The event-filtered subsets (as `MEMBERSHIP_ROLE_TRIGGERS` is filtered): an INSERT step pins the triggers that fire
+#: on INSERT, an UPDATE step the ones that fire on UPDATE.
+RELATIONSHIP_INSERT_TRIGGERS = frozenset(
+    t for t in RELATIONSHIP_TRIGGERS if Event.INSERT in t.events
+)
+RELATIONSHIP_UPDATE_TRIGGERS = frozenset(
+    t for t in RELATIONSHIP_TRIGGERS if Event.UPDATE in t.events
 )
 GRANT_TRIGGERS = frozenset(
     {
@@ -466,8 +482,13 @@ END_REVOKE_RELATIONSHIP = WriteStep(
     cardinality=EachLockedRow(complete=True),
     target=(KeyBind(mcr.c.membership_character_relationship_id, "target"),),
     target_lock=END_RELATIONSHIPS,
-    unique_waits=_leaves_index("security.ux_membership_character_relationships_active_type"),
-    triggers=RELATIONSHIP_TRIGGERS,
+    # revision 150: the closing UPDATE also leaves both assignment indexes (E20; G2)
+    unique_waits=(
+        _leaves_index("security.ux_membership_character_relationships_active_type")
+        | _leaves_index("security.ux_membership_character_relationships_live_primary")
+        | _leaves_index("security.ux_membership_character_relationships_live_assignment")
+    ),
+    triggers=RELATIONSHIP_UPDATE_TRIGGERS,
 )
 END_REVOKE_GRANT = WriteStep(
     name="end_revoke_grant",

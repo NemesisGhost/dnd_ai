@@ -59,6 +59,7 @@ from tests.factories import (
     make_campaign,
     make_campaign_membership,
     make_character,
+    make_control_assignment,
     make_membership_character_relationship,
     make_membership_role,
     make_resource_grant,
@@ -1360,6 +1361,214 @@ def rows_membership_of(sc: Scene, user: uuid.UUID) -> uuid.UUID:
             ),
             {"c": sc.w.campaign_id, "u": user},
         ).scalar_one()
+
+
+# --- G1 / G1-control / G4 (P15-C11-S01-T01): the legacy relationship steps against the assignment indexes -------------------------
+
+
+_ASSIGNMENT_INDEXES = ("live_primary", "live_assignment")
+_STEP_NAMES = (
+    "GRANT_RELATIONSHIP_INSERT",
+    "CHANGE_RELATIONSHIP_INSERT",
+    "CHANGE_RELATIONSHIP_REVOKE_OLD",
+    "REVOKE_RELATIONSHIP",
+)
+_LOCK_TIMEOUT = "5s"
+
+
+@dataclasses.dataclass
+class AssignmentScene:
+    """A fresh character, two fresh open memberships, and the keys each index is decided by."""
+
+    character: uuid.UUID
+    holder: uuid.UUID  # B's uncommitted assignment
+    other: uuid.UUID  # a different membership of the same campaign
+    actor: uuid.UUID
+    primary_type: uuid.UUID
+    campaign: uuid.UUID
+    index: str
+
+    @property
+    def legacy_membership(self) -> uuid.UUID:
+        """The membership whose legacy row the step under test writes or revokes: another membership for the
+        live-primary key, the very same membership for the live-assignment key."""
+        return self.other if self.index == "live_primary" else self.holder
+
+    @property
+    def holder_role(self) -> str:
+        return "primary_controller" if self.index == "live_primary" else "co_controller"
+
+
+def _assignment_scene(sc: Scene, index: str) -> AssignmentScene:
+    with sc.w.engine.begin() as c:
+        holder = make_campaign_membership(c, sc.w.campaign_id, make_user(c, f"G1 holder {index}"))
+        other = make_campaign_membership(c, sc.w.campaign_id, make_user(c, f"G1 other {index}"))
+        character = make_character(c, sc.w.world_id, name=f"G1 character {index}")
+    return AssignmentScene(
+        character=character,
+        holder=holder,
+        other=other,
+        actor=sc.m.keeper_membership,
+        primary_type=s_type(sc, "primary_controller"),
+        campaign=sc.w.campaign_id,
+        index=index,
+    )
+
+
+def _step_binds(a: AssignmentScene, step: Any, *, target: uuid.UUID | None) -> dict[str, Any]:
+    """Real binds for the step's own statement, only the names the statement declares."""
+    supplied: dict[str, Any] = {
+        "membership": a.legacy_membership,
+        "character": a.character,
+        "type": a.primary_type,
+        "timeline": None,
+        "time_from": None,
+        "time_to": None,
+        "granted_by": a.actor,
+        "campaign": a.campaign,
+        "target": target,
+    }
+    names = set(step.statement.compile().params)
+    return {k: v for k, v in supplied.items() if k in names}
+
+
+def _is_lock_timeout(error: BaseException) -> bool:
+    orig = getattr(error, "orig", None)
+    return getattr(orig, "sqlstate", None) == "55P03"
+
+
+def _run_against_open_assignment(
+    sc: Scene, a: AssignmentScene, run_a: Callable[[Any], Any], *, timeout: str
+) -> BaseException | None:
+    """B holds an uncommitted assignment with the overlapping key; A runs `run_a` under a lock timeout. Returns
+    A's error (or None), then commits both when A succeeded."""
+    from sqlalchemy.exc import DBAPIError
+
+    with sc.w.engine.connect() as b_conn, sc.w.engine.connect() as a_conn:
+        b_tx = b_conn.begin()
+        make_control_assignment(b_conn, a.holder, a.character, a.holder_role, "ongoing")
+        a_tx = a_conn.begin()
+        a_conn.execute(text(f"SET LOCAL lock_timeout = '{timeout}'"))
+        error: BaseException | None = None
+        try:
+            run_a(a_conn)
+        except DBAPIError as caught:
+            error = caught
+        if error is None:
+            a_tx.commit()
+        else:
+            a_tx.rollback()
+        b_tx.commit()
+    return error
+
+
+@pytest.mark.parametrize("index", _ASSIGNMENT_INDEXES)
+@pytest.mark.parametrize("step_name", _STEP_NAMES)
+def test_a_legacy_relationship_write_never_waits_on_an_assignment_index(
+    step_name: str, index: str, s: Scene
+) -> None:
+    """*race* (index wait), the evidence `_OUTSIDE_ASSIGNMENT_INDEXES` names. Two plain connections, no route locks,
+    so the index alone decides. Connection B holds an uncommitted control assignment whose key overlaps the key a
+    legacy `primary_controller` row would have: for `live_primary` a primary assignment of another membership on the
+    same character, for `live_assignment` an assignment of the same membership on the same character. Connection A
+    runs the step's own statement with real binds under a lock timeout: an INSERT of a new legacy row, or the UPDATE
+    that revokes a committed legacy row. A completes with no `LockNotAvailable` because a legacy row is outside both
+    indexes' predicates. For the INSERT steps the reverse order holds too (A first and uncommitted, then B)."""
+    from dnd_ai.commands import access_grant_plans as plans
+
+    step = getattr(plans, step_name)
+    a = _assignment_scene(s, index)
+    is_insert = step_name.endswith("INSERT")
+    target: uuid.UUID | None = None
+    if not is_insert:
+        with s.w.engine.begin() as c:
+            target = make_membership_character_relationship(
+                c, a.legacy_membership, a.character, a.primary_type
+            )
+
+    def run_a(conn: Any) -> Any:
+        return conn.execute(step.statement, _step_binds(a, step, target=target)).all()
+
+    error = _run_against_open_assignment(s, a, run_a, timeout=_LOCK_TIMEOUT)
+    assert error is None, f"the legacy step waited on the {index} index: {error}"
+    with s.w.engine.connect() as c:
+        legacy = c.execute(
+            text(
+                "SELECT count(*) FILTER (WHERE NOT is_control_assignment), "
+                "count(*) FILTER (WHERE is_control_assignment) "
+                "FROM security.membership_character_relationships WHERE character_id = :c"
+            ),
+            {"c": a.character},
+        ).one()
+    assert tuple(legacy) == (1, 1)
+
+    if is_insert:
+        # the reverse order: A's legacy INSERT is open and uncommitted, then B's assignment completes
+        b = _assignment_scene(s, index)
+        with s.w.engine.connect() as a_conn, s.w.engine.connect() as b_conn:
+            a_tx = a_conn.begin()
+            a_conn.execute(step.statement, _step_binds(b, step, target=None)).all()
+            b_tx = b_conn.begin()
+            b_conn.execute(text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'"))
+            make_control_assignment(b_conn, b.holder, b.character, b.holder_role, "ongoing")
+            b_tx.commit()
+            a_tx.commit()
+        with s.w.engine.connect() as c:
+            rows = c.execute(
+                text(
+                    "SELECT count(*) FROM security.membership_character_relationships "
+                    "WHERE character_id = :c"
+                ),
+                {"c": b.character},
+            ).scalar_one()
+        assert rows == 2
+
+
+@pytest.mark.parametrize("index", _ASSIGNMENT_INDEXES)
+def test_the_assignment_index_harness_detects_a_real_wait(index: str, s: Scene) -> None:
+    """*race* (positive control for the test above): the same harness, with connection A inserting a **second
+    assignment** whose key overlaps B's uncommitted one, raises `LockNotAvailable` (SQLSTATE 55P03) for each
+    index. Without this control the test above could pass because the harness cannot observe a wait."""
+    a = _assignment_scene(s, index)
+
+    def run_a(conn: Any) -> Any:
+        # live_primary: another membership's primary on the same character; live_assignment: the same
+        # membership's assignment on the same character
+        membership = a.other if index == "live_primary" else a.holder
+        return make_control_assignment(
+            conn, membership, a.character, "primary_controller", "ongoing"
+        )
+
+    error = _run_against_open_assignment(s, a, run_a, timeout="1s")
+    assert error is not None and _is_lock_timeout(error), error
+
+
+@KEYED
+@pytest.mark.parametrize("route_index", (0, 1), ids=("grant_relationship", "change_relationship"))
+def test_a_relationship_written_through_the_route_carries_the_route_campaign_and_is_not_an_assignment(
+    route_index: int, keyed: bool, s: Scene, env: Env, pooled: Engine, pooled_factory: Factory
+) -> None:
+    """*route*: the new relationship row a grant or change request creates has `campaign_id` equal to the route's
+    campaign and `is_control_assignment` false, with and without an idempotency key."""
+    route = ROUTES[route_index]
+    response = send(pooled_factory, s, route, env, key=new_key() if keyed else None)
+    assert code(response) == route.status, response.text
+    with s.w.engine.connect() as c:
+        stored = (
+            c.execute(
+                text(
+                    "SELECT campaign_id, is_control_assignment, assignment_period_kind "
+                    "FROM security.membership_character_relationships "
+                    "WHERE membership_character_relationship_id = :r"
+                ),
+                {"r": response.json()[route.echo]},
+            )
+            .mappings()
+            .one()
+        )
+    assert stored["campaign_id"] == s.w.campaign_id
+    assert stored["is_control_assignment"] is False
+    assert stored["assignment_period_kind"] is None
 
 
 # fixtures used by name in the mode test above

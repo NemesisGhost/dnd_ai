@@ -485,7 +485,7 @@ Examples:
 
 ### 8.4 Character controller
 
-In the implemented access model, a campaign membership can have a relationship to a character. Read and action permissions depend on the relationship, current roles, explicit grants or denies and the requested operation. The accepted control model adds explicit campaign-scoped assignments and bounded player operations. A controller can contribute under those rules without becoming the author of a shared definition. [Actor decision](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md)
+In the implemented access model, a campaign membership can have a relationship to a character. Read and action permissions depend on the relationship, current roles, explicit grants or denies and the requested operation. The accepted control model adds explicit campaign-scoped assignments and bounded player operations. Assignments are stored as marked rows of the human-to-character relationship table (`is_control_assignment`, with a primary or co-controller type, an `ongoing` or `dated` period and at most one live primary per campaign and character), which retires the earlier `character_controllers` proposal ([ADR 0021 §2.1](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md)). A controller can contribute under those rules without becoming the author of a shared definition. [Actor decision](adr/0021-shared-actor-identity-control-and-authoring-responsibility.md)
 
 ### 8.5 Player character
 

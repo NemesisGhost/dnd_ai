@@ -514,6 +514,73 @@ def make_membership_character_relationship(
     return value
 
 
+def relationship_type_id(connection: Connection, code: str) -> uuid.UUID:
+    value = connection.execute(
+        text(
+            "SELECT character_relationship_type_id FROM security.character_relationship_types "
+            "WHERE code = :code"
+        ),
+        {"code": code},
+    ).scalar_one()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def make_control_assignment(
+    connection: Connection,
+    membership_id: uuid.UUID,
+    character_id: uuid.UUID,
+    role: str,
+    kind: str | None,
+    *,
+    from_time: uuid.UUID | None = None,
+    to_time: uuid.UUID | None = None,
+    campaign_id: uuid.UUID | None = None,
+    is_assignment: bool = True,
+    timeline_id: uuid.UUID | None = None,
+    expires: bool = False,
+    revoked: bool = False,
+    revoked_by: uuid.UUID | None = None,
+    revocation_reason: str | None = None,
+    granted_by: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """Test-only direct insert of an assignment row (no writer exists in S01)."""
+    value = connection.execute(
+        text("""
+            INSERT INTO security.membership_character_relationships
+                (campaign_membership_id, character_id, character_relationship_type_id,
+                 is_control_assignment, assignment_period_kind, campaign_id,
+                 effective_from_world_time_id, effective_to_world_time_id, timeline_id,
+                 expires_at, revoked_at, revoked_by_membership_id, revocation_reason,
+                 granted_by_membership_id)
+            VALUES (:membership, :character, :rtype, :is_assignment, :kind, :campaign,
+                    :from_time, :to_time, :timeline,
+                    CASE WHEN :expires THEN now() + interval '1 day' ELSE NULL END,
+                    CASE WHEN :revoked THEN now() ELSE NULL END,
+                    :revoked_by, :reason, :granted_by)
+            RETURNING membership_character_relationship_id
+        """),
+        {
+            "membership": membership_id,
+            "character": character_id,
+            "rtype": relationship_type_id(connection, role),
+            "is_assignment": is_assignment,
+            "kind": kind,
+            "campaign": campaign_id,
+            "from_time": from_time,
+            "to_time": to_time,
+            "timeline": timeline_id,
+            "expires": expires,
+            "revoked": revoked,
+            "revoked_by": revoked_by,
+            "reason": revocation_reason,
+            "granted_by": granted_by,
+        },
+    ).scalar()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
 def make_relationship_type_capability(
     connection: Connection, character_relationship_type_id: uuid.UUID, capability_id: uuid.UUID
 ) -> None:

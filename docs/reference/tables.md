@@ -1,6 +1,6 @@
 # PostgreSQL table inventory
 
-The imported [SQLAlchemy metadata](../../src/dnd_ai/persistence/tables/__init__.py) at `881786c` declares 228 tables in 12 populated schemas. Bootstrap also creates the reserved `import` schema. Alembic defines roles, triggers, functions, grants and revision history in addition to tables. The revision head is `149_reservation_fk_deferrable`. This is a source inventory. Compare a particular installation with Alembic on that database. [Logical model and invariants](../architecture/DATABASE_MODEL.md) · [Migrations](../../database/migrations/versions/)
+The imported [SQLAlchemy metadata](../../src/dnd_ai/persistence/tables/__init__.py) at `881786c` declares 228 tables in 12 populated schemas. Bootstrap also creates the reserved `import` schema. Alembic defines roles, triggers, functions, grants and revision history in addition to tables. The revision head is `150_control_assignments`. This is a source inventory. Compare a particular installation with Alembic on that database. [Logical model and invariants](../architecture/DATABASE_MODEL.md) · [Migrations](../../database/migrations/versions/)
 
 ## Declared tables
 
@@ -60,7 +60,7 @@ Fable D4 named these families. Its stated 24 differs from the **25 distinct** ab
 
 | Schema | Absent design names | Current disposition |
 |---|---|---|
-| `character` | `character_controllers`, `npc_agent_assignments`, `npc_boundaries`, `npc_characteristics`, `npc_disclosure_rules`, `npc_goals`, `npc_preferences`, `npc_routine_steps`, `npc_routines` | Historical controller proposal and planned NPC detail. Human access uses scoped membership relationships. ADR 0021 governs the future control model. |
+| `character` | `character_controllers`, `npc_agent_assignments`, `npc_boundaries`, `npc_characteristics`, `npc_disclosure_rules`, `npc_goals`, `npc_preferences`, `npc_routine_steps`, `npc_routines` | Historical controller proposal and planned NPC detail. `character_controllers` is retired by ADR 0021 §2.1: control assignments are marked rows of `security.membership_character_relationships` ([DATABASE_MODEL §19.4](../architecture/DATABASE_MODEL.md#194-human-to-character-relationships)). Human access uses scoped membership relationships. |
 | `campaign` | `entity_overrides`, `npc_emotional_state`, `npc_goal_state` | Planned typed state and overrides. Existing typed state tables have narrower scope. |
 | `audit` | `state_transitions`, `approval_history`, `validation_failures`, `agent_activity` | Planned audit structures. Current changes use `audit.change_log` and `audit.change_actions`. |
 | `import` | `import_jobs`, `import_sources`, `staged_entities`, `staged_relationships`, `staged_events`, `staged_knowledge`, `entity_matches`, `validation_results`, `promotion_batches` | Planned campaign import staging. Authorized AI reference retrieval uses the built `ai` schema. |

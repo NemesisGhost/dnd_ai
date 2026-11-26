@@ -57,6 +57,7 @@ from tests.factories import (
     make_access_group_membership,
     make_campaign_membership,
     make_character,
+    make_control_assignment,
     make_membership_character_relationship,
     make_membership_role,
     make_resource_grant,
@@ -1046,6 +1047,14 @@ def _competing_insert(sc: Scene, e: Member, index: str) -> Callable[[Any], Any]:
             return make_membership_character_relationship(
                 c, e.membership, e.character, e.relationship_type
             )
+        if index == "live_primary":
+            # another open membership's primary assignment on the character the end's assignment holds
+            return make_control_assignment(
+                c, sc.m.keeper_membership, e.character, "primary_controller", "ongoing"
+            )
+        if index == "live_assignment":
+            # the same membership's assignment on the same character
+            return make_control_assignment(c, e.membership, e.character, "co_controller", "ongoing")
         if index == "grant":
             return make_resource_grant(
                 c,
@@ -1064,7 +1073,18 @@ def _competing_insert(sc: Scene, e: Member, index: str) -> Callable[[Any], Any]:
     return run
 
 
-@pytest.mark.parametrize("index", ("relationship", "grant", "group", "revelation", "membership"))
+@pytest.mark.parametrize(
+    "index",
+    (
+        "relationship",
+        "grant",
+        "group",
+        "revelation",
+        "membership",
+        "live_primary",
+        "live_assignment",
+    ),
+)
 def test_an_update_leaving_a_partial_unique_index_never_waits_for_a_competing_insert(
     index: str, s: Scene, e: Member, pooled: Engine, pooled_factory: Factory
 ) -> None:
@@ -1073,11 +1093,21 @@ def test_an_update_leaving_a_partial_unique_index_never_waits_for_a_competing_in
     closing `UPDATE` leaves its partial index, so it takes no unique wait. A competitor inserting the same key while
     the request is parked at its audit insert (every update done, uncommitted) queues behind *the request* (blocked by
     its pid); the request finishes while the competitor is still queued, then the competitor completes (the key is
-    free)."""
+    free).
+
+    The `live_primary` and `live_assignment` ids (P15-C11-S01-T01) first commit an ongoing primary control assignment
+    of `e.membership` on `e.character`, which the end revokes with the rest. The `live_primary` competitor, another
+    open membership's primary assignment on that character, waits on the index entry of the updated row (the
+    request's pid). The `live_assignment` competitor, a co-controller assignment of `e.membership` on that
+    character, waits on the membership row lock the end holds `FOR UPDATE` through its foreign key check. Both then
+    complete, so the end's closing UPDATE of the assignment row takes no unique wait on either index."""
     from tests.database.test_r01_s5e2_membership_routes import waiting_statement
     from tests.http_race_support import StatementGate, run_in_thread
     from tests.lock_race_support import LockRace
 
+    if index in ("live_primary", "live_assignment"):
+        with s.w.engine.begin() as c:
+            make_control_assignment(c, e.membership, e.character, "primary_controller", "ongoing")
     with StatementGate(pooled, AUDIT_INSERT) as gate:
         request = run_in_thread("end", lambda: end(pooled_factory, s, e.membership, key=new_key()))
         gate.wait_reached()

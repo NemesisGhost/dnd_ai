@@ -162,7 +162,11 @@ from .campaign_lifecycle_plans import (
     ACTOR_ROLES_LOCK,
     CAMPAIGN_ROW_LOCK,
 )
-from .membership_end_plans import GRANT_TRIGGERS, RELATIONSHIP_TRIGGERS
+from .membership_end_plans import (
+    GRANT_TRIGGERS,
+    RELATIONSHIP_INSERT_TRIGGERS,
+    RELATIONSHIP_UPDATE_TRIGGERS,
+)
 from .membership_role_plans import (
     _AUDIT_BINDS,
     TARGET_ACCOUNT_LOCK,
@@ -343,6 +347,24 @@ _LEAVES_GRANT_INDEX = frozenset(
     {UniqueWait("security.ux_resource_grants_active", _LEAVES_INDEX_TEST)}
 )
 _NOW = func.pg_catalog.now
+_ASSIGNMENT_INDEX_TEST = (
+    "tests/database/test_r01_s5e4_access_grants.py::"
+    "test_a_legacy_relationship_write_never_waits_on_an_assignment_index"
+)
+#: Revision 150 (control assignments): the two partial unique indexes a legacy relationship write can never enter.
+#: The INSERTs never set `is_control_assignment` (it takes its default, false, and is immutable), so the new row is
+#: outside both predicates; the UPDATEs set only `revoked_at` on a row outside both. Added to the steps' own waits.
+_OUTSIDE_ASSIGNMENT_INDEXES = frozenset(
+    {
+        UniqueWait(
+            "security.ux_membership_character_relationships_live_primary", _ASSIGNMENT_INDEX_TEST
+        ),
+        UniqueWait(
+            "security.ux_membership_character_relationships_live_assignment",
+            _ASSIGNMENT_INDEX_TEST,
+        ),
+    }
+)
 
 
 def _fk(table: Any, column: str, bind: str, lock: PreLock | None) -> FkBinding:
@@ -362,6 +384,7 @@ GRANT_RELATIONSHIP_INSERT = WriteStep(
     name="insert_relationship",
     statement=insert(mcr)
     .values(
+        campaign_id=bindparam("campaign"),
         campaign_membership_id=bindparam("membership"),
         character_id=bindparam("character"),
         character_relationship_type_id=bindparam("type"),
@@ -373,6 +396,7 @@ GRANT_RELATIONSHIP_INSERT = WriteStep(
     .returning(mcr.c.membership_character_relationship_id),
     cardinality=Exactly(1),
     fks=(
+        _fk(mcr, "campaign_id", "campaign", CAMPAIGN_ROW_LOCK),
         _fk(mcr, "campaign_membership_id", "membership", TARGET_MEMBERSHIP_LOCK),
         _fk(mcr, "character_id", "character", CHARACTER_ROW_LOCK),
         _fk(mcr, "character_relationship_type_id", "type", RELATIONSHIP_TYPE_BY_CODE_LOCK),
@@ -381,13 +405,14 @@ GRANT_RELATIONSHIP_INSERT = WriteStep(
         _fk(mcr, "effective_to_world_time_id", "time_to", WORLD_TIMES_KEY_SHARE_LOCK),
         _fk(mcr, "granted_by_membership_id", "granted_by", ACTOR_MEMBERSHIP_LOCK),
     ),
-    unique_waits=_COMPETING_RELATIONSHIP_WAIT,
-    triggers=RELATIONSHIP_TRIGGERS,
+    unique_waits=_COMPETING_RELATIONSHIP_WAIT | _OUTSIDE_ASSIGNMENT_INDEXES,
+    triggers=RELATIONSHIP_INSERT_TRIGGERS,
 )
 CHANGE_RELATIONSHIP_INSERT = WriteStep(
     name="insert_changed_relationship",
     statement=insert(mcr)
     .values(
+        campaign_id=bindparam("campaign"),
         campaign_membership_id=bindparam("membership"),
         character_id=bindparam("character"),
         character_relationship_type_id=bindparam("type"),
@@ -399,6 +424,7 @@ CHANGE_RELATIONSHIP_INSERT = WriteStep(
     .returning(mcr.c.membership_character_relationship_id),
     cardinality=Exactly(1),
     fks=(
+        _fk(mcr, "campaign_id", "campaign", CAMPAIGN_ROW_LOCK),
         _fk(mcr, "campaign_membership_id", "membership", TARGET_MEMBERSHIP_LOCK),
         _fk(mcr, "character_id", "character", CHARACTER_ROW_LOCK),
         _fk(mcr, "character_relationship_type_id", "type", RELATIONSHIP_TYPE_BY_ID_LOCK),
@@ -407,8 +433,8 @@ CHANGE_RELATIONSHIP_INSERT = WriteStep(
         _fk(mcr, "effective_to_world_time_id", "time_to", WORLD_TIMES_KEY_SHARE_LOCK),
         _fk(mcr, "granted_by_membership_id", "granted_by", ACTOR_MEMBERSHIP_LOCK),
     ),
-    unique_waits=_COMPETING_RELATIONSHIP_WAIT,
-    triggers=RELATIONSHIP_TRIGGERS,
+    unique_waits=_COMPETING_RELATIONSHIP_WAIT | _OUTSIDE_ASSIGNMENT_INDEXES,
+    triggers=RELATIONSHIP_INSERT_TRIGGERS,
 )
 CHANGE_RELATIONSHIP_REVOKE_OLD = WriteStep(
     name="revoke_old_relationship",
@@ -419,8 +445,8 @@ CHANGE_RELATIONSHIP_REVOKE_OLD = WriteStep(
     cardinality=Exactly(1),
     target=(KeyBind(mcr.c.membership_character_relationship_id, "target"),),
     target_lock=RELATIONSHIP_ROW_LOCK,
-    unique_waits=_LEAVES_RELATIONSHIP_INDEX,
-    triggers=RELATIONSHIP_TRIGGERS,
+    unique_waits=_LEAVES_RELATIONSHIP_INDEX | _OUTSIDE_ASSIGNMENT_INDEXES,
+    triggers=RELATIONSHIP_UPDATE_TRIGGERS,
 )
 REVOKE_RELATIONSHIP = WriteStep(
     name="revoke_relationship",
@@ -431,8 +457,8 @@ REVOKE_RELATIONSHIP = WriteStep(
     cardinality=EachLockedRow(complete=True),
     target=(KeyBind(mcr.c.membership_character_relationship_id, "target"),),
     target_lock=RELATIONSHIP_OUTSTANDING_LOCK,
-    unique_waits=_LEAVES_RELATIONSHIP_INDEX,
-    triggers=RELATIONSHIP_TRIGGERS,
+    unique_waits=_LEAVES_RELATIONSHIP_INDEX | _OUTSIDE_ASSIGNMENT_INDEXES,
+    triggers=RELATIONSHIP_UPDATE_TRIGGERS,
 )
 CREATE_GRANT_INSERT = WriteStep(
     name="insert_resource_grant",
@@ -788,6 +814,8 @@ class AccessPrepared:
     timeline_id: uuid.UUID | None = None
     time_from_id: uuid.UUID | None = None
     time_to_id: uuid.UUID | None = None
+    #: grant / change relationship: the route's campaign, which the INSERT states explicitly
+    campaign_id: uuid.UUID | None = None
     previous_type_code: str | None = None
     new_type_code: str | None = None
     #: create grant
@@ -964,6 +992,7 @@ def prepare_grant_relationship(  # noqa: PLR0915 - one linear lock and refusal s
     return AccessPrepared(
         world_id=expected_world_id,
         action_id=lookup_id(connection, "audit", "change_actions", "change_action_id", "created"),
+        campaign_id=campaign_id,
         membership_id=target_membership_id,
         character_id=character_id,
         type_id=type_row.character_relationship_type_id,
@@ -986,6 +1015,7 @@ def write_grant_relationship(
         connection,
         GRANT_RELATIONSHIP_INSERT,
         {
+            "campaign": prepared.campaign_id,
             "membership": prepared.membership_id,
             "character": prepared.character_id,
             "type": prepared.type_id,
@@ -1164,6 +1194,7 @@ def prepare_change_relationship(  # noqa: PLR0915 - one linear lock and refusal 
     return AccessPrepared(
         world_id=expected_world_id,
         action_id=lookup_id(connection, "audit", "change_actions", "change_action_id", "updated"),
+        campaign_id=campaign_id,
         membership_id=row["campaign_membership_id"],
         character_id=row["character_id"],
         type_id=new_type_id,
@@ -1190,6 +1221,7 @@ def write_change_relationship(
         connection,
         CHANGE_RELATIONSHIP_INSERT,
         {
+            "campaign": prepared.campaign_id,
             "membership": prepared.membership_id,
             "character": prepared.character_id,
             "type": prepared.type_id,

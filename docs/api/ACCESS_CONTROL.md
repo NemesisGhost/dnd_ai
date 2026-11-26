@@ -554,7 +554,10 @@ unreachable by a request that was valid and uncontended before:
   relationship that expired while the change waited is judged at a fresh `clock_timestamp()`, so it is refused (409).
 - **Tests:** `tests/database/test_r01_s5e4_access_grants.py`, `test_r01_s5e4_access_races.py`,
   `tests/unit/test_r01_s5e4_route_shape.py`. Keyed authoring by the grantee against a grant to the grantee remains a
-  characterized pre-existing cycle (DEF-019).
+  characterized pre-existing cycle (DEF-019). Since revision 150 (P15-C11-S01-T01) the two relationship INSERT steps
+  supply `campaign_id` explicitly and every relationship step declares the two control-assignment unique indexes as
+  never entered by a legacy write; `test_a_legacy_relationship_write_never_waits_on_an_assignment_index` (G1, with its
+  positive control) is the evidence.
 
 ## 3l. `POST /campaigns/{campaign_id}/access-groups` and friends (new, checkpoint 6)
 
