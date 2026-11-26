@@ -1,5 +1,7 @@
+import { useCallback, useState } from "react"
 import { useParams } from "react-router"
 import { QuestDetailBoundary } from "../components/QuestDetailBoundary"
+import { UnsavedInputGuard } from "../components/staged/UnsavedInputGuard"
 import { QuestWorkspace } from "../components/quests/QuestWorkspace"
 import { QuestProgressPanel } from "../components/quests/QuestProgressPanel"
 import { useCampaignCapability } from "../hooks/useCampaignCapability"
@@ -54,8 +56,34 @@ function CampaignQuestDetailRoute({
     return <CampaignQuestReader campaignId={campaignId} questId={questId} runs={canEdit} />
 }
 
-// The progress panel reports unsent input to a page guard the reader does not have.
-const noUnsaved = (): void => undefined
+// The progress panel reports what it holds that is not settled (a typed note, a request in flight, a
+// result not known) to the page's one guard, as the Quest workspace does. The reader runs the quest
+// with nothing from the definition: this adds no read, only the departure question.
+function ProgressOnlyRun({ campaignId, questId }: { campaignId: string; questId: string }) {
+    const [unsaved, setUnsaved] = useState<Record<string, string[]>>({})
+    const report = useCallback((source: string, labels: string[]) => {
+        setUnsaved((current) => {
+            const before = current[source] ?? []
+            if (before.join("|") === labels.join("|")) return current
+            const next = { ...current }
+            if (labels.length === 0) delete next[source]
+            else next[source] = labels
+            return next
+        })
+    }, [])
+    return (
+        <>
+            <QuestProgressPanel
+                campaignId={campaignId}
+                questId={questId}
+                blockedText={null}
+                refreshToken={0}
+                onUnsaved={report}
+            />
+            <UnsavedInputGuard unsaved={[...new Set(Object.values(unsaved).flat())]} />
+        </>
+    )
+}
 
 // The same (character, party) perspective the quest list used: the party
 // pair the list's link carried in the URL, re-validated against the
@@ -93,13 +121,7 @@ function CampaignQuestReader({
                                 Preparing, reviewing and publishing this quest belong to the shared world and need a
                                 world role; ask the world owner. What happens to it in this campaign is yours to run.
                             </p>
-                            <QuestProgressPanel
-                                campaignId={campaignId}
-                                questId={questId}
-                                blockedText={null}
-                                refreshToken={0}
-                                onUnsaved={noUnsaved}
-                            />
+                            <ProgressOnlyRun campaignId={campaignId} questId={questId} />
                         </section>
                     ) : null}
                 </>
