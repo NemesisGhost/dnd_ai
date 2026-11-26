@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { fetchQuestTargetOptions, runQuestCommand } from "../../api/questAuthoring"
 import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
@@ -21,6 +21,7 @@ import {
     validateDescription,
     validateName,
 } from "../../utils/authoringValidation"
+import { canTakeFocus } from "../../utils/focusEligibility"
 import { statusDetail } from "../../utils/locationForm"
 import { reorderedStageIds, steppedStageIds } from "../../utils/stageOrder"
 import { useUnsavedReport } from "../quests/useUnsavedReport"
@@ -78,6 +79,12 @@ type Panel =
 type Removal =
     | { kind: "stage"; stage: QuestStageView }
     | { kind: "objective"; stage: QuestStageView; objective: QuestObjectiveView }
+
+// The control that opened a form: where focus returns when the form closes without saving. `ids` are
+// tried in order (the control, then what is left of it: the stage toggle, or Add stage).
+interface Opener {
+    ids: string[]
+}
 
 const EMPTY_OBJECTIVE_DEFAULTS = {
     requirementLevel: "required",
@@ -201,6 +208,18 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
     const [removal, setRemoval] = useState<Removal | null>(null)
     const [errors, setErrors] = useState<FieldError[]>([])
     const [attempt, setAttempt] = useState(0)
+    // A press on another form's control while this one holds unsent input waits here for the answer.
+    const [switching, setSwitching] = useState<{ next: Panel; opener: Opener } | null>(null)
+    // Where focus goes when the open form closes without saving.
+    const openerRef = useRef<Opener | null>(null)
+    // Polite notes: structural values set back after a refusal because play has begun, and a removal
+    // whose answer was lost and that the person then left alone.
+    const [lockNote, setLockNote] = useState(false)
+    const [removalNote, setRemovalNote] = useState(false)
+    const [lockPending, setLockPending] = useState(false)
+    const [seenRefusal, setSeenRefusal] = useState<unknown>(null)
+    const [seenView, setSeenView] = useState(view)
+    const handledRefusal = useRef<unknown>(null)
     // Presentation only: which stages the author expanded (all start collapsed),
     // and the drag in progress. Neither is persisted or sent to the server.
     const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
@@ -216,9 +235,12 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
         overId: string | null
         after: boolean
     } | null>(null)
-    const pending = useRef<{ message: string; after: () => void; focusId: string | null } | null>(
-        null,
-    )
+    const pending = useRef<{
+        message: string
+        after: () => void
+        focusId: string | null
+        origin: Element | null
+    } | null>(null)
 
     const mutation = useAuthoringMutation<QuestCommand, QuestReceipt>({
         scopeKey: `quest:${view.quest_id}`,
@@ -229,10 +251,7 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
             const outcome = await refetch()
             done?.after()
             if (outcome === "ok" && done?.message) announce(done.message)
-            if (done?.focusId) {
-                const id = done.focusId
-                window.setTimeout(() => document.getElementById(id)?.focus(), 0)
-            }
+            if (done?.focusId) focusLater([done.focusId], done.origin)
             return outcome
         },
     })
@@ -251,26 +270,128 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
         panel === null || !panelDirty ? [] : [panel.kind === "stage" ? "a stage" : "an objective"],
     )
 
+    // Moves focus to the first of `ids` that can take it, after the current render. It never takes focus
+    // from where the person has put it. Focus is the action's own only if it is on the page body, still
+    // on the control the action began from (`origin`), or inside the form or dialog that control was in
+    // (which that action is closing). Another control, even in this section, or an unrelated dialog is
+    // not. A target in a section that is no longer shown cannot take focus either.
+    // `own` is for a person's own answer to a dialog here (Keep it, Keep editing), which they have just made.
+    function focusLater(ids: string[], origin: Element | null = document.activeElement, own = false) {
+        const scope = origin instanceof Element ? origin.closest("form, dialog") : null
+        window.setTimeout(() => {
+            const active = document.activeElement
+            const ours =
+                own ||
+                active === null ||
+                active === document.body ||
+                active === origin ||
+                (scope !== null && scope.contains(active))
+            if (!ours) return
+            for (const id of ids) {
+                const target = document.getElementById(id)
+                if (canTakeFocus(target)) {
+                    target.focus()
+                    return
+                }
+            }
+        }, 0)
+    }
+
     function send(
         command: QuestCommand,
         message: string,
         after: () => void = () => {},
         focusId: string | null = null,
     ) {
-        pending.current = { message, after, focusId }
+        pending.current = { message, after, focusId, origin: document.activeElement }
+        setRemovalNote(false)
         mutation.submit(command)
     }
 
     function closePanel() {
         setPanel(null)
         setErrors([])
+        setLockNote(false)
+        setLockPending(false)
         mutation.reset()
     }
 
-    function openPanel(next: Panel) {
+    // Closing without saving: focus goes back to the control that opened the form.
+    function cancelPanel() {
+        const opener = openerRef.current
+        closePanel()
+        if (opener !== null) focusLater(opener.ids)
+    }
+
+    function showPanel(next: Panel, opener: Opener) {
         setErrors([])
+        setLockNote(false)
+        setRemovalNote(false)
+        setLockPending(false)
         mutation.reset()
+        openerRef.current = opener
         setPanel(next)
+    }
+
+    // A form with unsent input is never replaced silently: the person is asked first.
+    function openPanel(next: Panel, opener: Opener) {
+        if (panel !== null && panelDirty) {
+            setSwitching({ next, opener })
+            return
+        }
+        showPanel(next, opener)
+    }
+
+    const switchingSubject =
+        panel === null
+            ? ""
+            : panel.kind === "stage"
+              ? panel.stageId === null
+                  ? "the new stage"
+                  : `the stage "${panel.initial.name}"`
+              : panel.objectiveId === null
+                ? "the new objective"
+                : `the objective "${panel.initial.name}"`
+
+    // Play has begun since the quest was read: the server refused a structural command. Read the quest
+    // once (read-only) so the page shows the lock and stops offering what was refused.
+    const mutationStatus = mutation.status
+    const refused = mutationStatus.kind === "error" && mutationStatus.error.code === "quest_has_progress"
+    if (refused && seenRefusal !== mutationStatus) {
+        setSeenRefusal(mutationStatus)
+        setLockPending(true)
+    }
+    useEffect(() => {
+        if (!refused || handledRefusal.current === mutationStatus) return
+        handledRefusal.current = mutationStatus
+        void refetch()
+    }, [refused, mutationStatus, refetch])
+
+    // Once the read reports progress, an open existing objective's locked fields return to their saved
+    // values; its wording and visibility stay as typed.
+    if (view !== seenView) {
+        setSeenView(view)
+        if (lockPending && view.has_progress) {
+            setLockPending(false)
+            const objectiveId = panel?.kind === "objective" ? panel.objectiveId : null
+            const saved =
+                objectiveId === null
+                    ? undefined
+                    : view.stages.flatMap((s) => s.objectives).find((o) => o.quest_objective_id === objectiveId)
+            if (panel?.kind === "objective" && saved !== undefined) {
+                const fresh = objectiveValues(saved, options)
+                const setBack = (v: ObjectiveValues): ObjectiveValues => ({
+                    ...v,
+                    objectiveType: fresh.objectiveType,
+                    requirementLevel: fresh.requirementLevel,
+                    completionMode: fresh.completionMode,
+                    quantity: fresh.quantity,
+                    target: fresh.target,
+                })
+                setPanel({ ...panel, values: setBack(panel.values), initial: setBack(panel.initial) })
+                setLockNote(true)
+            }
+        }
     }
 
     const loadLatest = () => {
@@ -435,6 +556,17 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                 </p>
             ) : null}
             {topError}
+            {lockNote && panel?.kind === "objective" ? (
+                <p className="authoring-note" role="status">
+                    Kind, requirement, completion, quantity and target were set back to their saved
+                    values because this quest now has recorded progress.
+                </p>
+            ) : null}
+            {removalNote ? (
+                <p className="authoring-note" role="status">
+                    The removal may have been applied. The list shows the latest read.
+                </p>
+            ) : null}
 
             <div className="authoring-section">
                 {view.stages.length === 0 ? (
@@ -583,15 +715,19 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                                                         <button
                                                             type="button"
                                                             className="authoring-button"
+                                                            id={`edit-stage-${stageId}`}
                                                             disabled={busy}
                                                             aria-label={`Edit stage ${stage.name}`}
                                                             onClick={() =>
-                                                                openPanel({
-                                                                    kind: "stage",
-                                                                    stageId,
-                                                                    values: stageValues(stage, options),
-                                                                    initial: stageValues(stage, options),
-                                                                })
+                                                                openPanel(
+                                                                    {
+                                                                        kind: "stage",
+                                                                        stageId,
+                                                                        values: stageValues(stage, options),
+                                                                        initial: stageValues(stage, options),
+                                                                    },
+                                                                    { ids: [`edit-stage-${stageId}`, `stage-${stageId}`] },
+                                                                )
                                                             }
                                                         >
                                                             Edit stage
@@ -600,9 +736,13 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                                                     {can("remove_stage") ? (
                                                         <button
                                                             type="button"
+                                                            id={`remove-stage-${stageId}`}
                                                             className="authoring-button authoring-button--danger"
                                                             disabled={busy}
-                                                            onClick={() => setRemoval({ kind: "stage", stage })}
+                                                            onClick={() => {
+                                                                setRemovalNote(false)
+                                                                setRemoval({ kind: "stage", stage })
+                                                            }}
                                                             aria-label={`Remove stage ${stage.name}`}
                                                         >
                                                             Remove stage
@@ -621,7 +761,7 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                                             attempt={attempt}
                                             pending={busy}
                                             onSave={saveStage}
-                                            onCancel={closePanel}
+                                            onCancel={cancelPanel}
                                         />
                                     ) : null}
 
@@ -642,6 +782,90 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                                                         >
                                                             {objective.name}
                                                         </h5>
+                                                        {editable && (can("update_objective") || can("remove_objective")) ? (
+                                                            <div
+                                                                role="group"
+                                                                aria-label={`Manage objective ${objective.name}`}
+                                                                className="authoring-actions"
+                                                            >
+                                                                {can("update_objective") ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        id={`edit-objective-${objective.quest_objective_id}`}
+                                                                        className="authoring-button"
+                                                                        disabled={busy}
+                                                                        aria-label={`Edit objective ${objective.name}`}
+                                                                        onClick={() =>
+                                                                            openPanel(
+                                                                                {
+                                                                                    kind: "objective",
+                                                                                    stageId: stage.quest_stage_id,
+                                                                                    objectiveId:
+                                                                                        objective.quest_objective_id,
+                                                                                    values: objectiveValues(
+                                                                                        objective,
+                                                                                        options,
+                                                                                    ),
+                                                                                    initial: objectiveValues(
+                                                                                        objective,
+                                                                                        options,
+                                                                                    ),
+                                                                                },
+                                                                                {
+                                                                                    ids: [
+                                                                                        `edit-objective-${objective.quest_objective_id}`,
+                                                                                        `stage-${stage.quest_stage_id}`,
+                                                                                    ],
+                                                                                },
+                                                                            )
+                                                                        }
+                                                                    >
+                                                                        Edit objective
+                                                                    </button>
+                                                                ) : null}
+                                                                {can("remove_objective") ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        id={`remove-objective-${objective.quest_objective_id}`}
+                                                                        className="authoring-button authoring-button--danger"
+                                                                        disabled={
+                                                                            busy ||
+                                                                            (panel?.kind === "objective" &&
+                                                                                panel.objectiveId ===
+                                                                                    objective.quest_objective_id)
+                                                                        }
+                                                                        aria-label={`Remove objective ${objective.name}`}
+                                                                        aria-describedby={
+                                                                            panel?.kind === "objective" &&
+                                                                            panel.objectiveId ===
+                                                                                objective.quest_objective_id
+                                                                                ? `remove-hint-${objective.quest_objective_id}`
+                                                                                : undefined
+                                                                        }
+                                                                        onClick={() => {
+                                                                            setRemovalNote(false)
+                                                                            setRemoval({
+                                                                                kind: "objective",
+                                                                                stage,
+                                                                                objective,
+                                                                            })
+                                                                        }}
+                                                                    >
+                                                                        Remove objective
+                                                                    </button>
+                                                                ) : null}
+                                                                {panel?.kind === "objective" &&
+                                                                panel.objectiveId === objective.quest_objective_id &&
+                                                                can("remove_objective") ? (
+                                                                    <span
+                                                                        id={`remove-hint-${objective.quest_objective_id}`}
+                                                                        className="authoring-field__hint"
+                                                                    >
+                                                                        Close the edit form to remove this objective.
+                                                                    </span>
+                                                                ) : null}
+                                                            </div>
+                                                        ) : null}
                                                         <p className="authoring-field__hint">
                                                             {objective.objective_type_label} ·{" "}
                                                             <strong>
@@ -680,53 +904,6 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                                                         {objective.description ? (
                                                             <p>{objective.description}</p>
                                                         ) : null}
-                                                        {editable ? (
-                                                            <div className="authoring-actions">
-                                                                {can("update_objective") ? (
-                                                                    <button
-                                                                        type="button"
-                                                                        className="authoring-button"
-                                                                        disabled={busy}
-                                                                        aria-label={`Edit objective ${objective.name}`}
-                                                                        onClick={() =>
-                                                                            openPanel({
-                                                                                kind: "objective",
-                                                                                stageId: stage.quest_stage_id,
-                                                                                objectiveId:
-                                                                                    objective.quest_objective_id,
-                                                                                values: objectiveValues(
-                                                                                    objective,
-                                                                                    options,
-                                                                                ),
-                                                                                initial: objectiveValues(
-                                                                                    objective,
-                                                                                    options,
-                                                                                ),
-                                                                            })
-                                                                        }
-                                                                    >
-                                                                        Edit objective
-                                                                    </button>
-                                                                ) : null}
-                                                                {can("remove_objective") ? (
-                                                                    <button
-                                                                        type="button"
-                                                                        className="authoring-button authoring-button--danger"
-                                                                        disabled={busy}
-                                                                        aria-label={`Remove objective ${objective.name}`}
-                                                                        onClick={() =>
-                                                                            setRemoval({
-                                                                                kind: "objective",
-                                                                                stage,
-                                                                                objective,
-                                                                            })
-                                                                        }
-                                                                    >
-                                                                        Remove objective
-                                                                    </button>
-                                                                ) : null}
-                                                            </div>
-                                                        ) : null}
                                                         {panel?.kind === "objective" &&
                                                         panel.objectiveId ===
                                                             objective.quest_objective_id ? (
@@ -742,7 +919,7 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                                                                 attempt={attempt}
                                                                 pending={busy}
                                                                 onSave={saveObjective}
-                                                                onCancel={closePanel}
+                                                                onCancel={cancelPanel}
                                                             />
                                                         ) : null}
                                                     </div>
@@ -759,13 +936,21 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                                                 aria-label={`Add objective to ${stage.name}`}
                                                 disabled={busy || stage.objectives.length >= options.limits.max_objectives_per_stage}
                                                 onClick={() =>
-                                                    openPanel({
-                                                        kind: "objective",
-                                                        stageId: stage.quest_stage_id,
-                                                        objectiveId: null,
-                                                        values: objectiveValues(null, options),
-                                                        initial: objectiveValues(null, options),
-                                                    })
+                                                    openPanel(
+                                                        {
+                                                            kind: "objective",
+                                                            stageId: stage.quest_stage_id,
+                                                            objectiveId: null,
+                                                            values: objectiveValues(null, options),
+                                                            initial: objectiveValues(null, options),
+                                                        },
+                                                        {
+                                                            ids: [
+                                                                `add-objective-${stage.quest_stage_id}`,
+                                                                `stage-${stage.quest_stage_id}`,
+                                                            ],
+                                                        },
+                                                    )
                                                 }
                                             >
                                                 Add objective
@@ -785,7 +970,7 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                                             attempt={attempt}
                                             pending={busy}
                                             onSave={saveObjective}
-                                            onCancel={closePanel}
+                                            onCancel={cancelPanel}
                                         />
                                     ) : null}
                                         </div>
@@ -830,7 +1015,7 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                                 attempt={attempt}
                                 pending={busy}
                                 onSave={saveStage}
-                                onCancel={closePanel}
+                                onCancel={cancelPanel}
                             />
                         ) : (
                             <p>
@@ -840,12 +1025,15 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                                     className="authoring-button authoring-button--primary"
                                     disabled={busy || view.stages.length >= options.limits.max_stages}
                                     onClick={() =>
-                                        openPanel({
-                                            kind: "stage",
-                                            stageId: null,
-                                            values: stageValues(null, options),
-                                            initial: stageValues(null, options),
-                                        })
+                                        openPanel(
+                                            {
+                                                kind: "stage",
+                                                stageId: null,
+                                                values: stageValues(null, options),
+                                                initial: stageValues(null, options),
+                                            },
+                                            { ids: ["add-stage"] },
+                                        )
                                     }
                                 >
                                     Add stage
@@ -882,8 +1070,45 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                 }
                 onConfirm={confirmRemoval}
                 onCancel={() => {
+                    const closing = removal
+                    // A lost answer is not erased by closing the dialog: read the quest once and say so.
+                    const lostAnswer = error !== null && (error.kind === "network" || error.kind === "server")
                     setRemoval(null)
                     mutation.reset()
+                    if (lostAnswer) {
+                        setRemovalNote(true)
+                        void refetch()
+                    }
+                    // The control that asked may be gone (the quest has since been locked): its heading is next.
+                    if (closing?.kind === "objective") {
+                        const id = closing.objective.quest_objective_id
+                        focusLater(
+                            [`remove-objective-${id}`, `objective-${id}`, `stage-${closing.stage.quest_stage_id}`],
+                            null,
+                            true,
+                        )
+                    } else if (closing?.kind === "stage") {
+                        const id = closing.stage.quest_stage_id
+                        focusLater([`remove-stage-${id}`, `stage-${id}`, "add-stage"], null, true)
+                    }
+                }}
+            />
+            <ConfirmDialog
+                open={switching !== null}
+                title="Discard your changes?"
+                description={`Your changes to ${switchingSubject} have not been saved.`}
+                confirmLabel="Discard changes"
+                cancelLabel="Keep editing"
+                onConfirm={() => {
+                    if (switching === null) return
+                    const { next, opener } = switching
+                    setSwitching(null)
+                    showPanel(next, opener)
+                }}
+                onCancel={() => {
+                    const asker = switching
+                    setSwitching(null)
+                    if (asker !== null) focusLater(asker.opener.ids, null, true)
                 }}
             />
         </>

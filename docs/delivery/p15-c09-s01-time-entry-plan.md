@@ -2,7 +2,7 @@
 
 Owner register rows: [P15-C09](work-register.md#p15-c09), [P15-C09-S01](work-register.md#p15-c09-s01), [P15-C09-S01-T01](work-register.md#p15-c09-s01-t01). Source finding: [R12 — Time entry and duration arithmetic](work-register.md#r12--time-entry-and-duration-arithmetic), part R12a only ("a specified interaction improvement using current inputs/picker/dialog"). Attached records: [pilot-time](work-register.md#pilot-time) (a later adoption consumer) and [duration-policy](work-register.md#duration-policy) (an unresolved owner policy; not in scope).
 
-Prepared by Opus, 2026-11-25. **Plan only; T01 not started.**
+Prepared by Opus, 2026-11-25. **Status: merged through PR #78 at `341c0932d128ff49a0e29ff3e3a87ccdeab982a9` (2026-11-25); T01/S01 PASS WITH VERIFICATION LIMITS; not accepted** ([section 13](#13-merge-record-2026-11-25)). The planning-time list below is kept as written.
 
 - Starting SHA: `1c9cc3ac50132c6f854e5752c60e33154b595c55`, the reviewed C08 PR head, with a clean worktree.
 - Plan-entry head: `fe560e7e0be5e6c6040d195782ed923d7f7ca6dc`, the C08 merge (PR #77), reached by fast-forward. Its tree equals `1c9cc3ac`'s; no history was rewritten.
@@ -389,3 +389,12 @@ The plan's focused set plus the new tests ran at the correction (13 files, 254 p
 **Checks.** `npm run lint`, `npx tsc -b`, `npm run build` passed at the correction. The documentation check and `git diff --check` pass at this record.
 
 **§7.2 requirement 3 (CI on the exact PR head)** is recorded on the pull request, not here; no CI result is claimed. **Limits and pending, none granted:** portal tests use jsdom and mock servers; browser keyboard, 320 px layout, AX/screen reader, actual 200% and 400% zoom for the dialog, the precision line and the calendar-change note; pilot-time adoption; human review; owner acceptance. The open reliability investigations on the C04, C06, C07 and C08 rows (including the C08 shard-5 caller-expiry failure) are not C09 prerequisites and nothing here establishes their causes. No consumer work started.
+
+## 13. Merge record (2026-11-25)
+
+- **Merge.** PR #78 merged by the owner at 2026-11-25 22:22:46 UTC as `341c0932d128ff49a0e29ff3e3a87ccdeab982a9`. Its tree equals the reviewed PR head `deb2760a90c126f73b5c28e7efa8b0a24117bd3c`. `phase15/completion` was fast-forwarded to the merge; no history was rewritten. Merged is not accepted.
+- **Reviews.** T01/S01 PASS WITH VERIFICATION LIMITS (section 11.6). The original C09-S01-1 finding and its runs stay in sections 11.4 and 11.5. The page-specific missing-calendar fallback (the World times list and saved confirmation) and the interaction fallback (display plus clock time) remain distinct, as section 2.5 and R-5 state.
+- **CI on the exact head.** Run [45705491786](https://github.com/NemesisGhost/dnd_ai/actions/runs/45705491786) on `deb2760` passed all 14 jobs on attempt 1. The workflow checked out synthetic merge `cd6fbea3345c76bf3323446407e7eb3ccbe6e450` (`deb2760` into `fe560e7`). Earlier run 45657533221 on `a057e09` failed shard 5 and the portal job on attempt 1; that history is on the [C09 register row](work-register.md#p15-c09).
+- **Merge push run.** Merge push run `45712716612` on `341c093` completed **success**, all 14 jobs (observed 2026-11-25 with `gh run view`).
+- **Merged support work outside C09 scope.** The caller-expiry test correction `2434990` and its [investigation record](caller-expiry-lock-wait-investigation.md) were merged in the same PR. Independent review PASS was relayed by the owner; the record states its accepted limitation and what remains unproven.
+- **Pending, none granted.** Browser keyboard, 320 px layout, AX/screen reader, actual 200% and 400% zoom, pilot-time adoption, human review, `p15-integration` and `p15-owner`.

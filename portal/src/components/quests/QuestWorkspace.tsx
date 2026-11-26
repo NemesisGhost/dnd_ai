@@ -347,6 +347,9 @@ function Workspace({
                         // A progress command can lock the structure (the quest now has progress): read the
                         // quest again, in place. Progress itself was already read, so it is not read twice.
                         onChanged={refreshRecord}
+                        // What the quest describes as outcomes and rewards, from the reads already held.
+                        outcomes={view.outcomes ?? []}
+                        optionLabels={{ outcomeCategories: options.outcome_categories, rewardTypes: options.reward_types }}
                     />
                 ) : null
             case "preview":
