@@ -2,7 +2,7 @@
 
 Owner register rows: [P15-C10](work-register.md#p15-c10), [P15-C10-S02](work-register.md#p15-c10-s02), [P15-C10-S02-T01](work-register.md#p15-c10-s02-t01), [P15-C10-S02-T02](work-register.md#p15-c10-s02-t02). Source finding: [R14 — Guided quest outcome/review](work-register.md#r14--guided-quest-outcome-review), the guided-review part (R14a mapping and R14b guidance). Historical row: [review-2026-11-11.md](review-2026-11-11.md) Q03. Attached record outside this slice: [quest-effect](work-register.md#quest-effect) (persistent outcome choice and consequences, deferred). Checkpoint order, shared files and merge requirements are in the [S01 plan, section 12](p15-c10-s01-objective-actions-plan.md#12-c10-checkpoint-coordination).
 
-Prepared by Opus, 2026-11-25. **T01 and T02 implemented (section 11.3); independent review pending.**
+Prepared by Opus, 2026-11-25. **Merged with C10 through PR #79 at `ebe6c72` ([S01 plan section 12.5](p15-c10-s01-objective-actions-plan.md#125-merge-record-2026-11-25)); T01, T02 and S02 PASS WITH VERIFICATION LIMITS (section 11.6). Merged is not accepted.**
 
 - Starting SHA `deb2760a90c126f73b5c28e7efa8b0a24117bd3c`; plan-entry head `341c0932d128ff49a0e29ff3e3a87ccdeab982a9` (C09 merge, fast-forward), as in the S01 plan.
 - T01's baseline is the S01-T01 records commit, revalidated at start (S01 plan, section 12.1): `adb98bb8ba295aefd9f670f810fa668c5db60e89`. T02's baseline is the T01 records commit (not yet created).
