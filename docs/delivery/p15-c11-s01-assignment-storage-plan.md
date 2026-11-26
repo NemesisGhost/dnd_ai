@@ -430,7 +430,42 @@ Sonnet stopped on "an R01 declaration other than the named index changes". The t
   The plan modules were byte-restored after each run.
 - **Not run:** a full shard run, the non-pytest checks and mutation probes. G1, G1-control, G2, G4, D11b and D21 do not exist yet.
 
-(T01 and T02 implementation records follow here.)
+**T01 implementation (Sonnet, 2026-11-26).**
+
+- **Commits.** The plan amendment is `305588bc11af7591a9bd18223c82718dd4f2b22a`. The implementation is `5b5b22d3650f756e2477d5b504c18bae0caf50a2`. The records commit follows it. The baseline was `7281d6c84b5f4767a94f323acf2adf12b7ce6077` (HEAD and `origin/phase15/completion`, clean apart from the draft and the amended plans).
+- **Files.** `database/migrations/versions/150_control_assignments.py`; `persistence/tables/security.py`; `commands/access_grant_plans.py` and `commands/membership_end_plans.py` (item 9 only); `tests/factories.py` (`make_control_assignment`, `relationship_type_id`); the storage and migration test files; `test_r01_s5e4_access_grants.py` (G1, G1-control, G4); `test_r01_s5e3_end_membership.py` (G2); DATABASE_MODEL, DOMAIN_MODEL, `tables.md`, ACCESS_CONTROL. No change to `domain/authorization_steps.py`, `tests/r01_pre_write_catalogue.py`, any other declaration, any lock or lock order, any route, command writer or portal file.
+- **Test first.**
+  - *Original cases, baseline `7281d6c`, before the draft:* 20 of 22 failed (17 storage cases on `UndefinedColumn`, 3 migration cases on the absent revision). D12 and the pre-change part of D16 passed as guards. 21 cases passed on the draft (D1–D20 and D16b).
+  - *Added cases, temporary detached worktree at `7281d6c` (removed afterwards):* all 18 failed. D11b, the 8 G1 ids, the 2 G1-control ids, the 4 G4 ids and the 2 G2 ids failed on the absent columns (`is_control_assignment`, `campaign_id`); D21 failed on the absent revision.
+  - *Draft schema with a temporary import-only copy of the two plan modules* (placeholder `UniqueWait`s on the two INSERT steps; SHA-256 `4923b21c…` and `bde46b5d…` before and after, restored byte for byte): D11b, G1 (8), G1-control (2), G2 (2 ids) and G4 (4) passed, 17 in all, as the plan expected. D21 failed because the 64-byte FK name was truncated. Both live-catalogue tests failed (G3). `pytest tests --collect-only` with the unmodified draft had failed with 47 collection errors (the stop).
+  - No expectation was changed. No case failed for a reason of the test itself.
+- **Implementation.** Section 3.1 items 1–9 as written: the migration (columns, backfill, trigger, CHECKs, indexes, comments, refusing downgrade), Core columns, foreign keys, indexes and comments (no CHECKs, R-12), `AccessPrepared.campaign_id` set by both prepare functions and bound as `prepared.campaign_id`, `_OUTSIDE_ASSIGNMENT_INDEXES` on the four access-grant steps, the two new `_leaves_index` entries on `END_REVOKE_RELATIONSHIP`, the re-pinned scope trigger, the new immutable pin and `RELATIONSHIP_INSERT_TRIGGERS` and `RELATIONSHIP_UPDATE_TRIGGERS`, the FK rename to `membership_character_relationships_revoked_by_fkey`, and the item 8 documentation.
+- **Implementation details the plan left open.**
+  - The scope function's campaign check is `ELSIF v_campaign_id IS NOT NULL AND NEW.campaign_id <> v_campaign_id`. The first version compared with `IS DISTINCT FROM`, and an UPDATE of a row whose membership no longer exists (left by tests that clean up with `session_replication_role = replica`) then raised, because the membership's campaign was NULL. The earlier checks of this function tolerate such rows. Two existing tests, `test_api_npc_authoring.py::test_a_published_npc_shows_players_identity_but_never_gm_notes` and `test_relationship_capability_defaults.py::test_revoking_the_relationship_removes_the_perspective_on_the_next_call`, failed in the first focused run with exactly that message and passed after the change. The pinned `md5(prosrc)` is `91065820eeab803c9a42a13511a93523` (the draft's first body was `75fe763b…`).
+  - `is_primary` is derived and backfilled for every row (item 2, R-11), so D17 asserts it equals the type for legacy rows.
+- **Permitted adaptations.** Two, both named in the plan: the two new ids and their competitor branches in the end-membership "leaves" test (G2), and the move of `make_control_assignment` into `tests/factories.py`. No test pins the Alembic head revision, and no schema-comment or table-inventory test needed a change.
+- **Focused set (T01).** `pytest tests --collect-only`: 11,408 tests, no collection error (G3). Both `test_the_declarations_hold_against_the_live_catalogue` tests pass. After the final code, the storage, migration, access-grants and end-membership files together gave 287 passed, 5 skipped. An earlier serial run of the 68 files the section 7 search finds plus the R01 relationship files, `test_api_access_grants.py` and `tests/unit` gave 4 failed, 4,843 passed, 5 skipped. The 4 failures were:
+  - `tests/unit/test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`, which fails in this local environment with no C11 change (an extra allowed origin; reported, not changed). It passed in the shard run;
+  - the two tests above, fixed as described;
+  - `test_api_characters_inventory_only.py::test_a_revoked_grant_closes_the_inventory_again`: a blanket `UPDATE security.resource_grants SET revoked_at = now()` meets orphaned grants (their membership no longer exists) left in the shared session database by earlier tests, and `enforce_resource_grant_scope()` refuses. It fails identically, in the same file order, in a detached worktree at `305588bc` (the baseline code), so it is not caused by C11. It passed in the shard run.
+- **Full shard run.** `uv run python scripts/run_sharded_tests.py`, on the final executable code (before the mutation probes, which were restored): **first run 11,401 passed, 6 skipped, 1 failed**, 11,408 collected and executed, 28m04s. The failure was `tests/database/test_r01_s5d_invitation_routes.py::test_a_revoke_that_holds_the_invitation_first_makes_the_acceptance_wait_then_refuses_it[unkeyed]` (shard 3): the gate was "not reached after 15.26s", with no backend non-idle. No cause is claimed. **Rerun, reported separately:** that test (both ids) alone passed, and the whole file passed (59 passed). No second full run was made.
+- **Non-pytest checks.** `ruff format --check`, `ruff check`, `mypy src`, `uv lock --check`, `alembic check` (a freshly migrated throwaway database: no drift; one head, `150_control_assignments`), `scripts/check_documentation.py` and `git diff --check` all pass.
+- **Mutation probes** (every edit byte-restored; SHA-256 of the five touched files compared before and after, identical each time):
+
+| Probe | Failed (as required) |
+|---|---|
+| M1 | D11 (D12, the guard, still passed) |
+| M2 | D10 |
+| M3 | D1, D16, D16b |
+| M11 | collection: `WriteStep 'insert_relationship': unique index …live_assignment needs a UniqueWait` (G3 Core) |
+| M12 | the end-membership live-catalogue test; the module still imports |
+| M13 | the access-grants live-catalogue test |
+| M14 | D11b and G1 (`live_primary`, all four access-grant steps) |
+
+- **Stop conditions.** None applied after the amendment. No legacy guard failed (D12 and D16 pass). No declaration other than item 9 changed. G1-control raised `LockNotAvailable` for both indexes. No route test changed outcome.
+- **CI.** Pending the checkpoint PR. No browser or AX work.
+
+(T02 implementation records follow here.)
 
 ## 12. C11 checkpoint coordination
 
