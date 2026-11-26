@@ -46,6 +46,12 @@ Prepared by Opus, 2026-11-25. **Planned ahead of its stated prerequisite. Implem
 2. `CONTROL_ASSIGNMENT_CAPABILITIES`, the `asgn` CTE's in-effect rule, `AccessContext.control_assignments` and `control_clock_key` (S01 section 3.2 items 1–3).
 3. Legacy readers exclude assignment rows, and legacy change and revoke refuse assignment ids (S01 section 3.2 item 4).
 4. Membership end revokes assignment rows (S01 E20).
+5. (Added 2026-11-26.) The R01 relationship declarations, as S01 section 3.1 item 9 left them.
+   - `RELATIONSHIP_INSERT_TRIGGERS` and `RELATIONSHIP_UPDATE_TRIGGERS` pin the revision-150 scope trigger and the immutable-columns trigger.
+   - Every step that writes `security.membership_character_relationships` must name `UniqueWait` entries for all three unique indexes on it.
+   - S02's assignment INSERT really enters `…_live_primary` (primary only) and `…_live_assignment`. Its entries are therefore **competing** waits, each with its own race test (the `test_a_competing_active_relationship_of_the_same_type_is_a_unique_wait` pattern). They are not G1's "never enters" entries.
+   - S02's revoke and replace UPDATEs leave those indexes (the G2 pattern).
+   - An S02 INSERT supplies `campaign_id`, bound to the campaign lock it takes.
 
 ## 3. Changes
 

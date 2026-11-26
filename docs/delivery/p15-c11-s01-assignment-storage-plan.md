@@ -2,7 +2,7 @@
 
 Owner register rows: [P15-C11](work-register.md#p15-c11), [P15-C11-S01](work-register.md#p15-c11-s01), [P15-C11-S01-T01](work-register.md#p15-c11-s01-t01), [P15-C11-S01-T02](work-register.md#p15-c11-s01-t02). Governing contract: [ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §2.1–§2.6, §2.9–§2.10 (owner-accepted, [adr21](work-register.md#adr21)); decisions OD-2 and OD-14; tests T2, T3, T5 (resolution part) and T25 (index replacement, clock boundaries, no branch inheritance) in [rules foundations §8](rules-foundations.md). The companion slice is [S02](p15-c11-s02-control-changes-plan.md). Checkpoint coordination for both slices is in [section 12](#12-c11-checkpoint-coordination).
 
-Prepared by Opus, 2026-11-25. **Planned; not implemented.**
+Prepared by Opus, 2026-11-25. **Planned; not implemented.** Amended by Opus, 2026-11-26, after T01 stopped on its R01 declaration stop condition. The amendment authorizes the R01 relationship-declaration correction in section 3.1 item 9 and changes sections 2.1, 3.1, 4, 6, 7, 10 and 11. The stop and its evidence are recorded in section 11.3.
 
 - Starting SHA: `dabd7d1ab92a1575eb3769e539074ccbab34de8e`, the reviewed C10 PR head, with a clean worktree.
 - Plan-entry head: `ebe6c7241a581cff1e2fac265a3af9230c656fa1`, the C10 merge (PR #79), reached by fast-forward. Its tree equals `dabd7d1`'s; no history was rewritten.
@@ -35,6 +35,7 @@ Prepared by Opus, 2026-11-25. **Planned; not implemented.**
 | Table | `security.membership_character_relationships` (`persistence/tables/security.py:515`; migration `080_security_identity_and_access.py:~830-1018`). No `is_control_assignment`, `campaign_id`, `is_primary`, `assignment_period_kind`, `revoked_by_membership_id` or `revocation_reason` column. Alembic head `149_reservation_fk_deferrable`. |
 | Scope trigger | `security.enforce_membership_character_relationship_scope()` (080:906), `BEFORE INSERT OR UPDATE` (080:1016): same-world character and timeline, same-campaign `granted_by_membership_id`, and `effective_period := NULL` when no start, else `[from, to)` over world-time `sort_key`s. |
 | Uniqueness | `ux_membership_character_relationships_active_type` on `(campaign_membership_id, character_id, character_relationship_type_id) WHERE revoked_at IS NULL` (080:898). Nothing limits primaries per campaign. R01 plans name this index in `UniqueWait` declarations (`access_grant_plans.py:340,355`; `membership_end_plans.py:469`). |
+| R01 declarations on the table (added 2026-11-26) | Five `WriteStep`s write the table: `GRANT_RELATIONSHIP_INSERT`, `CHANGE_RELATIONSHIP_INSERT`, `CHANGE_RELATIONSHIP_REVOKE_OLD` and `REVOKE_RELATIONSHIP` (`access_grant_plans.py:361-436`), and `END_REVOKE_RELATIONSHIP` (`membership_end_plans.py:460`). All five pin `RELATIONSHIP_TRIGGERS` (`membership_end_plans.py:304`, the scope function by `md5(prosrc)`). Two checkers apply to them. **Core**, at import (`domain/authorization_steps.py:1213-1223`): an INSERT names a `UniqueWait` for every named unique index of its table, and an UPDATE for each index whose key columns it sets. **Live catalogue** (`tests/r01_pre_write_catalogue.py`): it counts index dependencies through `pg_depend`, so predicate columns count too (lines 377-401). An omitted `NOT NULL` column must have a default (342-356), and the pinned triggers must equal the catalogue's for the command (427-438). The two live tests are `test_the_declarations_hold_against_the_live_catalogue` in `test_r01_s5e4_access_grants.py:974` and `test_r01_s5e3_end_membership.py`. No other R01 declaration writes the table. |
 | Legacy resolver | `rels` CTE in `_ACCESS_CTES` (`domain/access.py:~1105-1135`): unrevoked, unexpired, `effective_to_world_time_id IS NULL`, timeline unset or the campaign's, type active, character active and canon. `_access_context_from_row` (`access.py:1626`) keeps a row's capability only if `BUILTIN_RELATIONSHIP_CAPABILITIES` (`access.py:169`) permits it. The whole decision is one statement (`read_authority_snapshot`, `access.py:1513`). |
 | In-statement clock | `_PERSPECTIVE_CTES` (`access.py:1363`) already resolves the effective clock in SQL exactly as `queries/campaign_clock.resolve_effective_clock` does (own clock row, else the parent's bounded at the branch point, recursively). It is opt-in (`with_perspective`). |
 | Capability consumers | `has_capability(..., character_id=)` adds `character_capabilities[character_id]` to the baseline (`access.py:~420`). `api/world_explorer.py:116` discovers characters from `set(access.character_capabilities)`. `queries/bootstrap.py:377` offers a perspective only for `character.view_knowledge`. No route checks `character.control`, `character.edit_mechanical_state`, `character.view_player_profile` or `character.edit_player_profile`; the last two codes do not exist. |
@@ -73,7 +74,9 @@ Migration `150_control_assignments` (revalidate the next free revision at start)
    - set `is_primary := (type code = 'primary_controller')`;
    - when `is_control_assignment`, refuse a type other than `primary_controller` or `co_controller`;
    - refuse a `revoked_by_membership_id` of another campaign.
-   Existing inserts (`grant_character_relationship`, `change_character_relationship`, factories) keep working unchanged because the trigger fills `campaign_id`.
+   Existing unguarded inserts (`grant_character_relationship`, `change_character_relationship`, factories, seeds) keep working unchanged because the trigger fills `campaign_id`. The two R01 INSERT steps supply it explicitly (item 9).
+
+   `is_primary` is derived for **every** row, legacy rows included, and the backfill matches what the trigger derives. This follows ADR §2.3 ("maintained by the type trigger"). It also means a later UPDATE never silently changes the value. A legacy `primary_controller` row therefore has `is_primary` true and still never enters the live-primary index, whose predicate requires `is_control_assignment` (D11b). `is_primary` alone never means "primary assignment": every reader pairs it with `is_control_assignment`.
 3. **CHECK constraints** (ADR §2.3; all phrased `NOT is_control_assignment OR …` so legacy rows are untouched):
    - kind present exactly when an assignment (`is_control_assignment = (assignment_period_kind IS NOT NULL)`);
    - `ongoing` → both world-time endpoints NULL;
@@ -84,11 +87,33 @@ Migration `150_control_assignments` (revalidate the next free revision at start)
    - replace `ux_membership_character_relationships_active_type` with the same columns and predicate `WHERE revoked_at IS NULL AND NOT is_control_assignment`, **keeping the name** (R01 `UniqueWait` declarations reference it);
    - new `ux_membership_character_relationships_live_primary` on `(campaign_id, character_id) WHERE is_control_assignment AND is_primary AND revoked_at IS NULL`;
    - new `ux_membership_character_relationships_live_assignment` on `(campaign_membership_id, character_id) WHERE is_control_assignment AND revoked_at IS NULL`;
-   - supporting `ix_…_campaign_id` and partial `ix_…_revoked_by` indexes. Names stay within 63 bytes.
+   - supporting `ix_…_campaign_id` and partial `ix_…_revoked_by` indexes.
+   - Every name this revision creates (constraints, indexes, trigger) stays within 63 bytes, so PostgreSQL never truncates one. The draft's `membership_character_relationships_revoked_by_membership_id_fkey` is 64 bytes and is renamed, for example to `membership_character_relationships_revoked_by_fkey` (D21).
 5. **Comments** on every new column, constraint-bearing behavior and index (the schema-comment reconciliation tests require them).
 6. **Downgrade:** refuses with a clear error while any `is_control_assignment` row exists. It never deletes them silently and never lets them become legacy rows that would confer `view_private`. Otherwise it restores the exact previous index, trigger body and columns.
-7. **Core metadata** (`persistence/tables/security.py`): the same columns, constraints and indexes, so `alembic check` reports no drift.
-8. **Documentation:** [DATABASE_MODEL](../architecture/DATABASE_MODEL.md) §19.4 (assignment columns and invariants) and §7.3, and [DOMAIN_MODEL](../DOMAIN_MODEL.md) §8.4. Each marks `character.character_controllers` as retired by ADR 0021 §2.1. [tables.md](../reference/tables.md) gets the new columns and indexes.
+7. **Core metadata** (`persistence/tables/security.py`): the same columns, foreign keys, indexes and comments, so `alembic check` reports no drift. CHECK constraints are **not** declared in Core, following the package convention (`persistence/tables/__init__.py:22-25`): Alembic does not compare them, and D4–D7 and D14 cover them in tests. Leaving them out changes no autogenerate result and nothing either R01 checker reads. The live catalogue reads CHECKs from `pg_constraint`, and the new ones use only built-in immutable functions.
+8. **Documentation:**
+   - [DATABASE_MODEL](../architecture/DATABASE_MODEL.md) §19.4 (assignment columns and invariants, plus one sentence on item 9) and §7.3, and [DOMAIN_MODEL](../DOMAIN_MODEL.md) §8.4. Each marks `character.character_controllers` as retired by ADR 0021 §2.1.
+   - [tables.md](../reference/tables.md) is a name inventory with no per-table columns. It gets:
+     - the current revision head, `150_control_assignments`, in its opening paragraph;
+     - in the `character_controllers` disposition row, a short statement that the name is retired by ADR 0021 §2.1, that control assignments are marked rows of `security.membership_character_relationships`, and a link to DATABASE_MODEL §19.4.
+
+     Column and index lists stay in DATABASE_MODEL. The earlier wording, "gets the new columns and indexes", was a plan error.
+   - [ACCESS_CONTROL](../api/ACCESS_CONTROL.md) R01 S5-E4 section: one sentence under "Tests" naming G1, and stating that the relationship steps supply `campaign_id` and declare the assignment indexes.
+9. **R01 relationship declarations (authorized by the 2026-11-26 amendment).** Section 11.3 records why: revision 150 makes the five declarations in section 2.1 fail three checks, at collection (Core) and in both live-catalogue tests. The correction preserves every checker guarantee. It changes `domain/authorization_steps.py`, `tests/r01_pre_write_catalogue.py`, every other declaration, every lock and lock order, the route registries and the manifest **not at all**.
+   1. **The two legacy INSERT steps supply `campaign_id`.** `GRANT_RELATIONSHIP_INSERT` and `CHANGE_RELATIONSHIP_INSERT` add `campaign_id=bindparam("campaign")` and `_fk(mcr, "campaign_id", "campaign", CAMPAIGN_ROW_LOCK)`, the `CREATE_GRANT_INSERT` pattern (`access_grant_plans.py:441,458`). The value travels in `AccessPrepared`, which gains `campaign_id: uuid.UUID | None = None`. `prepare_grant_relationship` and `prepare_change_relationship` set it from their `campaign_id` parameter, and `write_grant_relationship` and `write_change_relationship` bind `prepared.campaign_id`. Their signatures and every API caller stay unchanged. (A first plan-time prototype that named `campaign_id` inside the write functions failed with a `NameError` 500; section 11.3.) Both plans already hold that campaign `FOR UPDATE` (`access_grant_plans.py:877,1066`), so no lock is added or moved. The value always equals the membership's campaign because `TARGET_MEMBERSHIP_LOCK` is campaign-bound, so the trigger's equality check cannot fire for these steps. Why not the trigger: the live catalogue refuses an omitted `NOT NULL` column without a default. It cannot see a trigger fill one, and teaching it that would be general trigger analysis.
+   2. **The four access-grant steps declare the assignment indexes as never entered.** A new `_OUTSIDE_ASSIGNMENT_INDEXES` holds `UniqueWait` entries for `security.ux_membership_character_relationships_live_primary` and `…_live_assignment`. Each names G1. It is added (set union) to the two INSERT steps' `_COMPETING_RELATIONSHIP_WAIT` and to the two UPDATE steps' `_LEAVES_RELATIONSHIP_INDEX`. The semantics are exact:
+      - the INSERTs never set `is_control_assignment`, so it takes its default, false;
+      - the trigger reads that column but never sets it, and revision 150 makes it immutable;
+      - so the row is outside both predicates and is never a unique-check entry for either index;
+      - the UPDATEs set only `revoked_at`. After T02 they close legacy rows only, because assignment ids are refused (section 3.2 item 4), and a legacy row is outside both indexes before and after the update;
+      - between T01 and T02 they could also close an assignment row, but only a test can create one. That update *leaves* both indexes, which also never waits.
+
+      The existing named constants keep their meaning and their tests.
+   3. **Membership end declares that it leaves the assignment indexes.** `END_REVOKE_RELATIONSHIP` revokes every unrevoked row of the membership, assignment rows included (E20). Its `unique_waits` becomes `_leaves_index(active_type) | _leaves_index(live_primary) | _leaves_index(live_assignment)`, using the existing helper and its existing test name, which G2 extends. Setting `revoked_at` takes an assignment row out of both predicates. The update therefore inserts no index entry and never waits, and a competitor's insert of the same key waits for the end's transaction.
+   4. **Trigger pins.** In `RELATIONSHIP_TRIGGERS`, re-pin `enforce_membership_character_relationship_scope` to `md5(prosrc)` of revision 150's body. Add `tr_membership_character_relationships_enforce_immutable` (`_IMMUTABLE_FN`, `events={UPDATE}`, `args=("campaign_id", "is_control_assignment", "assignment_period_kind")`). Add `RELATIONSHIP_INSERT_TRIGGERS` and `RELATIONSHIP_UPDATE_TRIGGERS`, the event-filtered subsets, as `MEMBERSHIP_ROLE_TRIGGERS` is filtered at `membership_role_plans.py:399`. INSERT steps pin the INSERT subset and UPDATE steps the UPDATE subset. The new function body takes no lock: it adds only plain `SELECT`s of the type row and the revoker's membership.
+
+   Plan-time validation (section 11.3) applied exactly this correction to the uncommitted implementation, then restored the bytes. Collection then succeeded with no errors, and all 41 live-catalogue tests passed.
 
 T01 changes no resolver and no reader. Between T01 and T02, only tests can create an assignment row (no writer exists until S02).
 
@@ -132,8 +157,13 @@ T01 changes no resolver and no reader. Between T01 and T02, only tests can creat
 |---|---|---|
 | `database/migrations/versions/150_control_assignments.py` (new) | T01 | Section 3.1 |
 | `src/dnd_ai/persistence/tables/security.py` | T01 | Core columns, constraints, indexes |
-| `tests/database/test_control_assignment_storage.py` (new) | T01 | D1–D16 |
-| `tests/database/test_control_assignment_migration.py` (new) | T01 | D17–D20 (retained data, downgrade) |
+| `src/dnd_ai/commands/access_grant_plans.py` | T01 | Section 3.1 item 9.1–9.2 (the two INSERT steps and their call sites, `_OUTSIDE_ASSIGNMENT_INDEXES`, the event-filtered trigger subsets) |
+| `src/dnd_ai/commands/membership_end_plans.py` | T01 | Section 3.1 item 9.3–9.4 (`END_REVOKE_RELATIONSHIP` waits, `RELATIONSHIP_TRIGGERS` pins and subsets) |
+| `tests/factories.py` | T01 | `make_control_assignment` moved here from the storage test file (shared by D, G and E cases and by S02); test-only, never imported by `src` |
+| `tests/database/test_control_assignment_storage.py` (new) | T01 | D1–D16, D11b, D16b |
+| `tests/database/test_control_assignment_migration.py` (new) | T01 | D17–D21 (retained data, downgrade, untruncated names) |
+| `tests/database/test_r01_s5e4_access_grants.py` | T01 | G1 (new test and its positive control), G4 |
+| `tests/database/test_r01_s5e3_end_membership.py` | T01 | G2 (two new parametrization ids and their competitors; existing ids unchanged) |
 | `src/dnd_ai/domain/access.py` | T02 | Matrix, `rels` exclusion, shared clock CTE, `asgn` CTE, new context fields |
 | `src/dnd_ai/queries/effective_access.py` | T02 | Exclusion plus the assignment source |
 | `src/dnd_ai/queries/access_overview.py` | T02 | Exclusion |
@@ -142,7 +172,7 @@ T01 changes no resolver and no reader. Between T01 and T02, only tests can creat
 | `src/dnd_ai/queries/content_preconditions.py` | T02 | Archive block |
 | `tests/database/test_control_assignment_resolution.py` (new) | T02 | E1–E24 |
 | `tests/unit/test_control_assignment_matrix.py` (new) | T02 | E25–E27 (closed matrix, no consumer) |
-| Docs: DATABASE_MODEL, DOMAIN_MODEL, tables.md (T01); ACCESS_CONTROL, DATABASE_MODEL §19.7 (T02); this plan; the register | T01, T02 | As stated |
+| Docs: DATABASE_MODEL, DOMAIN_MODEL, tables.md, ACCESS_CONTROL R01 S5-E4 sentence (T01); ACCESS_CONTROL control-assignment subsection, DATABASE_MODEL §19.7 (T02); this plan; the register | T01, T02 | As stated |
 
 ## 5. Commits and review boundary
 
@@ -152,7 +182,7 @@ T01 changes no resolver and no reader. Between T01 and T02, only tests can creat
 
 ## 6. Acceptance cases
 
-Fixtures use the existing factories plus a test-only helper, `make_control_assignment(connection, membership, character, role, kind, *, from_time=None, to_time=None)`. It inserts directly, because no writer exists in S01, and must not be importable from `src`.
+Fixtures use the existing factories plus a test-only helper, `make_control_assignment(connection, membership, character, role, kind, *, from_time=None, to_time=None)`. It inserts directly, because no writer exists in S01, and must not be importable from `src`. It lives in `tests/factories.py`, because the D, G and E cases and S02 all use it. The draft defined it locally in the storage test file. Its extra keyword arguments for refused shapes may stay.
 
 **T01 (storage):**
 
@@ -178,6 +208,19 @@ Fixtures use the existing factories plus a test-only helper, `make_control_assig
 | D18 | After upgrade, each fixture user's `AccessContext` equals its pre-upgrade value | fails (revision 150 absent) |
 | D19 | Downgrade 150→149 with no assignment rows restores the exact previous index definition (`pg_get_indexdef`), trigger body and columns | fails |
 | D20 | Downgrade with one assignment row refuses and changes nothing | fails |
+| D11b | (added 2026-11-26) A legacy `primary_controller` row of member A has `is_primary` true, and member B's primary assignment on the same character still inserts: a legacy row never occupies the live-primary slot | fails (columns absent) |
+| D16b | (added by the draft) Legacy rows from the factory and both unguarded commands have `campaign_id` set and `is_control_assignment` false | fails (columns absent) |
+| D21 | (added 2026-11-26) Every constraint, index and trigger name revision 150 creates appears in `pg_catalog` exactly as written, with no 63-byte truncation | fails (revision absent) |
+
+**T01 (R01 declaration evidence, section 3.1 item 9; added 2026-11-26).** Shape and collection checks (G3) are kept apart from the behavioral lock-wait evidence (G1, G2):
+
+| ID | Case | Kind | Baseline expectation (at `7281d6c`) |
+|---|---|---|---|
+| G1 | `test_r01_s5e4_access_grants.py::test_a_legacy_relationship_write_never_waits_on_an_assignment_index`, the test G1's `UniqueWait` entries name. It runs on two connections with no route locks, so the index alone decides. Parametrized over the four access-grant steps (`GRANT_RELATIONSHIP_INSERT`, `CHANGE_RELATIONSHIP_INSERT`, `CHANGE_RELATIONSHIP_REVOKE_OLD`, `REVOKE_RELATIONSHIP`) × the two new indexes. Connection B holds an uncommitted assignment with the overlapping key: for live-primary, a primary assignment by another membership on the same character; for live-assignment, an assignment by the same membership on the same character. Connection A, under `SET LOCAL lock_timeout = '5s'`, executes the step's own `statement` with real binds on a legacy `primary_controller` row. For an INSERT that is a new row; for an UPDATE it revokes a committed row. A completes without `LockNotAvailable`. For the INSERT steps the reverse order holds too: A first, uncommitted; then B completes under the same timeout. Both commit, and both rows exist | behavioral (index wait) | fails (columns absent) |
+| G1-control | Same module, `test_the_assignment_index_harness_detects_a_real_wait`: the same harness, with A inserting a **second assignment** with the same key while B's is uncommitted, raises `LockNotAvailable` (SQLSTATE 55P03) for each index. Without this control G1 could pass vacuously | behavioral (positive control) | fails (columns absent) |
+| G2 | `test_r01_s5e3_end_membership.py::test_an_update_leaving_a_partial_unique_index_never_waits_for_a_competing_insert` gains ids `live_primary` and `live_assignment`. For those ids only, the test first commits an ongoing primary assignment of `e.membership` on `e.character`. The competitor, started while the end is parked at its audit insert, is: for `live_primary`, a primary assignment by another open membership on `e.character`; for `live_assignment`, a co-controller assignment of `e.membership` on `e.character`. Existing pattern: the competitor is blocked by the end's pid, the end returns 200, and then the competitor completes with no error. The docstring states that the `live_primary` competitor waits on the index entry of the updated row, and the `live_assignment` competitor on the membership row lock that the end holds `FOR UPDATE`. Existing ids and the shared `Member` fixture are unchanged | behavioral (route race) | fails (columns absent) |
+| G3 | Shape: `uv run pytest tests --collect-only -q` reports no collection error, and both `test_the_declarations_hold_against_the_live_catalogue` tests pass. These checks prove that the declarations match the catalogue, not wait behavior | shape | collection errors in 47 modules with the draft (section 11.3) |
+| G4 | `test_r01_s5e4_access_grants.py`: a relationship created through the grant route, and one through the change route (each keyed and unkeyed), has `campaign_id` equal to the route campaign and `is_control_assignment` false. Every existing grant and change route test passes unchanged | behavioral (route) | fails (columns absent) |
 
 **T02 (resolution and readers):**
 
@@ -218,7 +261,7 @@ Fixtures use the existing factories plus a test-only helper, `make_control_assig
 From `C:\Users\nemes\dnd_ai` (PowerShell; the local PostgreSQL 18 server and `.env` as for focused runs):
 
 1. Focused:
-   - T01: `uv run pytest tests/database/test_control_assignment_storage.py tests/database/test_control_assignment_migration.py -q`, plus every existing test file that touches the table. Find them with `rg -l "membership_character_relationship|make_membership_character_relationship|character-relationships" tests`.
+   - T01: `uv run pytest tests/database/test_control_assignment_storage.py tests/database/test_control_assignment_migration.py -q`, plus every existing test file that touches the table. Find them with `rg -l "membership_character_relationship|make_membership_character_relationship|character-relationships" tests`. The search covers the R01 relationship files; run these explicitly as well: `test_r01_s5e4_access_grants.py`, `test_r01_s5e4_access_races.py`, `test_r01_s5e3_end_membership.py`, `test_r01_s5e3_end_races.py`, `test_r01_s5e3_end_interactions.py`, `test_r01_s5f_keyed_cross_family_races.py`, `test_api_access_grants.py` and `tests/unit`. G3 also needs `uv run pytest tests --collect-only -q` with no errors.
    - T02: adds `test_control_assignment_resolution.py`, `tests/unit/test_control_assignment_matrix.py`, `test_access_snapshot_differential.py`, `test_api_effective_access.py`, `test_api_access_overview.py`, `test_api_party_roster.py`, `test_character_relationship_concurrency.py`, `test_r01_s5e3_end_membership.py`, `test_supersession_publish_preconditions.py`, and the files the same search finds.
 2. Full backend, once per task on the task's final executable code: `uv run python scripts/run_sharded_tests.py`. A failed first run and any rerun are reported separately; no cause is claimed without evidence.
 3. Non-pytest checks: `uv run ruff format --check`, `uv run ruff check`, `uv run mypy src`, `uv lock --check`, `alembic check` (as [DEVELOPMENT §6](../DEVELOPMENT.md#6-testing) states it), `uv run python scripts/check_documentation.py`, `git diff --check`.
@@ -238,6 +281,10 @@ From `C:\Users\nemes\dnd_ai` (PowerShell; the local PostgreSQL 18 server and `.e
 | M8 | Remove the assignment branch from the roster rule | E18 |
 | M9 | Add `character.view_knowledge` to the co-controller set | E2 or E25 |
 | M10 | Drop the archive assignment condition | E19 |
+| M11 (T01, added 2026-11-26) | Remove `_OUTSIDE_ASSIGNMENT_INDEXES` from `GRANT_RELATIONSHIP_INSERT` | G3: collection fails with `needs a UniqueWait` (Core) |
+| M12 (T01) | Remove the two new `_leaves_index` entries from `END_REVOKE_RELATIONSHIP` | G3: the end-membership live-catalogue test. The module still imports, which records that only the live check counts predicate columns |
+| M13 (T01) | Remove `campaign_id` and its FK binding from `CHANGE_RELATIONSHIP_INSERT` | G3: the access-grants live-catalogue test (`omitted NOT NULL column campaign_id`) |
+| M14 (T01) | Drop `is_control_assignment` from the live-primary index predicate (migration and Core both, so the database tests run) | G1 (live-primary, INSERT ids) and D11b |
 
 ## 8. Authorization, disclosure, isolation and outcomes
 
@@ -256,8 +303,18 @@ From `C:\Users\nemes\dnd_ai` (PowerShell; the local PostgreSQL 18 server and `.e
 ## 10. Decisions (routine; recorded)
 
 - **R-1, storage form.** Kind is TEXT with a CHECK, following migration 141's `end_reason`. The ADR names a "lookup value"; a two-value closed set with no display metadata does not need a lookup table. No ENUM.
-- **R-2, index name kept.** The replaced legacy index keeps `ux_membership_character_relationships_active_type`, so R01 `UniqueWait` declarations stay valid.
-- **R-3, trigger fills `campaign_id`.** Existing insert paths and factories need no change.
+- **R-2, index name kept.** The replaced legacy index keeps `ux_membership_character_relationships_active_type`, so its existing R01 `UniqueWait` entries stay valid. *Amended 2026-11-26:* keeping the name was necessary but not sufficient. The two new unique indexes, the omitted `NOT NULL` column and the changed trigger also reach the five R01 declarations on the table (R-10).
+- **R-3, trigger fills `campaign_id`.** Unguarded insert paths, factories and seeds need no change. *Amended 2026-11-26:* the two R01 INSERT steps supply it explicitly (R-10).
+- **R-10, R01 relationship declarations (2026-11-26).** Correct the five declarations as section 3.1 item 9 states, and change neither checker:
+  - Every new `UniqueWait` entry states what the step really does: never enters the index (G1), or leaves it (G2).
+  - Each is backed by behavioral evidence. G1-control shows that the G1 harness can detect a wait.
+  - Rejected alternatives:
+    - adding entries only to satisfy collection (nominal);
+    - excluding indexes by predicate in the Core or live checker (general predicate analysis, which would weaken a checked guarantee);
+    - accepting trigger-filled `NOT NULL` columns in the live checker (trigger analysis);
+    - making `campaign_id` nullable (contradicts ADR §2.2).
+- **R-11, `is_primary` on every row.** Derived from the type for legacy rows too (section 3.1 item 2; ADR §2.3). Readers pair it with `is_control_assignment`.
+- **R-12, CHECKs not in Core.** This follows the package convention (`persistence/tables/__init__.py:22-25`). Tests cover them; neither autogenerate nor R01 depends on Core CHECKs.
 - **R-4, safe downgrade.** The downgrade refuses while assignment rows exist instead of deleting them or letting them become privileged legacy rows.
 - **R-5, matrix merge.** In-effect assignment capabilities merge into `character_capabilities`, so every existing consumer (`has_capability`, discovery, denies) applies them. The source is kept separately for explanations and the roster.
 - **R-6, roster clock.** The roster's party-membership predicate keeps its own clock read; only the control half uses the snapshot's clock.
@@ -279,6 +336,18 @@ No owner decision blocks S01.
 5. Run M1–M3 with byte restoration and hash comparison.
 6. Commit with the T01 subject and push. Record in section 11.3 and the T01 register row (actual SHAs and runs), then commit and push the records.
 
+**T01 continuation after the 2026-11-26 amendment** (the worktree holds the draft; section 11.3):
+1. Confirm HEAD is still `7281d6c84b5f4767a94f323acf2adf12b7ce6077` and equals `origin/phase15/completion`. Confirm the worktree holds exactly the draft files listed in section 11.3, plus this amended plan, and nothing else. Do not reset, clean or recreate the draft.
+2. Commit this plan amendment alone first (stage only this file) as `docs: amend the P15-C11-S01 plan for the R01 relationship declarations (P15-C11-S01-T01)`. Push it.
+3. Test first, for the added cases. Write D11b, D21, G1, G1-control, G2's two ids and G4, and move `make_control_assignment` to `tests/factories.py`.
+   - **Baseline run:** run the added cases at `7281d6c` in a temporary detached worktree (`git worktree add --detach <scratch path> 7281d6c…`, with the new and changed test files copied in), then remove that worktree. The main worktree is never reset or stashed. Each case is expected to fail because the columns are absent.
+   - **Draft schema, before item 9:** run G1, G1-control, G2 and G4 in the main worktree with a temporary, byte-restored copy of the two plan modules that only lets them import. G1, G1-control and G2 are expected to pass already, because they test the schema's wait behavior, not the declarations. G3 is expected to fail.
+   - Record every result. Never commit the temporary copy.
+4. Make the section 3.1 item 9 changes and the name fix in item 4, then the documentation in item 8.
+5. Run the section 7 focused set (T01, including G3), then one full shard run and the non-pytest checks.
+6. Run M1–M3 and M11–M14, restoring bytes and comparing hashes.
+7. Commit the implementation with the T01 subject (unchanged) and push. Then commit and push the records (section 11.3 and the T01 register row).
+
 **T02**
 1. Revalidate: HEAD equals origin, the worktree is clean, T01's records commit is present, and section 2.1's reader list still matches. Run `rg -n "membership_character_relationships" src` and stop if a new production reader appears that section 3.2 does not cover.
 2. Write E1–E27 first; run them at the baseline and record fails and guards.
@@ -291,14 +360,19 @@ No owner decision blocks S01.
 - a test that pins the Alembic head revision;
 - schema-comment and table-inventory tests that enumerate columns or indexes;
 - the D4-C structural test, if it pins the function body rather than its single caller;
-- `tests/access_reference.py` **only** if the differential corpus has to include an assignment row, which it should not.
+- `tests/access_reference.py` **only** if the differential corpus has to include an assignment row, which it should not;
+- (T01, 2026-11-26) the two new ids and their competitor branches in the end-membership "leaves" test (G2), and moving `make_control_assignment` into `tests/factories.py`.
 
-No other expectation changes.
+No other expectation changes. The section 3.1 item 9 edits are production changes authorized by this plan, not test adaptations.
 
 **Stop conditions:**
 - an API route, command writer or portal change becomes necessary;
 - any legacy guard (D12, D16, E11, E14, E20, E21) fails;
-- an R01 declaration other than the named index changes;
+- an R01 declaration changes beyond section 3.1 item 9 (the five relationship steps, `RELATIONSHIP_TRIGGERS` and its two subsets, and the two call sites' `campaign` bind);
+- `domain/authorization_steps.py` or `tests/r01_pre_write_catalogue.py` would have to change, or a lock would have to be added, removed or reordered;
+- after item 9, either live-catalogue test reports any problem, or another declaration's does;
+- G1-control does not raise `LockNotAvailable` (the harness cannot observe a unique wait), or a G1 or G2 case shows a wait the declaration does not describe;
+- any existing grant, change, revoke or end-membership route test changes outcome;
 - a production reader of the table outside section 3.2 appears;
 - the single-statement property cannot be kept;
 - the ADR contract appears to need changing.
@@ -313,7 +387,50 @@ The plan commit through T02's records commit. The review includes the compatibil
 
 ### 11.3 Implementation record
 
-(Empty until T01.)
+**T01 stop (Sonnet, 2026-11-25; recorded by Opus, 2026-11-26).** Baseline `7281d6c84b5f4767a94f323acf2adf12b7ce6077`. Sonnet's uncommitted draft:
+- `database/migrations/versions/150_control_assignments.py` (new);
+- `src/dnd_ai/persistence/tables/security.py`;
+- `tests/database/test_control_assignment_storage.py` and `tests/database/test_control_assignment_migration.py` (new);
+- `docs/DOMAIN_MODEL.md`, `docs/architecture/DATABASE_MODEL.md` and `docs/reference/tables.md`.
+
+Its evidence as reported, preserved here:
+- **Test first:** 20 of 22 cases failed at the baseline (17 storage cases on `UndefinedColumn`; 3 migration cases on the absent revision). D12 and the pre-change part of D16 passed as guards.
+- **After the draft:** 21 implemented cases pass (D1–D20 and D16b).
+- **Not yet run:** broader collection is blocked, so there is no focused-set, full shard, non-pytest or mutation evidence.
+
+Sonnet stopped on "an R01 declaration other than the named index changes". The two new unique indexes in Core metadata make `WriteStep` validation raise at import for `insert_relationship` (`…_live_primary needs a UniqueWait`), which breaks collection of 47 test modules.
+
+**Opus investigation (2026-11-26; no commit, every experiment byte-restored and hash-checked).**
+- *Core check, reproduced.* `import dnd_ai.commands.access_grant_plans` raises for the INSERT steps. `membership_end_plans` imports, because Core counts index key columns only and the revoke steps set only `revoked_at`.
+- *Live check, observed.* A temporary copy that only lets the module import (placeholder waits on the two INSERT steps) left exactly two failing live-catalogue tests out of 41 catalogue tests. Every problem was on the five relationship steps:
+  - the three UPDATE steps lack waits for both new indexes, because `revoked_at` is a predicate column under `pg_depend`;
+  - both INSERT steps omit `NOT NULL campaign_id`, which has no default;
+  - the scope trigger's pinned hash no longer matches;
+  - the new `tr_membership_character_relationships_enforce_immutable` is unpinned on the UPDATE steps.
+- *Proposed correction, validated.* Section 3.1 item 9, applied temporarily in full:
+  - `pytest tests --collect-only` collected 11,390 tests with no error;
+  - all 41 catalogue tests passed;
+  - the focused R01, access-grant, storage and unit run is recorded below.
+
+  Both plan modules were restored byte for byte (SHA-256 `4923b21c…` and `bde46b5d…` before and after).
+- *Draft findings outside the stop.*
+  - The 64-byte FK name (section 3.1 item 4).
+  - `tables.md` still states revision head 149 and lists columns in a disposition row (item 8).
+  - The local factory (section 6).
+  - D16 exercises only the unguarded commands; G4 adds the R01 route paths.
+
+*Focused run under the prototype* (local PostgreSQL 18, serial pytest; investigation evidence, not T01 verification):
+- **First prototype:** `test_r01_s5e4_access_grants.py`, `test_r01_s5e4_access_races.py`, `test_r01_s5e3_end_membership.py`, `test_api_access_grants.py`, both draft storage files and `tests/unit` gave **89 failed, 2,713 passed, 5 skipped**.
+  - 88 failures were in the grant and change routes. They were a `NameError` 500 from the prototype's own call-site edit (it named `campaign_id` inside the write functions).
+  - The 89th was `tests/unit/test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production`. It also fails with no prototype applied, because the local environment's allowed-origins value contains an extra tunnel origin. It is environmental and unrelated to C11.
+- **Corrected prototype** (`AccessPrepared.campaign_id`, as item 9.1 now states):
+  - the four R01 and access-grant files gave **371 passed, 5 skipped**;
+  - storage, migration and `tests/unit` gave **2,430 passed, 1 failed** (the same environmental `test_config` case).
+
+  The plan modules were byte-restored after each run.
+- **Not run:** a full shard run, the non-pytest checks and mutation probes. G1, G1-control, G2, G4, D11b and D21 do not exist yet.
+
+(T01 and T02 implementation records follow here.)
 
 ## 12. C11 checkpoint coordination
 
@@ -324,6 +441,7 @@ The plan commit through T02's records commit. The review includes the compatibil
 - **Shared files.**
   - `src/dnd_ai/domain/access.py`: S01-T02 (matrix, `asgn`), S02-T01 (owner and GM authority CTE), S02-T02 (delegation source).
   - `src/dnd_ai/persistence/tables/security.py`: S01-T01; S02-T02 (delegation table).
+  - `src/dnd_ai/commands/access_grant_plans.py`: S01-T01 (relationship declarations, section 3.1 item 9) and S01-T02 (refusing assignment ids). `src/dnd_ai/commands/membership_end_plans.py`: S01-T01 only. S02's writers declare their own steps on this table, so they reuse `RELATIONSHIP_UPDATE_TRIGGERS` and `RELATIONSHIP_INSERT_TRIGGERS` and the waits on the two assignment indexes.
   - Migrations: `150` (S01-T01), `151` (S02-T02). Each task revalidates the next free revision.
   - R01 registries and the generated manifest: S02-T01, S02-T02.
   - Docs: ACCESS_CONTROL, DATABASE_MODEL, tables.md, operations.md, this register.
