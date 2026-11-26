@@ -2,10 +2,10 @@
 
 Owner register rows: [P15-C10](work-register.md#p15-c10), [P15-C10-S02](work-register.md#p15-c10-s02), [P15-C10-S02-T01](work-register.md#p15-c10-s02-t01), [P15-C10-S02-T02](work-register.md#p15-c10-s02-t02). Source finding: [R14 — Guided quest outcome/review](work-register.md#r14--guided-quest-outcome-review), the guided-review part (R14a mapping and R14b guidance). Historical row: [review-2026-11-11.md](review-2026-11-11.md) Q03. Attached record outside this slice: [quest-effect](work-register.md#quest-effect) (persistent outcome choice and consequences, deferred). Checkpoint order, shared files and merge requirements are in the [S01 plan, section 12](p15-c10-s01-objective-actions-plan.md#12-c10-checkpoint-coordination).
 
-Prepared by Opus, 2026-11-25. **Plan only; T01 and T02 not started.**
+Prepared by Opus, 2026-11-25. **T01 implemented (section 11.3); T02 not started.**
 
 - Starting SHA `deb2760a90c126f73b5c28e7efa8b0a24117bd3c`; plan-entry head `341c0932d128ff49a0e29ff3e3a87ccdeab982a9` (C09 merge, fast-forward), as in the S01 plan.
-- T01's baseline is the S01-T01 records commit, revalidated at start (S01 plan, section 12.1). T02's baseline is the T01 records commit. Neither SHA exists yet.
+- T01's baseline is the S01-T01 records commit, revalidated at start (S01 plan, section 12.1): `adb98bb8ba295aefd9f670f810fa668c5db60e89`. T02's baseline is the T01 records commit (not yet created).
 - CI: no run exists for C10.
 
 ## 1. Entry readiness and scope
@@ -245,4 +245,26 @@ S02 review: T01's baseline through the T02 records commit, covering B1–B12, C1
 
 ### 11.3 Implementation record
 
-Not started.
+#### T01 (Sonnet, 2026-11-25)
+
+**Baseline.** T01 baseline is the S01 review-records commit `adb98bb8ba295aefd9f670f810fa668c5db60e89` (HEAD = `origin/phase15/completion`, clean worktree). It records Codex's S01 re-review (S01 plan §11.6: C10-S01-1 confirmed corrected; T01 and S01 PASS WITH VERIFICATION LIMITS) unchanged, with the original §11.4 finding and all evidence history kept; the parent `89fc473aab7185243a57bb0ed7acf0b222f8aeeb` was the S01 correction records commit. Before committing it I confirmed the only uncommitted changes were Luna's two S01 files, and that the documentation and diff checks passed.
+
+**Implementation.** `104034c97907bbb01f5909d7d354470e67c02591` (`feat(portal): review scope, objectives and described rewards before finishing a quest (P15-C10-S02-T01)`), pushed; local HEAD = origin. Section 3.2 items 1–4 and the T01 part of item 11, portal only.
+
+**Section 2 revalidation.** `QuestProgressPanel.tsx` and `QuestWorkspace.tsx` matched section 2 at the baseline (no outcomes prop, a bare `ConfirmDialog` with the note, quick actions without a dialog, no receipt). S01's objective-action and focus code is in `QuestEditor.tsx` and was not touched. One difference, handled without a stop condition: `CampaignQuestDetailPage.tsx` mounts the same `QuestProgressPanel` for a campaign GM who has no world role (a progress-only view whose definition reads are refused). Section 2 does not mention it. The two new props are therefore optional there: with no definition the review says "This view does not show the quest's authored outcomes or rewards." instead of claiming there are none; nothing else changes and no request is added. This is covered by one extra test, listed below.
+
+**Files.** New `QuestFinishReview.tsx` (read-only review), new `questStatusLabel.ts` (the existing status wording moved out of the panel unchanged, so the review and the panel share it), new `QuestProgressPanel.review.test.tsx`. Changed: `QuestProgressPanel.tsx` (props `outcomes`, `optionLabels`; the review as the dialog's children, built from the confirm state's scope snapshot), `QuestWorkspace.tsx` (passes `view.outcomes ?? []` and the outcome-category and reward-type choices from reads already held), and the Quest workspace row of `docs/reference/portal-behavior.md` (T01 text only; receipts and recovery are T02's). No change to `useAuthoringMutation`, `ConfirmDialog`, `UnsavedInputGuard`, the backend or any API type.
+
+**Test adaptations (section 6.4).** None for T01: the existing "Activate quest: done" expectation belongs to T02, and the finishing dialog's `getByRole("textbox")` still finds exactly the note because the review adds no textbox.
+
+**Baseline evidence.** The 16 B-case tests were written and run against the baseline production code (new files absent). Designated failures, 11 tests, each failing on the missing text: B1 ("For: Everyone"), B2 ("For: Red Company"), B3 ×4 (objective lines with status; the optional marker and the all-complete line; the no-objectives line; the plural count), B4 ("Described in this quest"), B5 ×2 (statement for Everyone with the three verbs; the statement naming a party), B6 (no outcomes), B7 (knowledge item). Baseline-passing guards, 5: B8 (no request on opening), B9 (Cancel sends nothing, empty note on re-open), B10 (activate, suspend, resume at once, no dialog), B11 (confirm body with party, status seen and trimmed note), B12 (draft quest offers no finishing command). B8 first included the "For: Everyone" text in its body; I removed it so that the case is a guard as the plan says. After the implementation the file passes 17/17: the 16 plus one added case, "says outcomes and rewards are not shown, rather than that there are none", for the progress-only view above (it is an addition to B1–B12 and has no baseline run, because the component did not exist).
+
+**Verification (first runs, no reruns needed).**
+- Focused set (section 7.1 without the receipts file, plus S01's `QuestEditor.objectiveActions.test.tsx` as the applicable S01 regression): 8 files, 170 passed.
+- Full `npm test` from PowerShell in `C:\Users\nemes\dnd_ai\portal`: 464 files, 6,029 passed, 0 failed (first run).
+- `npm run lint` pass; `npx tsc -b` pass; `npm run build` pass (existing chunk-size notice only).
+- Root: `scripts/check_documentation.py` pass; `git diff --check` pass.
+
+**Probes (exact bytes restored, hashes compared equal).** N1 (objectives list omitted) fails B3 ×2. N2 (the "no reward is given" sentence omitted) fails B5 and the progress-only case. N3 (the review reads the currently selected scope instead of the confirm state) fails B2: B2 selects another scope behind the open dialog, which is contrived in a real modal but is the only way to separate the two in jsdom.
+
+**Limits.** jsdom only: no real-browser focus, AX, zoom or layout of the longer dialog; the dialog scrolls inside the native `<dialog>` with its existing styling, unverified visually. The review shows the quest's whole authored outcome list because no outcome is chosen (decision R-1). CI is pending the checkpoint PR. T02, browser/AX, human review and acceptance are not started or recorded.
