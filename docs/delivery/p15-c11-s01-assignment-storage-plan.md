@@ -626,7 +626,53 @@ A further shape, a second module-level set that the matrix references and that h
 
 **T02 third stop (Sonnet, 2026-11-26; owner-authorized adaptation).** HEAD and origin `a7f813ca81e293d3e4648ce6804d25d599b242ed`. On the draft, with E37 in place, the first full shard run gave **11,470 passed, 6 skipped, 1 failed** (11,477 collected, 33m31s): `test_control_assignment_migration.py::test_d17_d18_upgrade_preserves_legacy_rows_and_access_contexts` (shard 4), `UndefinedColumn: mcr.is_control_assignment`, because the new resolver read a revision-150 column on the revision-149 database before the upgrade. That run is **not** relabelled as passing. The adaptation is the schema-version-boundary bullet of the permitted-adaptation list above.
 
-(T02 implementation records follow here.)
+**T02 implementation (Sonnet, 2026-11-26).**
+
+- **Commits.** Original baseline `34215f242ac3f2b110b541d4a5e78718bc80da91` (T01 records). Plan amendments `364e1074e71aea902334d07f1da7d35b378f80be` (R01 reader classes) and `a7f813ca81e293d3e4648ce6804d25d599b242ed` (A5a guard narrowed to the matrix). Implementation `2cab2bd0a6771d027bd59e1e0c5c1e77cc28764c`, which also carries the schema-version-boundary adaptation and its plan amendment (owner-authorized after the third stop). The records commit follows it.
+- **Files.** Production: `domain/access.py` (`CONTROL_ASSIGNMENT_CAPABILITIES`, `ControlAssignmentSource`, `AccessContext.control_assignments` and `control_clock_key`, the shared `CAMPAIGN_CLOCK_CTE` and `control_assignments_in_effect_from_sql`, the `rels` exclusion, the `asgn` CTE, `_PERSPECTIVE_CTES` removed in favour of `campaign_clock`, the two constants and their docstrings); `queries/effective_access.py`, `queries/access_overview.py`, `queries/content_preconditions.py`, `commands/access_grants.py`, `commands/access_grant_plans.py`, `api/parties.py`. No change to any lock or lock order, R01 declaration, route, manifest, `domain/authorization_steps.py`, `tests/r01_pre_write_catalogue.py` or the reference resolver. Tests: `test_control_assignment_resolution.py`, `test_control_assignment_clock_routes.py`, `tests/unit/test_control_assignment_matrix.py`, `test_control_assignment_separation.py` (new); E28-E30 in `test_r01_authorization_structure.py`; E37. Docs: ACCESS_CONTROL (section 3y, the R01 S6 reviewed-clock-class paragraph, the A5a sentence), DATABASE_MODEL section 19.7, this plan.
+- **Permitted adaptations (each named).**
+  1. `test_r01_e2_perspective_snapshot.py::test_one_statement_no_row_lock`: asserts the CTE name `campaign_clock` instead of `perspective_clock` (same test id).
+  2. The docstring of `test_post_write_routes_write_none_of_the_readers_tables_except_the_reviewed_classes` names the clock class (same id; logic, family set and the 156-route pin unchanged).
+  3. A5a guard: `tests/unit/test_player_profiles_structure.py::test_no_controller_capability_vocabulary_exists_in_the_application_or_the_seeds` is replaced by `test_the_controller_profile_codes_appear_only_in_the_control_assignment_matrix` (E37), and the module docstring's vocabulary clause is adjusted. No other test in that file changed. `test_character_player_profiles_schema.py::test_no_controller_profile_capability_exists_yet` is unchanged and passes.
+  4. Schema-version boundary: `test_control_assignment_migration.py::test_d17_d18_upgrade_preserves_legacy_rows_and_access_contexts` (same id) reads the revision-149 side with `reference_resolve_access_context` and the post-upgrade side with the production resolver, compares the legacy access fields explicitly, asserts the expected non-empty capabilities and a refusal on both sides, asserts the additive control fields empty, and runs under `real_relationship_policy`. D17's stored-row assertions are unchanged. See the permitted-adaptation list in section 11.1 for the reasoning.
+- **Test first.**
+  - *E1-E36 at the baseline,* with a temporary import-only shim appended to `domain/access.py` (the matrix constant and the source dataclass only; SHA-256 `14fe0374…78ae` before and after, restored byte for byte). Three cases were corrected in the test itself, never in an expectation: E12 (it passed at the baseline because the legacy reading also confers discovery, so it now uses a dated assignment with an end), E22 (the member needed the player role for bootstrap to list the campaign) and E35 (the plan must be created after the transaction begins). Final baseline result: 28 database cases failed as designated (resolution and clock-route files), E28 and E29 failed, the 16 E31 ids failed on the absent control fields. Guards that passed: E11, E20 (revocation and slot), E21, E27, E30, E32 (6 ids), E33's two lapse cases. E25 and E26 passed only because of the shim (without it the modules do not import).
+  - *E14 and the E36 files at the baseline* (shim in place): 290 passed, 1 failed. The failure was `test_api_clock_cause.py::test_an_identical_retry_replays_and_a_changed_input_conflicts` (`assert 16 == 2`, an audit-row count). That whole file passed alone (20 passed). **Unexplained; no cause is claimed.**
+  - *E37:* run with `domain/access.py` replaced by `git show 34215f2:src/dnd_ai/domain/access.py`, it failed with "exactly one module-level matrix declaration"; restored (SHA-256 `dda5bc72…df068e` before and after); on the draft E37 plus the matrix tests gave 250 passed.
+- **Focused and unit runs.**
+  - *Draft before E37 (already reported):* 2,429 passed, 2 failed: the old A5a test (the stop) and the environmental `tests/unit/test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production` (an extra allowed origin; reported, not changed).
+  - *Final code:* the 73 files of the section 7 set (the files the search finds plus the named R01, clock, E36, storage and migration files), `tests/unit` and `test_character_player_profiles_schema.py`: **5,113 passed, 5 skipped, 1 failed, 1 error** (22m12s). The failure is the same environmental `test_config` case. The error is `fixture 'app_read_write_engine' not found` for `test_character_player_profiles_schema.py::test_the_runtime_roles_can_read_the_profile_and_every_write_is_refused_by_the_database` in that combined invocation; that file alone passes (27 passed), and it passed in the full run. No cause is claimed for the combined-invocation error.
+- **Full shard runs** (`uv run python scripts/run_sharded_tests.py`), reported separately:
+  - *First run (draft with E37, before the schema-boundary adaptation):* **11,470 passed, 6 skipped, 1 failed**, 11,477 collected and executed, 33m31s. The failure was `test_control_assignment_migration.py::test_d17_d18_upgrade_preserves_legacy_rows_and_access_contexts` (shard 4): `UndefinedColumn: mcr.is_control_assignment`, because the new resolver read a revision-150 column on the revision-149 database before the upgrade. This is **not** a passing run and is not relabelled.
+  - *Second run (final executable code, alone on the machine, sequential):* **11,471 passed, 6 skipped, 0 failed**, 11,477 collected and executed, 31m29s (shards 3,373 / 2,687 / 2,500 / 2,911 passed). The only difference from the first run is the D17/D18 test, which now passes.
+- **Non-pytest checks** on the final code: `ruff format --check`, `ruff check`, `mypy src` (300 files), `uv lock --check`, `scripts/check_documentation.py` and `git diff --check` pass. `alembic check` on a freshly migrated throwaway database returns 0 (one head, `150_control_assignments`).
+- **Mutation probes** (every edit byte-restored; SHA-256 of the touched files, the manifest and the migration directory listing compared before and after, identical each time):
+
+| Probe | Failed (as required) |
+|---|---|
+| M4 | E1 (both roles) and E22 |
+| M5 | E4. A first attempt, deleting only the `IS NOT NULL` test, **survived**: `NULL @> x` is already not true, so it is an equivalent mutant and not a kill. The recorded mutation treats a dated row with no clock as in effect |
+| M6 | E5 (`equal-to-to`) |
+| M7 | E6 |
+| M8 | E18 (two cases) |
+| M9 | E25 and E26 and E2 |
+| M10 | E19 (`dated-with-end`) |
+| M15 | the existing disjointness test (the three clock routes) and E29 |
+| M16 | E30 (the disjointness test still passes, which records that the table-wide class alone would admit the writer) |
+| M17 | E31 |
+| M18 | E28 and E5 (`inside`) |
+| M19 | the existing reader-equality test and E28 |
+| M20 | E37 (E27 still passed) |
+| M21 | E37 (E27 still passed) |
+| M22 | E37 |
+| M23 | E37 (the temporary migration file was deleted afterwards) |
+| M24 | E37 |
+| M25 | E37 (E27 still passed) |
+| MD18 (added by the schema-boundary authorization) | D17/D18: dropping the closed-period exclusion from the production legacy `rels` read fails the comparison |
+
+- **Stop conditions.** The third stop (the D17/D18 test) was authorized and resolved as stated. None other applied: no legacy guard failed, no declaration, lock or manifest changed, the reviewed set holds exactly the six tables and the reader constant exactly the three added, E35 showed no wait, E33 showed no refusal from the route's own clock write, the perspective results are unchanged, and no M20-M25 probe passed E37.
+- **CI.** Pending the checkpoint PR. No browser or AX work.
+- **Luna's S01 ranges.** T01 implementation with its plan amendment: `7281d6c84b5f4767a94f323acf2adf12b7ce6077` to `5b5b22d3650f756e2477d5b504c18bae0caf50a2` (amendment `305588bc11af7591a9bd18223c82718dd4f2b22a`), T01 records `34215f242ac3f2b110b541d4a5e78718bc80da91`. T02 implementation: `34215f242ac3f2b110b541d4a5e78718bc80da91..2cab2bd0a6771d027bd59e1e0c5c1e77cc28764c` (with the amendments `364e1074…` and `a7f813ca…`). Combined S01: `7281d6c84b5f4767a94f323acf2adf12b7ce6077..<T02 records SHA>`, covering legacy compatibility, the section 3.1 item 9 declarations, the section 3.2 item 3a reader classes and the item 1a A5a guard transition.
 
 ## 12. C11 checkpoint coordination
 
