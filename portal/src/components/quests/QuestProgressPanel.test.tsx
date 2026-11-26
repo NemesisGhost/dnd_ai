@@ -265,7 +265,7 @@ describe("Quest Progress and the structure it can lock", () => {
         setView(questView({ canon_status: "canon", has_progress: true, row_version: 5 }))
         fireEvent.click(screen.getByRole("link", { name: /Use in play/ }))
         fireEvent.click(await screen.findByRole("button", { name: "Activate quest for Everyone" }))
-        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Activate quest: done"))
+        await waitFor(() => expect(screen.getByTestId("authoring-announcer")).toHaveTextContent("Recorded: quest activated for Everyone"))
         fireEvent.click(screen.getByRole("link", { name: /Prepare/ }))
         expect(within(screen.getByRole("form", { name: "Add a participant" })).getByRole("combobox", { name: /Role in the quest/ })).toHaveValue(
             "giver",
