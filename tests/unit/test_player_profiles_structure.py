@@ -3,8 +3,9 @@
 The field vocabulary against migration 147, the GM branch of the read rule against
 `has_effective_character_canon_edit`, the classification of the profile text, and the structure A5
 promises: no `src/` writer of the profile tables (decision D18), no GM-private store, rules or sheet
-module, no `character.view_player_profile` / `character.edit_player_profile` vocabulary (P03-B), no
-preview adapter, and raw test writes confined to the one fixture helper.
+module, no `character.view_player_profile` / `character.edit_player_profile` vocabulary outside the P03-B
+control-assignment matrix (P15-C11-S01-T02: the codes are set elements of `CONTROL_ASSIGNMENT_CAPABILITIES` and
+nowhere else), no preview adapter, and raw test writes confined to the one fixture helper.
 """
 
 import ast
@@ -321,14 +322,85 @@ def test_the_profile_modules_reference_no_private_store_rules_sheet_or_revision_
                 ), (relative, name)
 
 
-def test_no_controller_capability_vocabulary_exists_in_the_application_or_the_seeds() -> None:
+def test_the_controller_profile_codes_appear_only_in_the_control_assignment_matrix() -> None:
+    """E37 (P15-C11-S01-T02, plan section 3.2 item 1a). A5's scope fence (no controller profile vocabulary) moves to
+    the matrix: every quoted occurrence in `src` lies inside the declaration of `CONTROL_ASSIGNMENT_CAPABILITIES`
+    in `domain/access.py` (plus the module-level names its values reference), as set-literal elements and nowhere
+    else; exactly two modules name the matrix; no file under `database/` holds a quoted code."""
     needle = re.compile(r"""["']character\.(view|edit)_player_profile["']""")
-    offenders = [name for name, source in _modules().items() if needle.search(source)]
+    access_path = SRC / "domain" / "access.py"
+    access_source = access_path.read_text(encoding="utf-8")
+    tree = ast.parse(access_source)
+
+    def assigned(node: ast.stmt) -> tuple[str, ast.expr | None] | None:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                return target.id, node.value
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            return node.target.id, node.value
+        return None
+
+    module_level = {name: node for node in tree.body if (name := (assigned(node) or ("", None))[0])}
+    matrix_nodes = [
+        n for n in tree.body if (assigned(n) or ("", None))[0] == "CONTROL_ASSIGNMENT_CAPABILITIES"
+    ]
+    assert len(matrix_nodes) == 1, "exactly one module-level matrix declaration"
+    matrix_value = assigned(matrix_nodes[0])[1]  # type: ignore[index]
+    assert isinstance(matrix_value, ast.Dict)
+    declaration = [matrix_nodes[0]] + [
+        module_level[name.id]
+        for value in matrix_value.values
+        for name in ast.walk(value)
+        if isinstance(name, ast.Name) and name.id in module_level
+    ]
+    spans = [(node.lineno, node.end_lineno or node.lineno) for node in declaration]
+
+    def inside(line: int) -> bool:
+        return any(first <= line <= last for first, last in spans)
+
+    # 1. every quoted occurrence in src lies inside the declaration (raw source: comments and docstrings count)
+    offenders: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        relative = path.relative_to(SRC).as_posix()
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if needle.search(line) and not (path == access_path and inside(number)):
+                offenders.append(f"{relative}:{number}")
     assert offenders == []
-    for seed in (ROOT / "database" / "seeds").rglob("*"):
-        if seed.is_file():
+
+    # 2. inside the declaration: set-literal elements only, and the match count equals the element count
+    set_elements = [
+        element
+        for node in declaration
+        for set_node in ast.walk(node)
+        if isinstance(set_node, ast.Set)
+        for element in set_node.elts
+        if isinstance(element, ast.Constant)
+        and isinstance(element.value, str)
+        and needle.search(f'"{element.value}"')
+    ]
+    lines = access_source.splitlines()
+    matches = sum(
+        len(needle.findall(line)) for first, last in spans for line in lines[first - 1 : last]
+    )
+    assert matches == len(set_elements)
+    assert {e.value for e in set_elements} == {  # type: ignore[attr-defined]
+        "character.view_player_profile",
+        "character.edit_player_profile",
+    }
+
+    # 3. exactly two src modules name the matrix: its declaration and the explanation display
+    naming = {
+        path.relative_to(SRC).as_posix()
+        for path in SRC.rglob("*.py")
+        if "CONTROL_ASSIGNMENT_CAPABILITIES" in path.read_text(encoding="utf-8")
+    }
+    assert naming == {"domain/access.py", "queries/effective_access.py"}
+
+    # 4. no seed and no migration (any of them) holds a quoted code
+    for seed in (ROOT / "database").rglob("*"):
+        if seed.is_file() and "__pycache__" not in seed.parts:
             assert not needle.search(seed.read_text(encoding="utf-8", errors="ignore")), seed
-    assert not needle.search(MIGRATION.read_text(encoding="utf-8"))
 
 
 def test_the_player_profile_routes_are_get_only_and_filtered_by_campaign_view() -> None:

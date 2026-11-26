@@ -232,6 +232,6 @@ def test_one_statement_no_row_lock(db_connection: Connection) -> None:
     finally:
         event.remove(db_connection, "before_cursor_execute", record)
     assert len(seen) == 1
-    assert "perspective_clock" in seen[0]
+    assert "campaign_clock" in seen[0]
     assert not re.search(r"\bFOR (UPDATE|SHARE|KEY SHARE|NO KEY UPDATE)\b", seen[0])
     assert text  # the statement is one SELECT: the access and perspective sources share it

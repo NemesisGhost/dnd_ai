@@ -188,6 +188,7 @@ def party_roster_controller_qualifies(
              AND pm.timeline_id = :timeline_id
              AND pm.party_id = :party_id
             WHERE mcr.campaign_membership_id = :membership_id
+              AND NOT mcr.is_control_assignment
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
               AND mcr.effective_to_world_time_id IS NULL
@@ -206,9 +207,32 @@ def party_roster_controller_qualifies(
             **membership_clock_params(membership_clock),
         },
     ).scalars()
+    controlled_ids = set(controlled)
+    # P15-C11-S01-T02: a caller whose in-effect control assignment (from the one authority statement) names a
+    # current member of this party qualifies too. The legacy branch stays until the legacy rows retire (ADR 0021
+    # section 2.10).
+    if access.control_assignments:
+        controlled_ids |= set(
+            connection.execute(
+                text(f"""
+                    SELECT DISTINCT pm.member_entity_id
+                    FROM campaign.party_memberships pm
+                    WHERE pm.member_entity_id = ANY(CAST(:assigned AS uuid[]))
+                      AND pm.timeline_id = :timeline_id
+                      AND pm.party_id = :party_id
+                      AND {CURRENT_PARTY_MEMBERSHIP_SQL}
+                """),
+                {
+                    "assigned": list(access.control_assignments),
+                    "timeline_id": access.timeline_id,
+                    "party_id": party_id,
+                    **membership_clock_params(membership_clock),
+                },
+            ).scalars()
+        )
     return any(
         access.has_capability("campaign.view", entity_id=character_id)
-        for character_id in controlled
+        for character_id in controlled_ids
     )
 
 

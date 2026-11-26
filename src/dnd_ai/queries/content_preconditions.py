@@ -190,8 +190,15 @@ def archive_blocked_reason(
                 SELECT 1 FROM security.membership_character_relationships mcr
                 WHERE mcr.character_id = :e
                   AND mcr.revoked_at IS NULL
-                  AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
-                  AND mcr.effective_to_world_time_id IS NULL
+                  AND (
+                        -- any unrevoked control assignment blocks, whatever its period: the period can be in
+                        -- effect later, and archiving would silently end control (P15-C11-S01-T02, R-8)
+                        mcr.is_control_assignment
+                        OR (
+                            (mcr.expires_at IS NULL OR mcr.expires_at > now())
+                            AND mcr.effective_to_world_time_id IS NULL
+                        )
+                      )
             )
         """),
         {"e": entity_id},

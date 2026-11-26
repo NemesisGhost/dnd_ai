@@ -218,6 +218,29 @@ BUILTIN_RELATIONSHIP_CAPABILITIES: dict[str, frozenset[str]] = {
 
 ADMITTED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(BUILTIN_RELATIONSHIP_CAPABILITIES)
 
+# P15-C11-S01-T02 (ADR 0021 sections 2.5 and 2.6): what an IN-EFFECT control assignment confers. Code-only: assignment
+# rows never read `security.character_relationship_type_capabilities`. The two roles confer the identical set (OD-2).
+# It never holds `canon.edit`, `access.manage`, a world capability, `character.view_private`, `view_knowledge`,
+# `edit_narrative`, `interact`, `reveal`, `view_public_profile` or `assign_control`. The two profile codes,
+# `character.control` and `character.edit_mechanical_state` have no consumer yet (C12 and C20 add them behind their
+# own gates; a structural test pins that).
+_CONTROL_ASSIGNMENT_SET: Final[frozenset[str]] = frozenset(
+    {
+        "character.discover",
+        "character.view_summary",
+        "character.view_full",
+        "character.view_inventory",
+        "character.control",
+        "character.edit_mechanical_state",
+        "character.view_player_profile",
+        "character.edit_player_profile",
+    }
+)
+CONTROL_ASSIGNMENT_CAPABILITIES: Final[dict[str, frozenset[str]]] = {
+    "primary_controller": _CONTROL_ASSIGNMENT_SET,
+    "co_controller": _CONTROL_ASSIGNMENT_SET,
+}
+
 
 def relationship_capability_permitted(type_code: str, capability_code: str) -> bool:
     """Whether the server policy lets relationship type `type_code` confer
@@ -257,6 +280,18 @@ _GrantKey = tuple[str, uuid.UUID]
 REVELATION_CONFERRED_CAPABILITIES: frozenset[str] = frozenset(
     {"character.discover", "character.view_public_profile"}
 )
+
+
+@dataclass(frozen=True)
+class ControlAssignmentSource:
+    """One in-effect control assignment of the caller for one character (P15-C11-S01-T02): the row's id, its role
+    (`primary_controller` or `co_controller`) and its period kind (`ongoing` or `dated`). Kept in
+    `AccessContext.control_assignments`, separate from `character_capabilities`, so the explanation and the party
+    roster can name the source."""
+
+    assignment_id: uuid.UUID
+    role: str
+    kind: str
 
 
 @dataclass(frozen=True)
@@ -374,6 +409,13 @@ class AccessContext:
     revelations: Mapping[uuid.UUID, frozenset[RevelationSource]] = field(
         default_factory=dict, repr=False
     )
+    # P15-C11-S01-T02: the in-effect control assignments of the caller, by character, and the one campaign clock value
+    # (`core.world_times.sort_key`, `None` when the campaign has no clock) the decision judged dated assignments
+    # against (ADR 0021 section 2.4 item 1). Their capabilities are already merged into `character_capabilities`.
+    control_assignments: Mapping[uuid.UUID, ControlAssignmentSource] = field(
+        default_factory=dict, repr=False
+    )
+    control_clock_key: int | None = None
 
     def has_capability(
         self,
@@ -1072,6 +1114,75 @@ _INSTANT_SQL = {
 _T_AUTH = "(SELECT t_auth FROM clock)"
 _MEMBERSHIP = "(SELECT campaign_membership_id FROM m)"
 
+# The effective campaign clock of the campaign's own timeline, resolved in SQL exactly as
+# `queries.campaign_clock.resolve_effective_clock` does: the timeline's own clock row, else (with a parent) the
+# parent's effective clock bounded at the branch point, else none. It reads `(SELECT timeline_id FROM camp)` and takes
+# no row lock. Always part of the access statement (P15-C11-S01-T02): the in-effect test of a dated control assignment
+# and the perspective component read the same key. Named `campaign_clock`; `clock` is the instant CTE.
+CAMPAIGN_CLOCK_CTE = """
+    campaign_clock AS (
+        WITH RECURSIVE chain AS (
+            SELECT t.timeline_id AS tl, t.parent_timeline_id AS parent,
+                   (SELECT wt.sort_key FROM core.world_times wt
+                     WHERE wt.world_time_id = t.branch_world_time_id) AS branch_key,
+                   (SELECT wt.sort_key FROM campaign.timeline_clocks tc
+                      JOIN core.world_times wt ON wt.world_time_id = tc.current_world_time_id
+                     WHERE tc.timeline_id = t.timeline_id) AS own_key
+            FROM campaign.timelines t
+            WHERE t.timeline_id = (SELECT timeline_id FROM camp)
+          UNION ALL
+            SELECT t.timeline_id, t.parent_timeline_id,
+                   (SELECT wt.sort_key FROM core.world_times wt
+                     WHERE wt.world_time_id = t.branch_world_time_id),
+                   (SELECT wt.sort_key FROM campaign.timeline_clocks tc
+                      JOIN core.world_times wt ON wt.world_time_id = tc.current_world_time_id
+                     WHERE tc.timeline_id = t.timeline_id)
+            FROM chain c JOIN campaign.timelines t ON t.timeline_id = c.parent
+        ), eff AS (
+            SELECT c.tl, c.own_key AS key FROM chain c WHERE c.parent IS NULL
+          UNION ALL
+            SELECT c.tl,
+                   COALESCE(c.own_key,
+                            CASE WHEN e.key IS NULL OR e.key > c.branch_key THEN c.branch_key ELSE e.key END)
+            FROM chain c JOIN eff e ON e.tl = c.parent
+        )
+        SELECT CAST(key AS bigint) AS key FROM eff WHERE tl = (SELECT timeline_id FROM camp)
+    )
+"""
+
+
+def control_assignments_in_effect_from_sql(membership: str) -> str:
+    """The `FROM ... WHERE` of the in-effect control assignments of `membership` (a SQL expression) in
+    `:campaign_id`, over a statement that has the `campaign_clock` CTE. The one definition shared by the authority
+    statement and the effective-access explanation, so the panel can never show an assignment the resolver would not
+    honour. A row is in effect when it is a live assignment of the campaign, its type is active, its character is
+    active and canon, and its period kind is `ongoing`, or `dated` with a clock inside the half-open
+    `effective_period` (an upcoming dated row, and a dated row with no clock, are not in effect: undetermined)."""
+    return f"""
+        FROM security.membership_character_relationships mcr
+        JOIN security.character_relationship_types crt
+          ON crt.character_relationship_type_id = mcr.character_relationship_type_id
+        JOIN core.entities e ON e.entity_id = mcr.character_id
+        JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
+        JOIN core.canon_statuses ccs ON ccs.canon_status_id = e.canon_status_id
+        WHERE mcr.campaign_membership_id = {membership}
+          AND mcr.campaign_id = :campaign_id
+          AND mcr.is_control_assignment
+          AND mcr.revoked_at IS NULL
+          AND crt.is_active
+          AND cls.code = 'active'
+          AND ccs.code = 'canon'
+          AND (
+                mcr.assignment_period_kind = 'ongoing'
+                OR (
+                    mcr.assignment_period_kind = 'dated'
+                    AND (SELECT key FROM campaign_clock) IS NOT NULL
+                    AND mcr.effective_period @> (SELECT key FROM campaign_clock)
+                )
+              )
+    """
+
+
 # Common table expressions of the access decision. `{t}` is the one instant, `{m}` the caller's
 # membership, `{tl}` the campaign's own timeline: every predicate reads the CTEs, never a parameter
 # that another statement resolved, so the whole decision is one snapshot.
@@ -1095,6 +1206,7 @@ _ACCESS_CTES = f"""
         JOIN core.lifecycle_statuses ls ON ls.lifecycle_status_id = c.lifecycle_status_id
         WHERE c.campaign_id = :campaign_id
     ),
+    {CAMPAIGN_CLOCK_CTE.strip()},
     roles AS (
         SELECT COALESCE(jsonb_agg(DISTINCT cap.code), '[]'::jsonb) AS codes
         FROM security.membership_roles mr
@@ -1128,6 +1240,7 @@ _ACCESS_CTES = f"""
         JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
         JOIN core.canon_statuses ccs ON ccs.canon_status_id = e.canon_status_id
         WHERE mcr.campaign_membership_id = {_MEMBERSHIP}
+          AND NOT mcr.is_control_assignment
           AND mcr.revoked_at IS NULL
           AND (mcr.expires_at IS NULL OR mcr.expires_at > {_T_AUTH})
           AND mcr.effective_to_world_time_id IS NULL
@@ -1137,6 +1250,20 @@ _ACCESS_CTES = f"""
           AND cls.code = 'active'
           -- A draft or unpublished character confers no perspective (Phase 15.2B-1).
           AND ccs.code = 'canon'
+    ),
+    asgn AS (
+        SELECT COALESCE(
+                   jsonb_agg(
+                       jsonb_build_object(
+                           'assignment_id', mcr.membership_character_relationship_id,
+                           'character_id', mcr.character_id,
+                           'role', crt.code,
+                           'kind', mcr.assignment_period_kind
+                       )
+                   ),
+                   '[]'::jsonb
+               ) AS found
+        {control_assignments_in_effect_from_sql(_MEMBERSHIP)}
     ),
     grants AS (
         SELECT COALESCE(
@@ -1205,6 +1332,8 @@ _ACCESS_COLUMNS = """
         (SELECT lifecycle_code FROM camp) AS campaign_lifecycle_code,
         (SELECT codes FROM roles) AS role_codes,
         (SELECT found FROM rels) AS relationships,
+        (SELECT found FROM asgn) AS assignments,
+        (SELECT key FROM campaign_clock) AS control_clock_key,
         (SELECT found FROM grants) AS grants,
         (SELECT found FROM revs) AS revelations
 """
@@ -1356,41 +1485,9 @@ _SUBJECT_GM_CTES = f"""
     )
 """
 
-# R01 E2 (correction C-1): party eligibility in the final statement. The effective campaign clock of the campaign's own
-# timeline is resolved in SQL exactly as `queries.campaign_clock.resolve_effective_clock` does: the timeline's own clock row,
-# else (with a parent) the parent's effective clock bounded at the branch point, else none. Membership is current when the
-# clock lies in the half-open `effective_period` (`queries.party_membership_period`); no clock means nobody is current.
-_PERSPECTIVE_CTES = """
-    perspective_clock AS (
-        WITH RECURSIVE chain AS (
-            SELECT t.timeline_id AS tl, t.parent_timeline_id AS parent,
-                   (SELECT wt.sort_key FROM core.world_times wt
-                     WHERE wt.world_time_id = t.branch_world_time_id) AS branch_key,
-                   (SELECT wt.sort_key FROM campaign.timeline_clocks tc
-                      JOIN core.world_times wt ON wt.world_time_id = tc.current_world_time_id
-                     WHERE tc.timeline_id = t.timeline_id) AS own_key
-            FROM campaign.timelines t
-            WHERE t.timeline_id = (SELECT timeline_id FROM camp)
-          UNION ALL
-            SELECT t.timeline_id, t.parent_timeline_id,
-                   (SELECT wt.sort_key FROM core.world_times wt
-                     WHERE wt.world_time_id = t.branch_world_time_id),
-                   (SELECT wt.sort_key FROM campaign.timeline_clocks tc
-                      JOIN core.world_times wt ON wt.world_time_id = tc.current_world_time_id
-                     WHERE tc.timeline_id = t.timeline_id)
-            FROM chain c JOIN campaign.timelines t ON t.timeline_id = c.parent
-        ), eff AS (
-            SELECT c.tl, c.own_key AS key FROM chain c WHERE c.parent IS NULL
-          UNION ALL
-            SELECT c.tl,
-                   COALESCE(c.own_key,
-                            CASE WHEN e.key IS NULL OR e.key > c.branch_key THEN c.branch_key ELSE e.key END)
-            FROM chain c JOIN eff e ON e.tl = c.parent
-        )
-        SELECT CAST(key AS bigint) AS key FROM eff WHERE tl = (SELECT timeline_id FROM camp)
-    )
-"""
-
+# R01 E2 (correction C-1): party eligibility in the final statement. Membership is current when the effective campaign
+# clock (`campaign_clock`, always part of the statement) lies in the half-open `effective_period`
+# (`queries.party_membership_period`); no clock means nobody is current.
 _PERSPECTIVE_COLUMNS = """
         EXISTS (SELECT 1 FROM campaign.campaign_parties cp
                  WHERE cp.campaign_id = :campaign_id
@@ -1399,8 +1496,8 @@ _PERSPECTIVE_COLUMNS = """
                  WHERE pm.timeline_id = (SELECT timeline_id FROM camp)
                    AND pm.party_id = :perspective_party_id
                    AND pm.member_entity_id = :perspective_character_id
-                   AND (SELECT key FROM perspective_clock) IS NOT NULL
-                   AND pm.effective_period @> (SELECT key FROM perspective_clock)) AS perspective_member_now
+                   AND (SELECT key FROM campaign_clock) IS NOT NULL
+                   AND pm.effective_period @> (SELECT key FROM campaign_clock)) AS perspective_member_now
 """
 
 # R01 E3-D5: the caller's account lifecycle, as an opt-in CTE of the same statement. The predicate is the one the world
@@ -1432,14 +1529,22 @@ _SUBJECT_GM_COLUMNS = """
 #: route's write targets against it. Reviewed classes, each with a stated argument in the plan:
 #: `core.entities` and `campaign.sessions` (inputs only of targeted requirements on OTHER resources)
 #: and the two `character_revelation*` tables (S2 must show the revelation requirement does not read
-#: the rows its own command writes).
+#: the rows its own command writes), and the clock class below.
+#:
+#: The campaign clock (`campaign.timelines`, `campaign.timeline_clocks`, `core.world_times`) is read on every call,
+#: because control assignments are judged against it (P15-C11-S01-T02). Its reviewed class is
+#: `campaign.timeline_clocks` and `core.world_times` (not `campaign.timelines`, which no post-write route writes);
+#: see ACCESS_CONTROL "Authorization timing and the final check (R01 S6)".
 AUTHORITY_READER_TABLES: Final[frozenset[str]] = frozenset(
     {
         "campaign.campaigns",
         "campaign.sessions",
+        "campaign.timeline_clocks",
+        "campaign.timelines",
         "core.canon_statuses",
         "core.entities",
         "core.lifecycle_statuses",
+        "core.world_times",
         "core.worlds",
         "security.access_group_memberships",
         "security.access_groups",
@@ -1466,13 +1571,18 @@ AUTHORITY_READER_TABLES: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The reader tables a post-write request MAY write (reviewed classes, plan section 6.3).
+#: The reader tables a post-write request MAY write (reviewed classes, plan section 6.3). The clock class
+#: (`campaign.timeline_clocks`, `core.world_times`) feeds only the clock key and, through it, the in-effect test of
+#: control assignments; it is reviewed for exactly the three clock routes (advance, correct, world-times), whose
+#: requirements read role capabilities only. Tests pin the set, the writers and the requirements.
 REVIEWED_POST_WRITE_TABLES: Final[frozenset[str]] = frozenset(
     {
         "core.entities",
         "campaign.sessions",
         "security.character_revelations",
         "security.character_revelation_members",
+        "campaign.timeline_clocks",
+        "core.world_times",
     }
 )
 
@@ -1502,7 +1612,6 @@ def _authority_snapshot_sql(
         ctes.append(_SUBJECT_GM_CTES)
         columns.append(_SUBJECT_GM_COLUMNS)
     if with_perspective:
-        ctes.append(_PERSPECTIVE_CTES)
         columns.append(_PERSPECTIVE_COLUMNS)
     if with_account:
         ctes.append(_ACCOUNT_CTES)
@@ -1658,6 +1767,19 @@ def _access_context_from_row(
         character_id = uuid.UUID(_as_str(relationship["character_id"]))
         character_capabilities.setdefault(character_id, set()).add(_as_str(relationship["code"]))
 
+    control_assignments: dict[uuid.UUID, ControlAssignmentSource] = {}
+    for assignment in row["assignments"]:
+        role = _as_str(assignment["role"])
+        assigned_character = uuid.UUID(_as_str(assignment["character_id"]))
+        control_assignments[assigned_character] = ControlAssignmentSource(
+            assignment_id=uuid.UUID(_as_str(assignment["assignment_id"])),
+            role=role,
+            kind=_as_str(assignment["kind"]),
+        )
+        character_capabilities.setdefault(assigned_character, set()).update(
+            CONTROL_ASSIGNMENT_CAPABILITIES[role]
+        )
+
     grant_effects: dict[_GrantKey, dict[str, str]] = {}
     for grant in row["grants"]:
         target_field = next(column for column in _TARGET_COLUMNS if grant[column] is not None)
@@ -1691,6 +1813,10 @@ def _access_context_from_row(
         revelations={
             character_id: frozenset(sources) for character_id, sources in revelations.items()
         },
+        control_assignments=control_assignments,
+        control_clock_key=None
+        if row["control_clock_key"] is None
+        else int(row["control_clock_key"]),
     )
 
 

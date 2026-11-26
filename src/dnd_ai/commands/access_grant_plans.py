@@ -1046,7 +1046,7 @@ _RELATIONSHIP_FOR_CHANGE = text("""
            ms.code AS membership_status_code, ms.is_active AS membership_status_is_active,
            mcr.campaign_membership_id, mcr.character_id, mcr.character_relationship_type_id,
            mcr.timeline_id, mcr.effective_from_world_time_id, mcr.effective_to_world_time_id,
-           mcr.revoked_at,
+           mcr.revoked_at, mcr.is_control_assignment,
            (mcr.expires_at IS NOT NULL AND mcr.expires_at <= clock_timestamp()) AS relationship_is_expired,
            rt.code AS relationship_type_code
     FROM security.membership_character_relationships mcr
@@ -1076,7 +1076,12 @@ def prepare_change_relationship(  # noqa: PLR0915 - one linear lock and refusal 
         .mappings()
         .one_or_none()
     )
-    in_campaign = found is not None and found["campaign_id"] == campaign_id
+    # a control assignment is refused exactly like a row of another campaign (P15-C11-S01-T02)
+    in_campaign = (
+        found is not None
+        and found["campaign_id"] == campaign_id
+        and not found["is_control_assignment"]
+    )
     owner = (
         found["campaign_membership_id"]
         if in_campaign and found is not None
@@ -1120,7 +1125,7 @@ def prepare_change_relationship(  # noqa: PLR0915 - one linear lock and refusal 
         .mappings()
         .one_or_none()
     )
-    if row is None or row["campaign_id"] != campaign_id:
+    if row is None or row["campaign_id"] != campaign_id or row["is_control_assignment"]:
         raise MembershipNotInCampaignError(
             f"membership character relationship {relationship_id} does not belong to campaign "
             f"{campaign_id} (actual campaign: {row['campaign_id'] if row is not None else None})"
@@ -1266,7 +1271,7 @@ def prepare_revoke_relationship(
     found = (
         connection.execute(
             text(
-                "SELECT cm.campaign_id, mcr.campaign_membership_id "
+                "SELECT cm.campaign_id, mcr.campaign_membership_id, mcr.is_control_assignment "
                 "FROM security.membership_character_relationships mcr "
                 "JOIN security.campaign_memberships cm "
                 "ON cm.campaign_membership_id = mcr.campaign_membership_id "
@@ -1277,7 +1282,11 @@ def prepare_revoke_relationship(
         .mappings()
         .one_or_none()
     )
-    in_campaign = found is not None and found["campaign_id"] == campaign_id
+    in_campaign = (
+        found is not None
+        and found["campaign_id"] == campaign_id
+        and not found["is_control_assignment"]
+    )
     _lock_actor(
         connection,
         plan,

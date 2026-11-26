@@ -113,8 +113,9 @@ def test_the_reader_constant_names_exactly_the_tables_the_statement_reads() -> N
 def test_post_write_routes_write_none_of_the_readers_tables_except_the_reviewed_classes() -> None:
     """Plan section 6.3 obligation: a post-write request must not write a table its own decision
     reads. The manifest traces every route's write targets (static source shape; it does not prove
-    order). The reviewed classes are `core.entities`, `campaign.sessions` and the two revelation
-    tables; anything else a post-write route writes that the reader reads fails this test."""
+    order). The reviewed classes are `core.entities`, `campaign.sessions`, the two revelation
+    tables and the clock class (`campaign.timeline_clocks`, `core.world_times`; ACCESS_CONTROL R01 S6,
+    pinned to exactly three routes below); anything else a post-write route writes that the reader reads fails this test."""
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     post_write_families = {
         "authoring_scope",
@@ -291,3 +292,75 @@ def test_the_declared_surface_has_no_widening_api() -> None:
 def test_the_guard_dispatches_only_through_the_dialects_own_do_execute() -> None:
     source = Path(authorization.__file__).read_text(encoding="utf-8")
     assert source.count("context.dialect.do_execute(") == 1
+
+
+# --- P15-C11-S01-T02: the campaign clock is an input of every final check (plan section 3.2 item 3a) ----------------
+
+_CLOCK_TABLES = {"campaign.timelines", "campaign.timeline_clocks", "core.world_times"}
+_REVIEWED_CLOCK_WRITERS = {
+    ("POST", "/campaigns/{campaign_id}/clock/advance"),
+    ("POST", "/campaigns/{campaign_id}/clock/correct"),
+    ("POST", "/campaigns/{campaign_id}/world-times"),
+}
+_POST_WRITE_FAMILIES = {
+    "authoring_scope",
+    "operation_scope",
+    "reveal_authority",
+    "route_capability_only",
+}
+
+
+def test_the_base_statement_reads_the_campaign_clock() -> None:
+    """E28: no opt-in flag adds or removes the clock tables, and the statement stays a single one."""
+    base = _authority_snapshot_sql(instant="fresh", with_world=False, with_reveal=False)
+    named = set(re.findall(r"(?:FROM|JOIN)\s+([a-z_]+\.[a-z_]+)", base))
+    assert named >= _CLOCK_TABLES
+    assert re.search(r"campaign_clock\s+AS", base)
+    assert not re.search(r"(?<![a-z_])clock\s+AS\s+\(\s*WITH RECURSIVE", base)
+    assert "perspective_clock" not in base
+    assert _CLOCK_TABLES <= AUTHORITY_READER_TABLES
+    with_perspective = _authority_snapshot_sql(
+        instant="fresh", with_world=False, with_reveal=False, with_perspective=True
+    )
+    assert len(re.findall(r"WITH RECURSIVE", with_perspective)) == len(
+        re.findall(r"WITH RECURSIVE", base)
+    )
+
+
+def test_the_reviewed_post_write_classes_are_exactly_the_six_tables() -> None:
+    """E29."""
+    assert {
+        "core.entities",
+        "campaign.sessions",
+        "security.character_revelations",
+        "security.character_revelation_members",
+        "campaign.timeline_clocks",
+        "core.world_times",
+    } == REVIEWED_POST_WRITE_TABLES
+
+
+def test_the_post_write_writers_of_the_reviewed_clock_tables_are_exactly_the_three_clock_routes() -> (
+    None
+):
+    """E30: the table-wide class admits no other writer. A new writer, or a new requirement on one of the
+    three, fails here and needs its own review (plan section 3.2 item 3a)."""
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    writers: set[tuple[str, str]] = set()
+    for record in manifest:
+        if record["family"] not in _POST_WRITE_FAMILIES:
+            continue
+        written = {w for writes in record["command_writes"].values() for w in writes}
+        assert "campaign.timelines" not in written, (record["method"], record["path"])
+        if written & {"campaign.timeline_clocks", "core.world_times"}:
+            writers.add((record["method"], record["path"]))
+            assert record["family"] == "operation_scope", record["path"]
+            assert [
+                (
+                    d["kind"],
+                    d["capability"],
+                    d["world_capability"],
+                    d["allow_foundry_access"],
+                )
+                for d in record["dependencies"]
+            ] == [("campaign_capability", "canon.edit", None, False)], record["path"]
+    assert writers == _REVIEWED_CLOCK_WRITERS

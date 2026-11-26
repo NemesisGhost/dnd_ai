@@ -11,7 +11,12 @@ from typing import Any
 import pytest
 from sqlalchemy import Connection, create_engine, text
 
-from dnd_ai.domain.access import resolve_access_context
+from dnd_ai.domain.access import (
+    BUILTIN_RELATIONSHIP_CAPABILITIES,
+    AccessContext,
+    resolve_access_context,
+)
+from tests.access_reference import reference_resolve_access_context
 from tests.database.test_organization_hierarchy_migration import _alembic
 from tests.database.test_phase8_populated_upgrade import (
     _alembic_upgrade,
@@ -211,17 +216,79 @@ class Populated:
         return rid
 
 
-def _contexts(connection: Connection, p: Populated) -> dict[str, object]:
-    out: dict[str, object] = {}
-    for name, campaign in (
-        ("owner", p.campaign_id),
-        ("gm_player", p.campaign_id),
-        ("other", p.other_campaign_id),
-    ):
-        out[name] = resolve_access_context(connection, user_id=p.users[name], campaign_id=campaign)
-    return out
+_CAMPAIGN_OF = {
+    "owner": "campaign_id",
+    "gm_player": "campaign_id",
+    "other": "other_campaign_id",
+}
 
 
+def _legacy_fields(ctx: AccessContext | None) -> dict[str, object] | None:
+    """The legacy access fields, compared explicitly (never the additive control fields)."""
+    if ctx is None:
+        return None
+    return {
+        "user_id": ctx.user_id,
+        "campaign_id": ctx.campaign_id,
+        "campaign_membership_id": ctx.campaign_membership_id,
+        "timeline_id": ctx.timeline_id,
+        "role_capabilities": ctx.role_capabilities,
+        "character_capabilities": ctx.character_capabilities,
+        "grant_effects": ctx.grant_effects,
+        "campaign_lifecycle_status": ctx.campaign_lifecycle_status,
+        "revelations": ctx.revelations,
+    }
+
+
+def _contexts_before(connection: Connection, p: Populated) -> dict[str, AccessContext | None]:
+    """Revision-149 side. The production resolver reads revision-150 columns, which do not exist yet, so the
+    frozen pre-assignment reference resolver (`tests/access_reference.py`) reads the database state instead; it
+    shares no SQL with the production statement."""
+    return {
+        name: reference_resolve_access_context(
+            connection, user_id=p.users[name], campaign_id=getattr(p, attr)
+        )
+        for name, attr in _CAMPAIGN_OF.items()
+    }
+
+
+def _contexts_after(connection: Connection, p: Populated) -> dict[str, AccessContext | None]:
+    """Post-upgrade side: the production resolver."""
+    return {
+        name: resolve_access_context(
+            connection, user_id=p.users[name], campaign_id=getattr(p, attr)
+        )
+        for name, attr in _CAMPAIGN_OF.items()
+    }
+
+
+def _character_of(connection: Connection, relationship_id: uuid.UUID) -> uuid.UUID:
+    value = connection.execute(
+        text(f"SELECT character_id FROM {_TABLE} WHERE membership_character_relationship_id = :r"),
+        {"r": relationship_id},
+    ).scalar_one()
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+def _expected_character_capabilities(
+    connection: Connection, p: Populated
+) -> dict[str, dict[uuid.UUID, frozenset[str]]]:
+    """What the legacy semantics grant each fixture user: live rows confer their type's built-in set; revoked,
+    expired and closed-period rows confer nothing; an open-ended dated row and a timeline row of the campaign's own
+    timeline confer; another campaign's row never reaches this campaign."""
+    cap = BUILTIN_RELATIONSHIP_CAPABILITIES
+    return {
+        "owner": {
+            _character_of(connection, p.ids["live"]): cap["primary_controller"],
+            _character_of(connection, p.ids["dated"]): cap["viewer"],
+        },
+        "gm_player": {_character_of(connection, p.ids["timeline"]): cap["co_controller"]},
+        "other": {_character_of(connection, p.ids["live_other_campaign"]): cap["co_controller"]},
+    }
+
+
+@pytest.mark.real_relationship_policy
 def test_d17_d18_upgrade_preserves_legacy_rows_and_access_contexts() -> None:
     admin_url, test_url = _provision_database()
     try:
@@ -231,9 +298,21 @@ def test_d17_d18_upgrade_preserves_legacy_rows_and_access_contexts() -> None:
             populated = Populated(connection)
         with engine.connect() as connection:
             before_rows = _legacy_rows(connection)
-            before_contexts = _contexts(connection, populated)
+            before_contexts = _contexts_before(connection, populated)
+            expected = _expected_character_capabilities(connection, populated)
+            # the revision-149 contexts are meaningful, not empty: each user holds the legacy capabilities
+            for name, ctx in before_contexts.items():
+                assert ctx is not None, name
+                assert ctx.character_capabilities == expected[name], name
+            assert before_contexts["owner"].role_capabilities  # type: ignore[union-attr]
+            # and refusals: a member of campaign Two has no access to campaign One, and nobody to a stranger
+            assert (
+                reference_resolve_access_context(
+                    connection, user_id=populated.users["other"], campaign_id=populated.campaign_id
+                )
+                is None
+            )
         assert len(before_rows) == 7
-        assert all(ctx is not None for ctx in before_contexts.values())
 
         _alembic_upgrade(test_url, TARGET)
         with engine.connect() as connection:
@@ -261,7 +340,21 @@ def test_d17_d18_upgrade_preserves_legacy_rows_and_access_contexts() -> None:
                 assert r["is_primary"] is (r["type_code"] == "primary_controller")
             assert seen == 7
             # D18: the resolver's view of each fixture user is unchanged
-            assert _contexts(connection, populated) == before_contexts
+            after_contexts = _contexts_after(connection, populated)
+            assert {n: _legacy_fields(c) for n, c in after_contexts.items()} == {
+                n: _legacy_fields(c) for n, c in before_contexts.items()
+            }
+            for name, ctx in after_contexts.items():
+                assert ctx is not None, name
+                assert ctx.character_capabilities == expected[name], name
+                # the additive control fields are empty: no assignment row exists
+                assert ctx.control_assignments == {} and ctx.control_clock_key is None, name
+            assert (
+                resolve_access_context(
+                    connection, user_id=populated.users["other"], campaign_id=populated.campaign_id
+                )
+                is None
+            )
         engine.dispose()
     finally:
         _drop_database(admin_url, test_url)

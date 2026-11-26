@@ -81,6 +81,12 @@ class MemberEffectiveAccessView:
     denials: tuple[EffectiveAccessDenialView, ...]
 
 
+_CONTROL_ROLE_LABELS = {
+    "primary_controller": "Primary controller",
+    "co_controller": "Co-controller",
+}
+
+
 def resolve_member_effective_access(
     connection: Connection,
     *,
@@ -164,6 +170,7 @@ def resolve_member_effective_access(
             JOIN core.entities e ON e.entity_id = mcr.character_id
             JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
             WHERE mcr.campaign_membership_id = :membership_id
+              AND NOT mcr.is_control_assignment
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
               AND mcr.effective_to_world_time_id IS NULL
@@ -190,6 +197,45 @@ def resolve_member_effective_access(
                 target_display_name=str(row["character_display_name"]),
             ),
         )
+
+    # P15-C11-S01-T02: in-effect control assignments, from the one SQL fragment the resolver uses, so the panel
+    # never shows an assignment the resolver would not honour. Each confers the closed matrix, code by code.
+    matrix_display_names = {
+        str(code): str(display_name)
+        for code, display_name in connection.execute(
+            text(
+                "SELECT code, display_name FROM security.capabilities "
+                "WHERE code = ANY(CAST(:codes AS text[])) AND is_active"
+            ),
+            {"codes": sorted(_access.CONTROL_ASSIGNMENT_CAPABILITIES["primary_controller"])},
+        )
+    }
+    for row in connection.execute(
+        text(
+            "WITH camp AS (SELECT CAST(:timeline_id AS uuid) AS timeline_id),"
+            + _access.CAMPAIGN_CLOCK_CTE
+            + " SELECT crt.code AS role_code, mcr.assignment_period_kind AS kind, "
+            "e.canonical_name AS character_display_name "
+            + _access.control_assignments_in_effect_from_sql(":membership_id")
+            + " ORDER BY e.canonical_name, mcr.membership_character_relationship_id"
+        ),
+        {
+            "membership_id": campaign_membership_id,
+            "campaign_id": campaign_id,
+            "timeline_id": timeline_id,
+        },
+    ).mappings():
+        role_label = _CONTROL_ROLE_LABELS[str(row["role_code"])]
+        for code in sorted(_access.CONTROL_ASSIGNMENT_CAPABILITIES[str(row["role_code"])]):
+            _add_source(
+                code,
+                matrix_display_names.get(code, code),
+                EffectiveAccessSourceView(
+                    kind="control_assignment",
+                    label=f"{role_label} ({row['kind']})",
+                    target_display_name=str(row["character_display_name"]),
+                ),
+            )
 
     # Live revelations that reach this member: one source per revelation and conferred capability,
     # from the same query the resolver uses, so the panel can never show a revelation the resolver

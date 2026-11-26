@@ -748,7 +748,7 @@ def revoke_character_relationship(
     row = (
         connection.execute(
             text("""
-                SELECT cm.campaign_id, mcr.revoked_at
+                SELECT cm.campaign_id, mcr.revoked_at, mcr.is_control_assignment
                 FROM security.membership_character_relationships mcr
                 JOIN security.campaign_memberships cm
                     ON cm.campaign_membership_id = mcr.campaign_membership_id
@@ -760,7 +760,9 @@ def revoke_character_relationship(
         .mappings()
         .one_or_none()
     )
-    if row is None or row["campaign_id"] != campaign_id:
+    # A control assignment is not a legacy relationship: it is refused exactly like a row of another campaign
+    # (P15-C11-S01-T02), so it is never revoked, changed or audited by this command.
+    if row is None or row["campaign_id"] != campaign_id or row["is_control_assignment"]:
         raise MembershipNotInCampaignError(
             f"membership character relationship {membership_character_relationship_id} does not "
             f"belong to campaign {campaign_id} "
@@ -894,7 +896,7 @@ def change_character_relationship(
                        mcr.campaign_membership_id, mcr.character_id,
                        mcr.character_relationship_type_id, mcr.timeline_id,
                        mcr.effective_from_world_time_id, mcr.effective_to_world_time_id,
-                       mcr.revoked_at,
+                       mcr.revoked_at, mcr.is_control_assignment,
                        (mcr.expires_at IS NOT NULL AND mcr.expires_at <= now())
                            AS relationship_is_expired,
                        rt.code AS relationship_type_code
@@ -913,7 +915,7 @@ def change_character_relationship(
         .mappings()
         .one_or_none()
     )
-    if row is None or row["campaign_id"] != campaign_id:
+    if row is None or row["campaign_id"] != campaign_id or row["is_control_assignment"]:
         raise MembershipNotInCampaignError(
             f"membership character relationship {membership_character_relationship_id} does not "
             f"belong to campaign {campaign_id} "

@@ -364,6 +364,7 @@ def get_campaign_access_overview(
             JOIN core.lifecycle_statuses cls ON cls.lifecycle_status_id = e.lifecycle_status_id
             WHERE cm.campaign_id = :campaign_id
               AND cm.ended_at IS NULL
+              AND NOT mcr.is_control_assignment
               AND mcr.revoked_at IS NULL
               AND (mcr.expires_at IS NULL OR mcr.expires_at > now())
               AND mcr.effective_to_world_time_id IS NULL
