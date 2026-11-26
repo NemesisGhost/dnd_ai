@@ -52,6 +52,12 @@ Prepared by Opus, 2026-11-25. **Planned ahead of its stated prerequisite. Implem
    - S02's assignment INSERT really enters `…_live_primary` (primary only) and `…_live_assignment`. Its entries are therefore **competing** waits, each with its own race test (the `test_a_competing_active_relationship_of_the_same_type_is_a_unique_wait` pattern). They are not G1's "never enters" entries.
    - S02's revoke and replace UPDATEs leave those indexes (the G2 pattern).
    - An S02 INSERT supplies `campaign_id`, bound to the campaign lock it takes.
+6. (Added 2026-11-26.) The R01 reader classes, as S01 section 3.2 item 3a left them.
+   - The campaign clock and `asgn` are part of the base authority statement, with no opt-in. `AUTHORITY_READER_TABLES` includes `campaign.timelines`, `campaign.timeline_clocks` and `core.world_times`. `REVIEWED_POST_WRITE_TABLES` is exactly six tables (S01 E29).
+   - S02's routes are pre-write (access management) and write no clock table. If an S02 route would write `campaign.timeline_clocks`, `core.world_times` or `campaign.timelines`, S01 E30 fails and S02 stops: it is never added to the clock inventory without an Opus review.
+   - S02-T02's new `security.character_assign_control_delegations` table is read by the authority statement, so it joins `AUTHORITY_READER_TABLES` and is **not** a reviewed post-write class. No post-write route may write it (the existing disjointness test).
+   - Capability separation: `AssignControlAuthority` (T01 and T02) never reads `control_assignments`, `control_clock_key`, the matrix or `character_capabilities`. An assignment never confers assignment authority (F33, beside S01 E31).
+   - The step-10 re-judgment and `plan.finalize` read the clock without a lock. A dated assignment's in-effect status in the S02 read uses the same `campaign_clock` value as the decision's snapshot.
 
 ## 3. Changes
 
@@ -199,7 +205,7 @@ There are no lifecycle hooks. When the role ends, the delegation simply stops be
 
 ## 6. Acceptance cases
 
-**T01 (F1–F32):**
+**T01 (F1–F33):**
 
 | ID | Case | Baseline |
 |---|---|---|
@@ -235,6 +241,7 @@ There are no lifecycle hooks. When the role ends, the delegation simply stops be
 | F30 | Campaign A's assignment confers nothing in campaign B on the same timeline, and B's read shows nothing (T1 assignment part) | fails |
 | F31 | An NPC assigned to a player keeps its UUID, build and portrayal rows; no `view_private` or `view_knowledge` (T2). A character with no build or class is assignable and resolves (T3) | fails |
 | F32 | An assignment made by the command resolves through S01 on the next request; after revoke the next request has none (T5 resolution part) | fails |
+| F33 | (Added 2026-11-26; S01 section 3.2 item 3a separation.) Unit: an `AccessContext` holding every `CONTROL_ASSIGNMENT_CAPABILITIES` code in `character_capabilities`, live `control_assignments` and a `control_clock_key`, with no owner, `gm` or delegation source, yields `AssignControlAuthority` `none`. The authority component's SQL names none of the clock tables and no `asgn` output | fails (no component) |
 
 **T02 (H1–H22):**
 
@@ -341,7 +348,7 @@ No owner decision blocks S02.
    - section 2.1's route registries and the 187-route pin still hold.
 
    Report the actual baseline SHA and any difference. Stop if a section 2.2 contract differs.
-2. Write F1–F32 and the route-shape test first. Run them at the baseline; record designated failures and the F12 guard.
+2. Write F1–F33 and the route-shape test first. Run them at the baseline; record designated failures and the F12 guard.
 3. Implement section 3.1 only.
 4. Regenerate the manifest. Run the section 7 focused set, full shards and non-pytest checks.
 5. Run N1–N5.

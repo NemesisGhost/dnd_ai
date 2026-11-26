@@ -2,12 +2,12 @@
 
 Owner register rows: [P15-C11](work-register.md#p15-c11), [P15-C11-S01](work-register.md#p15-c11-s01), [P15-C11-S01-T01](work-register.md#p15-c11-s01-t01), [P15-C11-S01-T02](work-register.md#p15-c11-s01-t02). Governing contract: [ADR 0021](../adr/0021-shared-actor-identity-control-and-authoring-responsibility.md) §2.1–§2.6, §2.9–§2.10 (owner-accepted, [adr21](work-register.md#adr21)); decisions OD-2 and OD-14; tests T2, T3, T5 (resolution part) and T25 (index replacement, clock boundaries, no branch inheritance) in [rules foundations §8](rules-foundations.md). The companion slice is [S02](p15-c11-s02-control-changes-plan.md). Checkpoint coordination for both slices is in [section 12](#12-c11-checkpoint-coordination).
 
-Prepared by Opus, 2026-11-25. **Planned; not implemented.** Amended by Opus, 2026-11-26, after T01 stopped on its R01 declaration stop condition. The amendment authorizes the R01 relationship-declaration correction in section 3.1 item 9 and changes sections 2.1, 3.1, 4, 6, 7, 10 and 11. The stop and its evidence are recorded in section 11.3.
+Prepared by Opus, 2026-11-25. **Planned; not implemented.** Amended by Opus, 2026-11-26, after T01 stopped on its R01 declaration stop condition. The amendment authorizes the R01 relationship-declaration correction in section 3.1 item 9 and changes sections 2.1, 3.1, 4, 6, 7, 10 and 11. The stop and its evidence are recorded in section 11.3. Amended again by Opus, 2026-11-26, after T02 stopped on the R01 authority-reader classes. That amendment selects the always-on campaign clock with an accurate reader constant and a reviewed clock class (section 3.2 item 3a; R-13 to R-16). It changes sections 2.1, 3.2, 4, 6, 7, 8, 10, 11 and 12.
 
 - Starting SHA: `dabd7d1ab92a1575eb3769e539074ccbab34de8e`, the reviewed C10 PR head, with a clean worktree.
 - Plan-entry head: `ebe6c7241a581cff1e2fac265a3af9230c656fa1`, the C10 merge (PR #79), reached by fast-forward. Its tree equals `dabd7d1`'s; no history was rewritten.
 - C10 merge bookkeeping is a separate documentation commit, `b0d314210d3dc216a8cdfa3ba57727f79485cb7a`, before this plan.
-- The S01-T01 baseline is the commit that adds this plan (reported in the handoff). T02's baseline is T01's records commit.
+- The S01-T01 baseline is the commit that adds this plan (reported in the handoff). T02's baseline is T01's records commit, `34215f242ac3f2b110b541d4a5e78718bc80da91`; the T02 amendment commit follows it.
 - CI: no run exists for C11.
 
 ## 1. Entry readiness and scope
@@ -37,6 +37,7 @@ Prepared by Opus, 2026-11-25. **Planned; not implemented.** Amended by Opus, 202
 | Uniqueness | `ux_membership_character_relationships_active_type` on `(campaign_membership_id, character_id, character_relationship_type_id) WHERE revoked_at IS NULL` (080:898). Nothing limits primaries per campaign. R01 plans name this index in `UniqueWait` declarations (`access_grant_plans.py:340,355`; `membership_end_plans.py:469`). |
 | R01 declarations on the table (added 2026-11-26) | Five `WriteStep`s write the table: `GRANT_RELATIONSHIP_INSERT`, `CHANGE_RELATIONSHIP_INSERT`, `CHANGE_RELATIONSHIP_REVOKE_OLD` and `REVOKE_RELATIONSHIP` (`access_grant_plans.py:361-436`), and `END_REVOKE_RELATIONSHIP` (`membership_end_plans.py:460`). All five pin `RELATIONSHIP_TRIGGERS` (`membership_end_plans.py:304`, the scope function by `md5(prosrc)`). Two checkers apply to them. **Core**, at import (`domain/authorization_steps.py:1213-1223`): an INSERT names a `UniqueWait` for every named unique index of its table, and an UPDATE for each index whose key columns it sets. **Live catalogue** (`tests/r01_pre_write_catalogue.py`): it counts index dependencies through `pg_depend`, so predicate columns count too (lines 377-401). An omitted `NOT NULL` column must have a default (342-356), and the pinned triggers must equal the catalogue's for the command (427-438). The two live tests are `test_the_declarations_hold_against_the_live_catalogue` in `test_r01_s5e4_access_grants.py:974` and `test_r01_s5e3_end_membership.py`. No other R01 declaration writes the table. |
 | Legacy resolver | `rels` CTE in `_ACCESS_CTES` (`domain/access.py:~1105-1135`): unrevoked, unexpired, `effective_to_world_time_id IS NULL`, timeline unset or the campaign's, type active, character active and canon. `_access_context_from_row` (`access.py:1626`) keeps a row's capability only if `BUILTIN_RELATIONSHIP_CAPABILITIES` (`access.py:169`) permits it. The whole decision is one statement (`read_authority_snapshot`, `access.py:1513`). |
+| R01 reader tables (added 2026-11-26, T02 stop; at `34215f2`) | `AUTHORITY_READER_TABLES` (`access.py:1436`) must equal the tables the base statement plus the world and reveal sources name. `tests/unit/test_r01_authorization_structure.py:99` pins that, and line 113 checks that no route of the four post-write families (`authoring_scope`, `operation_scope`, `reveal_authority`, `route_capability_only`; 156 routes) writes a reader table outside `REVIEWED_POST_WRITE_TABLES` (`access.py:1470`: `core.entities`, `campaign.sessions` and the two revelation tables). The opt-in perspective tables (`campaign.timelines`, `campaign.timeline_clocks`, `core.world_times`, `campaign.campaign_parties`, `campaign.party_memberships`) are outside the constant today. They are read only with `with_perspective`, and only by the E2 engine routes, which are not in those families. Post-write writers of the clock tables, from the manifest and `src`: `POST /campaigns/{campaign_id}/clock/advance` and `…/clock/correct` (`campaign.timeline_clocks`) and `POST /campaigns/{campaign_id}/world-times` (`core.world_times`). All three are `operation_scope` routes with the single dependency campaign `canon.edit`. No post-write route writes `campaign.timelines`; its writers are the world timeline routes (`no_campaign_capability`). Each of the three registers exactly `route.canon.edit` and `campaign.canon.edit` (`api/access.py:168`, `commands/_content.py:53`; pinned for two of them by `test_r01_s4_operation_routes.py:567`). Both predicates call `has_capability` with no target, which reads `role_capabilities` only (`access.py:378`). |
 | In-statement clock | `_PERSPECTIVE_CTES` (`access.py:1363`) already resolves the effective clock in SQL exactly as `queries/campaign_clock.resolve_effective_clock` does (own clock row, else the parent's bounded at the branch point, recursively). It is opt-in (`with_perspective`). |
 | Capability consumers | `has_capability(..., character_id=)` adds `character_capabilities[character_id]` to the baseline (`access.py:~420`). `api/world_explorer.py:116` discovers characters from `set(access.character_capabilities)`. `queries/bootstrap.py:377` offers a perspective only for `character.view_knowledge`. No route checks `character.control`, `character.edit_mechanical_state`, `character.view_player_profile` or `character.edit_player_profile`; the last two codes do not exist. |
 | Other readers of the table | `api/parties.py:176` (D4-C party roster: legacy `owner`/`primary_controller`/`co_controller`; its comment and [shared-characters §10.13](shared-characters.md) say an in-effect assignment qualifies after P03-B); `queries/access_overview.py:350` (Sharing panel member relationships, with change and revoke actions in the portal); `queries/effective_access.py:152` (explanations; "the panel must not show a source the resolver would not honour"); `queries/content_preconditions.py:186` (archive block, open-end rule); `queries/audit_history.py:372` (joins by relationship command names); `commands/access_grants.py:752,901` and `commands/access_grant_plans.py:1022,1238` (legacy change and revoke, by row id); `commands/memberships.py:1387` and `membership_end_plans.py` (membership end revokes every unrevoked row of the membership); `commands/entity_lifecycle.py:241` (physical-delete blocking). |
@@ -132,10 +133,41 @@ T01 changes no resolver and no reader. Between T01 and T02, only tests can creat
    The matrix is code-only. Assignment rows never read `security.character_relationship_type_capabilities`, so a stray mapping row confers nothing on them. The two profile codes and the two operation codes have no consumer in C11; C12 and C20 add them behind their own gates. A structural test pins that no route consumes them yet.
 2. **Legacy exclusion.** Add `AND NOT mcr.is_control_assignment` to the `rels` CTE. The legacy matrix and its semantics are otherwise unchanged (R2, R3).
 3. **Assignment CTE in the same statement.**
-   - **Clock:** factor `perspective_clock`'s SQL into one shared `campaign_clock` CTE; the perspective columns then read it. The statement stays single.
+   - **Clock:** factor `perspective_clock`'s SQL into one shared `campaign_clock` CTE; the perspective columns then read it. The statement stays single. *Amended 2026-11-26:* `campaign_clock` and `asgn` are part of the **base** statement on every call, with no opt-in flag. Every access resolution therefore evaluates assignment authority: early checks, `resolve_access_context`, and every final check (R-13). The CTE is named `campaign_clock`, never `clock`, which is already the instant CTE. It reads only the three clock tables, takes no row lock, and its SQL is unchanged from today's `perspective_clock`.
    - **`asgn` CTE:** selects the caller membership's rows that are `is_control_assignment` and `revoked_at IS NULL`, with `campaign_id = :campaign_id`, type active, and the character active and canon (the legacy entity conditions). A row is in effect when its kind is `ongoing`, or its kind is `dated`, the clock key is not NULL and `effective_period @> key`. The interval is half-open: the start is included and the end excluded. An upcoming dated row, and a dated row with no clock, are not in effect (OD-14 "undetermined").
    - **Mapping:** `_access_context_from_row` merges each in-effect row's matrix set into `character_capabilities`, so `has_capability`, discovery (`world_explorer.py:116`) and resource-grant denies apply unchanged. It records the source in a new `AccessContext.control_assignments: Mapping[character_id, ControlAssignmentSource]` field (assignment id, role, kind; default empty).
    - **Clock value:** a new `AccessContext.control_clock_key: int | None` exposes the one clock value the decision used (ADR §2.4 item 1, "one request clock").
+3a. **R01 reader classes (added 2026-11-26, T02 stop).** The always-on clock makes three tables inputs of every final check. That is the change R01's post-write rule ("a post-write request must not write a table its own decision reads") must review. Authorized changes, and no others:
+   - **Accurate constant.** `AUTHORITY_READER_TABLES` gains exactly `campaign.timelines`, `campaign.timeline_clocks` and `core.world_times`. The existing equality test (`test_r01_authorization_structure.py:99`) is unchanged and must pass. `campaign.campaign_parties` and `campaign.party_memberships` stay opt-in perspective inputs outside the constant, as today.
+   - **Reviewed clock class.** `REVIEWED_POST_WRITE_TABLES` gains exactly `campaign.timeline_clocks` and `core.world_times`. `campaign.timelines` is **not** reviewed: no post-write route writes it, so the disjointness check keeps protecting it.
+   - **What is exempted, precisely.** A post-write request may write those two tables even though its final statement reads them. In that statement they feed only the `campaign_clock` key, and through it only the `asgn` in-effect test. Its outputs are `character_capabilities[character_id]` entries from the closed matrix, `control_assignments` and `control_clock_key`. A requirement can observe them only by:
+     - calling `has_capability(..., character_id=…)` with one of the matrix codes;
+     - reading the two control fields;
+     - using the perspective component, which reads the same key.
+
+     Nothing else is exempted. The two tables stay protected for every route outside the inventory below.
+   - **Why the three current writers are safe.** Each one's final check is `route.canon.edit` then `campaign.canon.edit`. Both predicates use only these inputs:
+     - `access is None`, which depends only on the `m` CTE (membership and status);
+     - campaign lifecycle (`camp`);
+     - `has_capability("canon.edit")` with no target, which reads `role_capabilities` only.
+
+     No clock-derived output reaches either predicate. The closed matrix never contains `canon.edit` or any campaign capability (E26), and `character_capabilities` never enters a targetless check (`access.py:378`). Other paths:
+     - **Denies:** they come from `grant_effects`, which the clock never touches.
+     - **Revelations:** they are not clock-dependent.
+     - **Reveal delegation, world authority and the subject-`gm` source:** none is registered by these routes.
+     - **Visibility:** the advance route's `denied_event_ids` comes from grant denies plus lifecycle. It is a domain eligibility input computed from the early context before the write, not a final-check input.
+     - **Fallback:** a replay judges `route.canon.edit` only (`test_r01_s4_operation_routes.py:567`).
+
+     Why each write is harmless:
+     - **`world-times`:** it inserts a new world time and never changes an existing `sort_key`. No trigger renumbers, and a stored `effective_period` was materialized at its own write. So the route cannot change any clock key or any assignment's effect, even for other callers.
+     - **`advance` and `correct`:** they change the key. Their own final statement sees the request's uncommitted key, so the caller's `character_capabilities` may differ from the early check's. That is intended, and no requirement of these routes reads them (E33).
+   - **Closing the table-wide scope.** A table-wide class would admit any future post-write writer, for example a controller operation (C20) that writes the clock and whose own decision reads `character.control`. Two structural tests close that:
+     - E29 pins `REVIEWED_POST_WRITE_TABLES` to exactly its six tables.
+     - E30 pins the inventory: the post-write routes that write either reviewed clock table are exactly the three above; each is `operation_scope` with exactly one dependency, campaign `canon.edit` with no world capability and no Foundry access; and no post-write route writes `campaign.timelines`.
+
+     E32 pins at run time that each of the three registers exactly `route.canon.edit` and `campaign.canon.edit`, with no character, perspective, world, reveal, subject-`gm` or account requirement. A new writer, or a new requirement on one of the three, fails these tests and needs its own review. It is never admitted by the class.
+   - **Concurrency.** The snapshot takes no row lock. A reader never waits for a clock writer's `FOR UPDATE` (E35); it sees the committed key. A request judged by an assignment whose effect a concurrent advance ends may therefore commit after the advance if its final statement ran first. That is the accepted R-D1 residual (instant, not commit), exactly as for an account deactivation. C20 decides whether controller operations share-lock the clock (R-16).
+   - **Unchanged:** `test_post_write_routes_write_none_of_the_readers_tables_except_the_reviewed_classes` and `test_the_access_management_family_is_not_in_the_post_write_check` (logic, family set and the 156-route pin), the manifest, every lock and lock order, and every declaration.
 4. **Readers** (section 2.1), each changed only as stated:
    - `queries/effective_access.py`:
      - the legacy relationship source adds `NOT is_control_assignment`;
@@ -149,7 +181,7 @@ T01 changes no resolver and no reader. Between T01 and T02, only tests can creat
    - Membership end (`memberships.py`, `membership_end_plans.py`): no change. It already revokes every unrevoked row of the ending membership, which frees the primary slot. A test pins that this includes assignment rows.
    - `queries/bootstrap.py`: no change. Perspectives require `character.view_knowledge`, which no assignment confers. A test pins that.
    - `entity_lifecycle.py:241`: no change.
-5. **Documentation:** [ACCESS_CONTROL](../api/ACCESS_CONTROL.md) gets a "Control assignments (P03-B)" subsection (sources, matrix, in-effect rule, exclusions, the legacy rule unchanged, the roster and archive effects). [DATABASE_MODEL](../architecture/DATABASE_MODEL.md) §19.7 records resolution order.
+5. **Documentation:** [ACCESS_CONTROL](../api/ACCESS_CONTROL.md) gets a "Control assignments (P03-B)" subsection (sources, matrix, in-effect rule, exclusions, the legacy rule unchanged, the roster and archive effects). [DATABASE_MODEL](../architecture/DATABASE_MODEL.md) §19.7 records resolution order. *Added 2026-11-26:* the owning R01 record is [ACCESS_CONTROL "Authorization timing and the final check (R01 S6)"](../api/ACCESS_CONTROL.md#authorization-timing-and-the-final-check-r01-s6), which the register's R01 section names as authoritative. It gains one paragraph, in the same commit as the constants: the final check reads the campaign clock; the reviewed clock class, with exactly what item 3a exempts and why; the three-route inventory and its tests; and the concurrency residual. The docstrings of both constants and of the disjointness test name the new class and point there. The paragraph is written with the implementation, not before it, so the contract never describes a reviewed class that does not exist.
 
 ## 4. Files
 
@@ -164,7 +196,11 @@ T01 changes no resolver and no reader. Between T01 and T02, only tests can creat
 | `tests/database/test_control_assignment_migration.py` (new) | T01 | D17–D21 (retained data, downgrade, untruncated names) |
 | `tests/database/test_r01_s5e4_access_grants.py` | T01 | G1 (new test and its positive control), G4 |
 | `tests/database/test_r01_s5e3_end_membership.py` | T01 | G2 (two new parametrization ids and their competitors; existing ids unchanged) |
-| `src/dnd_ai/domain/access.py` | T02 | Matrix, `rels` exclusion, shared clock CTE, `asgn` CTE, new context fields |
+| `src/dnd_ai/domain/access.py` | T02 | Matrix, `rels` exclusion, shared always-on `campaign_clock` CTE, `asgn` CTE, new context fields; `AUTHORITY_READER_TABLES` +3 and `REVIEWED_POST_WRITE_TABLES` +2 with their docstrings (section 3.2 item 3a) |
+| `tests/unit/test_r01_authorization_structure.py` | T02 | New E28, E29, E30; the disjointness test's docstring names the clock class. Existing tests unchanged in logic |
+| `tests/unit/test_control_assignment_separation.py` (new) | T02 | E31 |
+| `tests/database/test_control_assignment_clock_routes.py` (new) | T02 | E32–E35 |
+| `tests/database/test_r01_e2_perspective_snapshot.py` | T02 | Permitted adaptation only: `test_one_statement_no_row_lock` asserts the CTE name `campaign_clock` instead of `perspective_clock` |
 | `src/dnd_ai/queries/effective_access.py` | T02 | Exclusion plus the assignment source |
 | `src/dnd_ai/queries/access_overview.py` | T02 | Exclusion |
 | `src/dnd_ai/commands/access_grants.py`, `src/dnd_ai/commands/access_grant_plans.py` | T02 | Refuse assignment row ids in legacy change and revoke |
@@ -172,7 +208,7 @@ T01 changes no resolver and no reader. Between T01 and T02, only tests can creat
 | `src/dnd_ai/queries/content_preconditions.py` | T02 | Archive block |
 | `tests/database/test_control_assignment_resolution.py` (new) | T02 | E1–E24 |
 | `tests/unit/test_control_assignment_matrix.py` (new) | T02 | E25–E27 (closed matrix, no consumer) |
-| Docs: DATABASE_MODEL, DOMAIN_MODEL, tables.md, ACCESS_CONTROL R01 S5-E4 sentence (T01); ACCESS_CONTROL control-assignment subsection, DATABASE_MODEL §19.7 (T02); this plan; the register | T01, T02 | As stated |
+| Docs: DATABASE_MODEL, DOMAIN_MODEL, tables.md, ACCESS_CONTROL R01 S5-E4 sentence (T01); ACCESS_CONTROL control-assignment subsection, the ACCESS_CONTROL R01 S6 reviewed-clock-class paragraph, DATABASE_MODEL §19.7 (T02); this plan; the register | T01, T02 | As stated |
 
 ## 5. Commits and review boundary
 
@@ -254,6 +290,20 @@ Fixtures use the existing factories plus a test-only helper, `make_control_assig
 | E26 | Unit: no excluded code (section 3.2 item 1) is in either set | fails |
 | E27 | Structural: no module under `src/dnd_ai/api` or `src/dnd_ai/commands` passes `character.control`, `character.edit_mechanical_state`, `character.view_player_profile` or `character.edit_player_profile` to `has_capability` or a requirement | **guard** |
 
+**T02 (R01 reader classes, section 3.2 item 3a; added 2026-11-26).** E28–E31 are structural or unit checks, which prove shape and separation. E32–E35 are behavioral database tests.
+
+| ID | Case | Kind | Baseline expectation (at `34215f2`) |
+|---|---|---|---|
+| E28 | `test_r01_authorization_structure.py::test_the_base_statement_reads_the_campaign_clock`: `_authority_snapshot_sql(instant="fresh", with_world=False, with_reveal=False)` names `campaign.timelines`, `campaign.timeline_clocks` and `core.world_times` and contains the `campaign_clock` CTE. No opt-in flag adds or removes them. The existing equality test passes with the constant +3 | structural | fails (the clock is opt-in) |
+| E29 | `…::test_the_reviewed_post_write_classes_are_exactly_the_six_tables`: `REVIEWED_POST_WRITE_TABLES` equals `core.entities`, `campaign.sessions`, the two revelation tables, `campaign.timeline_clocks` and `core.world_times` | structural | fails (four tables) |
+| E30 | `…::test_the_post_write_writers_of_the_reviewed_clock_tables_are_exactly_the_three_clock_routes`: from the manifest, the post-write routes whose `command_writes` include `campaign.timeline_clocks` or `core.world_times` are exactly `POST …/clock/advance`, `POST …/clock/correct` and `POST …/world-times`. Each is `operation_scope` with exactly one dependency: `campaign_capability` `canon.edit`, `world_capability` null, `allow_foundry_access` false. No post-write route writes `campaign.timelines` | structural (route inventory) | **guard** (holds at baseline) |
+| E31 | `tests/unit/test_control_assignment_separation.py`: build an `AccessContext` with no role capabilities, every matrix and legacy relationship code in `character_capabilities` for one character, a non-empty `control_assignments` and a `control_clock_key`, and wrap it in an `AuthoritySnapshot`. `route_capability_requirement(capability_code="canon.edit", …)` and `canon_edit_requirement` both refuse, and `has_capability(code)` with no target is false for every matrix code. With `canon.edit` in `role_capabilities` both pass. Their result is identical for every combination of `control_assignments`, `control_clock_key` and `character_capabilities` | unit (capability separation) | fails (no control fields) |
+| E32 | `tests/database/test_control_assignment_clock_routes.py`: spy on `AuthorizationPlan.finalize`. For advance, correct and world-times, keyed and unkeyed, the requirement names are exactly `["route.canon.edit", "campaign.canon.edit"]`. None sets `perspective`, `world_id`, `reveal`, `gm_subject` or `account` | behavioral (requirements) | **guard** |
+| E33 | Same file: the clock writer's own final check. A GM, with `canon.edit` from the role, holds a dated assignment `[t1, t2)` and an upcoming dated assignment `[t2, ∞)` on two characters, with the clock at t1. Advance to t2 returns 200. The finalize snapshot (spied) has `control_clock_key` = key(t2), the first assignment absent from `control_assignments` and the second present. The clock, event and audit rows are committed. Correct back to t1: 200, with the snapshot reversed. When the GM's role lapses before the final statement (the `test_r01_s4_operation_routes.py:364` pattern), correct and advance are refused and persist nothing, whatever assignments are in effect | behavioral (own decision) | fails (no control fields) |
+| E34 | Same file: another member's assignments follow the routes. Member P has the two dated assignments of E33.<br>- With no clock: both undetermined (absent).<br>- First advance to t1, which creates the clock row: the first in effect.<br>- Advance to t2: the first ended, the second in effect.<br>- Correct to t1: the first again.<br>- Creating a world time between t1 and t2 through the route changes neither `control_assignments` nor `control_clock_key`.<br>- An ongoing assignment of P is in effect throughout. | behavioral (route effect) | fails |
+| E35 | Same file: no new wait. An advance runs uncommitted on connection A, holding the clock row `FOR UPDATE`. On B, under `SET LOCAL lock_timeout = '2s'`, `read_authority_snapshot` completes without `LockNotAvailable` and returns the committed `control_clock_key`, while A's own snapshot returns the new key. After A commits, B returns the new key | behavioral (concurrency) | fails (no `control_clock_key`) |
+| E36 | Unchanged, apart from the permitted CTE-name adaptation: `test_r01_s4_operation_routes.py`, `test_api_campaign_clock.py`, `test_api_clock_cause.py`, `test_api_world_time.py`, `test_campaign_clock_concurrency.py`, `test_world_time_concurrency.py`, `test_r01_e2_perspective_snapshot.py` (its clock cases still equal the Python resolver), `test_r01_e2_ai_routes.py` and both existing reader tests in `test_r01_authorization_structure.py` | **guard** | passes |
+
 **Test-first evidence.** Write each task's cases first and run them at that task's baseline. Record which fail as designated and which pass as guards. A case that fails for a reason of the test itself is corrected in the test, never by changing the expectation; record that.
 
 ## 7. Verification
@@ -262,7 +312,7 @@ From `C:\Users\nemes\dnd_ai` (PowerShell; the local PostgreSQL 18 server and `.e
 
 1. Focused:
    - T01: `uv run pytest tests/database/test_control_assignment_storage.py tests/database/test_control_assignment_migration.py -q`, plus every existing test file that touches the table. Find them with `rg -l "membership_character_relationship|make_membership_character_relationship|character-relationships" tests`. The search covers the R01 relationship files; run these explicitly as well: `test_r01_s5e4_access_grants.py`, `test_r01_s5e4_access_races.py`, `test_r01_s5e3_end_membership.py`, `test_r01_s5e3_end_races.py`, `test_r01_s5e3_end_interactions.py`, `test_r01_s5f_keyed_cross_family_races.py`, `test_api_access_grants.py` and `tests/unit`. G3 also needs `uv run pytest tests --collect-only -q` with no errors.
-   - T02: adds `test_control_assignment_resolution.py`, `tests/unit/test_control_assignment_matrix.py`, `test_access_snapshot_differential.py`, `test_api_effective_access.py`, `test_api_access_overview.py`, `test_api_party_roster.py`, `test_character_relationship_concurrency.py`, `test_r01_s5e3_end_membership.py`, `test_supersession_publish_preconditions.py`, and the files the same search finds.
+   - T02: adds `test_control_assignment_resolution.py`, `tests/unit/test_control_assignment_matrix.py`, `test_access_snapshot_differential.py`, `test_api_effective_access.py`, `test_api_access_overview.py`, `test_api_party_roster.py`, `test_character_relationship_concurrency.py`, `test_r01_s5e3_end_membership.py`, `test_supersession_publish_preconditions.py`, and the files the same search finds. *Added 2026-11-26:* `tests/unit/test_r01_authorization_structure.py`, `tests/unit/test_control_assignment_separation.py`, `tests/database/test_control_assignment_clock_routes.py`, and the E36 files.
 2. Full backend, once per task on the task's final executable code: `uv run python scripts/run_sharded_tests.py`. A failed first run and any rerun are reported separately; no cause is claimed without evidence.
 3. Non-pytest checks: `uv run ruff format --check`, `uv run ruff check`, `uv run mypy src`, `uv lock --check`, `alembic check` (as [DEVELOPMENT §6](../DEVELOPMENT.md#6-testing) states it), `uv run python scripts/check_documentation.py`, `git diff --check`.
 4. Portal: no portal file changes, so no portal run is required. If any portal file changes, stop (section 11.1).
@@ -285,13 +335,18 @@ From `C:\Users\nemes\dnd_ai` (PowerShell; the local PostgreSQL 18 server and `.e
 | M12 (T01) | Remove the two new `_leaves_index` entries from `END_REVOKE_RELATIONSHIP` | G3: the end-membership live-catalogue test. The module still imports, which records that only the live check counts predicate columns |
 | M13 (T01) | Remove `campaign_id` and its FK binding from `CHANGE_RELATIONSHIP_INSERT` | G3: the access-grants live-catalogue test (`omitted NOT NULL column campaign_id`) |
 | M14 (T01) | Drop `is_control_assignment` from the live-primary index predicate (migration and Core both, so the database tests run) | G1 (live-primary, INSERT ids) and D11b |
+| M15 (T02, added 2026-11-26) | Remove `campaign.timeline_clocks` and `core.world_times` from `REVIEWED_POST_WRITE_TABLES` | The existing disjointness test, naming exactly the three clock routes; E29 |
+| M16 (T02) | In a byte-restored copy of `tests/r01_route_manifest.json`, add `campaign.timeline_clocks` to the `command_writes` of `POST /campaigns/{campaign_id}/sessions/{session_id}/start` | E30. The disjointness test still passes, which records that the table-wide class alone would admit the writer |
+| M17 (T02) | Make a targetless `has_capability` also consult the union of `character_capabilities` | E31 |
+| M18 (T02) | Make `campaign_clock` and `asgn` opt-in again (present only with `with_perspective`) | E28 and E3 or E5 |
+| M19 (T02) | Remove `core.world_times` from `AUTHORITY_READER_TABLES` | The existing reader-equality test |
 
 ## 8. Authorization, disclosure, isolation and outcomes
 
 - **Authorization.** An assignment confers only the closed matrix, and only while in effect, in its own campaign. It confers no campaign capability, no perspective and no private or narrative read. Denies win (§2.9). The legacy matrix is unchanged.
 - **Disclosure.** The new explanation source names the role, kind and character, which the caller already discovers through the assignment. Nothing new reaches any other member. Legacy commands refuse assignment ids with the existing non-disclosing 404.
 - **Isolation.** `campaign_id` is denormalized, verified and immutable; resolution also requires `campaign_id = :campaign_id`. Two campaigns on one timeline never share an assignment (E7, D13).
-- **One clock per decision.** The clock is resolved inside the single authority statement and exposed as `control_clock_key`. The D4-C roster's party-membership test still uses its own membership clock read. That test is not a control decision, and the residual is recorded (section 10, R-6).
+- **One clock per decision.** The clock is resolved inside the single authority statement and exposed as `control_clock_key`. The D4-C roster's party-membership test still uses its own membership clock read. That test is not a control decision, and the residual is recorded (section 10, R-6). *Added 2026-11-26:* the clock routes' own final statement reads the request's uncommitted clock, so their `control_clock_key` is the post-write value; none of their requirements reads it (E32, E33). A concurrent clock change is seen only once committed (E35; R-16).
 - **Draft preservation, retry identity, refusals, unknown outcomes, navigation, focus, announcements.** Not applicable: S01 has no route, command or user interface. These are planned for the writers in S02.
 - **Late responses.** Not applicable (no client).
 
@@ -315,6 +370,15 @@ From `C:\Users\nemes\dnd_ai` (PowerShell; the local PostgreSQL 18 server and `.e
     - making `campaign_id` nullable (contradicts ADR §2.2).
 - **R-11, `is_primary` on every row.** Derived from the type for legacy rows too (section 3.1 item 2; ADR §2.3). Readers pair it with `is_control_assignment`.
 - **R-12, CHECKs not in Core.** This follows the package convention (`persistence/tables/__init__.py:22-25`). Tests cover them; neither autogenerate nor R01 depends on Core CHECKs.
+- **R-13, always-on assignment resolution (2026-11-26).** Assignment and clock resolution is part of the base statement on every call, not an opt-in. Rejected alternative, explicit opt-in (for example `with_control`):
+  - every early-check and final-check path that can consult a character capability would have to opt in. That is the `require_campaign_capability` dependency (146 route uses), `resolve_access_context`'s nine direct callers, the 33 character-targeted `has_capability` calls, and the character-targeted final-check requirements, such as `view_tier_requirement` in `character_public_profile.py`;
+  - an omission is silent. It drops the matrix rights from discovery, reads and final checks without an error, and lets an early check and its final check disagree;
+  - a test against omission would itself have to enumerate every consumer, which is a larger and weaker guard than E28–E31.
+
+  An opt-out only for the clock routes inverts the same risk and still needs the review in item 3a, so it is rejected too. Cost: the base statement gains one small recursive CTE over the campaign's timeline chain, no lock and no second statement (E13, E35).
+- **R-14, reviewed clock class (2026-11-26).** `campaign.timeline_clocks` and `core.world_times` join `REVIEWED_POST_WRITE_TABLES`, with the argument, inventory and tests of section 3.2 item 3a. `campaign.timelines` joins the reader constant only. The class is table-wide because the existing mechanism is. E29, E30 and E32 narrow it in effect to the three reviewed routes and their two role-only requirements, without changing the existing disjointness test.
+- **R-15, constant accuracy (2026-11-26).** The constant names every table the base statement reads. The opt-in perspective-only tables (`campaign.campaign_parties`, `campaign.party_memberships`) stay outside it, as today: no post-write family route registers a perspective requirement, and E32 pins that for the clock routes. This plan does not widen that pre-existing scope.
+- **R-16, concurrency residual (2026-11-26).** No lock is added: the snapshot reads the clock by MVCC. A request authorized by an assignment that a concurrent clock change ends may commit after that change if its final statement ran first (R-D1). No route consumes the control codes in C11 (E27). C20 decides, in its own plan, whether controller operations share-lock the clock row, and it must review item 3a's inventory if any of them writes a clock table.
 - **R-4, safe downgrade.** The downgrade refuses while assignment rows exist instead of deleting them or letting them become privileged legacy rows.
 - **R-5, matrix merge.** In-effect assignment capabilities merge into `character_capabilities`, so every existing consumer (`has_capability`, discovery, denies) applies them. The source is kept separately for explanations and the roster.
 - **R-6, roster clock.** The roster's party-membership predicate keeps its own clock read; only the control half uses the snapshot's clock.
@@ -349,11 +413,15 @@ No owner decision blocks S01.
 7. Commit the implementation with the T01 subject (unchanged) and push. Then commit and push the records (section 11.3 and the T01 register row).
 
 **T02**
-1. Revalidate: HEAD equals origin, the worktree is clean, T01's records commit is present, and section 2.1's reader list still matches. Run `rg -n "membership_character_relationships" src` and stop if a new production reader appears that section 3.2 does not cover.
-2. Write E1–E27 first; run them at the baseline and record fails and guards.
-3. Implement section 3.2 only.
+1. Revalidate:
+   - HEAD equals origin and the worktree is clean;
+   - T01's records commit `34215f242ac3f2b110b541d4a5e78718bc80da91` and the T02 amendment commit after it are present;
+   - section 2.1's reader list still matches. Run `rg -n "membership_character_relationships" src` and stop if a new production reader appears that section 3.2 does not cover;
+   - (2026-11-26) the "R01 reader tables" row of section 2.1 still holds: the constants' contents, the 156-route pin, and the three clock-table writers and their requirements.
+2. Write E1–E36 first; run them at the baseline and record fails and guards (E11, E14, E20's revocation part, E21, E27, E30, E32 and E36 are guards).
+3. Implement section 3.2 only, including item 3a and its documentation in item 5.
 4. Run the section 7 focused set (T02), full shards and non-pytest checks.
-5. Run M4–M10.
+5. Run M4–M10 and M15–M19.
 6. Commit with the T02 subject and push, then record and push the records commit.
 
 **Permitted test adaptations (each named in the record):**
@@ -361,7 +429,9 @@ No owner decision blocks S01.
 - schema-comment and table-inventory tests that enumerate columns or indexes;
 - the D4-C structural test, if it pins the function body rather than its single caller;
 - `tests/access_reference.py` **only** if the differential corpus has to include an assignment row, which it should not;
-- (T01, 2026-11-26) the two new ids and their competitor branches in the end-membership "leaves" test (G2), and moving `make_control_assignment` into `tests/factories.py`.
+- (T01, 2026-11-26) the two new ids and their competitor branches in the end-membership "leaves" test (G2), and moving `make_control_assignment` into `tests/factories.py`;
+- (T02, 2026-11-26) `test_r01_e2_perspective_snapshot.py::test_one_statement_no_row_lock` asserting the CTE name `campaign_clock` instead of `perspective_clock`. The single-statement and no-row-lock assertions stay, and so does every other line of that file. The clock-only prototype broke no other test in the files it ran (section 11.3);
+- (T02, 2026-11-26) the docstring of the disjointness test naming the clock class. Its code, family set and route-count pin stay unchanged.
 
 No other expectation changes. The section 3.1 item 9 edits are production changes authorized by this plan, not test adaptations.
 
@@ -375,6 +445,14 @@ No other expectation changes. The section 3.1 item 9 edits are production change
 - any existing grant, change, revoke or end-membership route test changes outcome;
 - a production reader of the table outside section 3.2 appears;
 - the single-statement property cannot be kept;
+- (T02, 2026-11-26) any of the following:
+  - a post-write route other than the three in section 3.2 item 3a writes `campaign.timeline_clocks` or `core.world_times`, or any post-write route writes `campaign.timelines`;
+  - one of the three registers any requirement besides `route.canon.edit` and `campaign.canon.edit`;
+  - the reader constant must name any table besides the three, or the reviewed set must gain any table besides the two;
+  - `test_r01_authorization_structure.py`'s existing reader or disjointness test needs a change beyond its constants and the named docstring;
+  - E35 shows a wait;
+  - E33 shows a clock route refused, or a decision changed, by its own clock write;
+  - the perspective results in `test_r01_e2_perspective_snapshot.py` change;
 - the ADR contract appears to need changing.
 
 Report and stop; do not adapt the contract.
@@ -465,6 +543,16 @@ Sonnet stopped on "an R01 declaration other than the named index changes". The t
 - **Stop conditions.** None applied after the amendment. No legacy guard failed (D12 and D16 pass). No declaration other than item 9 changed. G1-control raised `LockNotAvailable` for both indexes. No route test changed outcome.
 - **CI.** Pending the checkpoint PR. No browser or AX work.
 
+**T02 stop (Sonnet, 2026-11-26; recorded by Opus, 2026-11-26).** Baseline `34215f242ac3f2b110b541d4a5e78718bc80da91` (HEAD and `origin/phase15/completion`, clean). Sonnet made no T02 change. Section 3.2 needs campaign-clock data (`campaign.timelines`, `campaign.timeline_clocks`, `core.world_times`) in the base single-statement reader. Naming them in `AUTHORITY_READER_TABLES` makes the post-write disjointness test flag advance, correct and world-times, and the plan did not authorize a reviewed-class change. Sonnet stopped on that.
+
+**Opus investigation (2026-11-26; prototype evidence, not T02 verification).** No commit. Every temporary change was byte-restored: `domain/access.py` SHA-256 `14fe0374…78ae` before and after each run. The temporary probe test was deleted, and `git status` was clean afterwards.
+- **Prototype.** Clock only, no `asgn`: today's `perspective_clock` SQL moved into the base statement as `campaign_clock`, exposed as a `control_clock_key` column, and the constant gained the three tables.
+  - `tests/unit/test_r01_authorization_structure.py`: the reader-equality test passed with the +3 constant. The disjointness test failed with exactly three offenders: `POST …/clock/advance` and `POST …/clock/correct` (`campaign.timeline_clocks`) and `POST …/world-times` (`core.world_times`). 12 passed, 1 failed. That reproduces the stop.
+  - **Adding `campaign.timeline_clocks` and `core.world_times` to the reviewed set** (not `campaign.timelines`): that file, `test_r01_s4_operation_routes.py`, `test_api_campaign_clock.py`, `test_campaign_clock_concurrency.py`, `test_api_world_time.py`, `test_access_snapshot_differential.py`, `test_r01_e2_perspective_snapshot.py` and `test_r01_e2_ai_routes.py` gave **281 passed, 1 failed**. The failure was `test_r01_e2_perspective_snapshot.py::test_one_statement_no_row_lock`, which asserts the CTE name `perspective_clock` (now a permitted adaptation). The perspective result cases all passed.
+  - **Concurrency probe** (two connections, committed fixture of `test_campaign_clock_concurrency.py`): with an advance uncommitted on A, B's statement under `lock_timeout = '2s'` completed and returned the committed key, `144000`. A's own statement returned its uncommitted key, `432000`, and still held `canon.edit` from the role. After A committed, B returned `432000`. 2 passed.
+- **Decision-path trace** for the three routes (entry, scope, locks, writes, final check) is summarized in section 2.1 and section 3.2 item 3a.
+- **Not run:** `asgn`, the matrix, E1–E36, a full shard run, the non-pytest checks and mutation probes.
+
 (T02 implementation records follow here.)
 
 ## 12. C11 checkpoint coordination
@@ -477,6 +565,7 @@ Sonnet stopped on "an R01 declaration other than the named index changes". The t
   - `src/dnd_ai/domain/access.py`: S01-T02 (matrix, `asgn`), S02-T01 (owner and GM authority CTE), S02-T02 (delegation source).
   - `src/dnd_ai/persistence/tables/security.py`: S01-T01; S02-T02 (delegation table).
   - `src/dnd_ai/commands/access_grant_plans.py`: S01-T01 (relationship declarations, section 3.1 item 9) and S01-T02 (refusing assignment ids). `src/dnd_ai/commands/membership_end_plans.py`: S01-T01 only. S02's writers declare their own steps on this table, so they reuse `RELATIONSHIP_UPDATE_TRIGGERS` and `RELATIONSHIP_INSERT_TRIGGERS` and the waits on the two assignment indexes.
+  - `src/dnd_ai/domain/access.py` reader constants and `tests/unit/test_r01_authorization_structure.py`: S01-T02 (section 3.2 item 3a); S02-T02 adds its delegation table to `AUTHORITY_READER_TABLES` (S02 section 2.2 item 6).
   - Migrations: `150` (S01-T01), `151` (S02-T02). Each task revalidates the next free revision.
   - R01 registries and the generated manifest: S02-T01, S02-T02.
   - Docs: ACCESS_CONTROL, DATABASE_MODEL, tables.md, operations.md, this register.
@@ -487,7 +576,7 @@ Sonnet stopped on "an R01 declaration other than the named index changes". The t
 The C11 PR may merge only when all of these hold. They are the register rule; nothing is added.
 
 1. S01 and S02 are each independently reviewed, including the compatibility review in the C11 criteria, with any corrections confirmed.
-2. On the integration head, D1–D20 and E1–E27 (this plan) and F1–F32 and H1–H22 ([S02 plan](p15-c11-s02-control-changes-plan.md#6-acceptance-cases)) pass, with:
+2. On the integration head, D1–D21 (with D11b and D16b), G1–G4 (with G1-control) and E1–E36 (this plan) and F1–F33 and H1–H22 ([S02 plan](p15-c11-s02-control-changes-plan.md#6-acceptance-cases)) pass, with:
    - one full backend shard run on the final executable code;
    - the non-pytest checks (`ruff format --check`, `ruff check`, `mypy src`, `uv lock --check`, `alembic check`, `git diff --check`).
 
