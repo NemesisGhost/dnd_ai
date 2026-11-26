@@ -220,7 +220,6 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
     const [seenRefusal, setSeenRefusal] = useState<unknown>(null)
     const [seenView, setSeenView] = useState(view)
     const handledRefusal = useRef<unknown>(null)
-    const sectionRef = useRef<HTMLDivElement>(null)
     // Presentation only: which stages the author expanded (all start collapsed),
     // and the drag in progress. Neither is persisted or sent to the server.
     const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
@@ -272,12 +271,13 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
     )
 
     // Moves focus to the first of `ids` that can take it, after the current render. It never takes focus
-    // from where the person has put it: only from the page body, or from inside this section or a dialog
-    // (the closed form, the submitting control, the confirmation). A target in a section that is no
-    // longer shown cannot take focus, so a late answer never pulls focus back into it.
-    // `origin` is where focus was when the action began: focus still there has not been moved elsewhere.
+    // from where the person has put it. Focus is the action's own only if it is on the page body, still
+    // on the control the action began from (`origin`), or inside the form or dialog that control was in
+    // (which that action is closing). Another control, even in this section, or an unrelated dialog is
+    // not. A target in a section that is no longer shown cannot take focus either.
     // `own` is for a person's own answer to a dialog here (Keep it, Keep editing), which they have just made.
     function focusLater(ids: string[], origin: Element | null = document.activeElement, own = false) {
+        const scope = origin instanceof Element ? origin.closest("form, dialog") : null
         window.setTimeout(() => {
             const active = document.activeElement
             const ours =
@@ -285,8 +285,7 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                 active === null ||
                 active === document.body ||
                 active === origin ||
-                sectionRef.current?.contains(active) === true ||
-                active.closest("dialog") !== null
+                (scope !== null && scope.contains(active))
             if (!ours) return
             for (const id of ids) {
                 const target = document.getElementById(id)
@@ -569,7 +568,7 @@ export function QuestStructureEditor({ campaignId, view, options, refreshing, re
                 </p>
             ) : null}
 
-            <div className="authoring-section" ref={sectionRef}>
+            <div className="authoring-section">
                 {view.stages.length === 0 ? (
                     <p className="authoring-note">
                         This quest has no stages yet. A quest needs at least one stage with an

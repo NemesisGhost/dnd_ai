@@ -60,6 +60,9 @@ function watchAnnouncements(): string[] {
     return heard
 }
 
+// The focus timer a settlement schedules is zero-delay; one more zero-delay tick runs after it.
+const flushFocusTimer = () => act(async () => void (await new Promise((resolve) => setTimeout(resolve, 0))))
+
 const settle = () => act(async () => void (await new Promise((resolve) => setTimeout(resolve, 30))))
 
 describe("Quest objectives: where focus goes when a form closes", () => {
@@ -378,5 +381,88 @@ describe("Quest objectives: a removal whose answer was lost", () => {
         const [first, second] = server.callsTo("POST", O1_REMOVE)
         expect(second!.headers["Idempotency-Key"]).toBe(first!.headers["Idempotency-Key"])
         expect(second!.body).toEqual(first!.body)
+    })
+})
+
+describe("C10-S01-1: a late answer does not take focus from another control in the same section", () => {
+    const toggle = () => screen.getByRole("button", { name: /^1\. Opening/ })
+
+    function gated(server: ReturnType<typeof setupQuestWorkspace>["server"], path: string, answer: () => object) {
+        let release: () => void = () => {}
+        const gate = new Promise<void>((resolve) => (release = resolve))
+        server.on("POST", path, async () => {
+            await gate
+            return answer() as never
+        })
+        return () => release()
+    }
+
+    it("R1 keeps focus on the enabled stage toggle when an objective save settles", async () => {
+        const { server, commit } = setupQuestWorkspace()
+        const release = gated(server, O1_UPDATE, () => commit())
+        await expandAll()
+        const heard = watchAnnouncements()
+        fireEvent.click(await screen.findByRole("button", { name: "Edit objective Find the map" }))
+        fireEvent.change(within(editForm()).getByRole("textbox", { name: /Objective name/ }), { target: { value: "Find the old map" } })
+        fireEvent.click(within(editForm()).getByRole("button", { name: "Save objective" }))
+        await waitFor(() => expect(server.callsTo("POST", O1_UPDATE)).toHaveLength(1))
+        toggle().focus()
+        expect(toggle()).toHaveFocus()
+        await act(async () => release())
+        await waitFor(() => expect(screen.queryByRole("form", { name: "Edit objective" })).toBeNull())
+        await flushFocusTimer()
+        expect(toggle()).toHaveFocus()
+        expect(document.getElementById("objective-o1")).not.toHaveFocus()
+        await waitFor(() => expect(heard.filter((m) => m === "Objective saved")).toHaveLength(1))
+    })
+
+    it("R2 keeps focus on the stage toggle when a stage save settles", async () => {
+        const { server, commit } = setupQuestWorkspace()
+        const release = gated(server, `${QUEST}/stages/s1/update`, () => commit())
+        await expandAll()
+        fireEvent.click(await screen.findByRole("button", { name: "Edit stage Opening" }))
+        fireEvent.change(within(screen.getByRole("form", { name: "Edit stage" })).getByRole("textbox", { name: /Stage name/ }), { target: { value: "Opening act" } })
+        fireEvent.click(within(screen.getByRole("form", { name: "Edit stage" })).getByRole("button", { name: "Save stage" }))
+        await waitFor(() => expect(server.callsTo("POST", `${QUEST}/stages/s1/update`)).toHaveLength(1))
+        const other = screen.getByRole("button", { name: /(Expand|Collapse) all/ })
+        other.focus()
+        expect(other).toHaveFocus()
+        await act(async () => release())
+        await waitFor(() => expect(screen.queryByRole("form", { name: "Edit stage" })).toBeNull())
+        await flushFocusTimer()
+        expect(screen.getByRole("button", { name: /(Expand|Collapse) all/ })).toHaveFocus()
+    })
+
+    it("R3 keeps focus on the stage toggle when a removal settles", async () => {
+        const { server, commit } = setupQuestWorkspace()
+        const release = gated(server, O2_REMOVE, () =>
+            commit((d) => {
+                const stage = (d.stages as ReturnType<typeof questView>["stages"])[0]!
+                d.stages = [{ ...stage, objectives: [stage.objectives[0]] }]
+            }),
+        )
+        await expandAll()
+        fireEvent.click(await screen.findByRole("button", { name: "Remove objective Reach the ruin" }))
+        const dialog = await screen.findByRole("dialog", { name: "Remove this objective?" })
+        fireEvent.click(within(dialog).getByRole("button", { name: "Remove objective" }))
+        await waitFor(() => expect(server.callsTo("POST", O2_REMOVE)).toHaveLength(1))
+        toggle().focus()
+        await act(async () => release())
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove this objective?" })).toBeNull())
+        await flushFocusTimer()
+        expect(toggle()).toHaveFocus()
+        expect(document.getElementById("add-objective-s1")).not.toHaveFocus()
+    })
+
+    it("R4 still moves focus to the heading when the person has not moved it", async () => {
+        const { server, commit } = setupQuestWorkspace()
+        const release = gated(server, O1_UPDATE, () => commit())
+        await expandAll()
+        fireEvent.click(await screen.findByRole("button", { name: "Edit objective Find the map" }))
+        fireEvent.change(within(editForm()).getByRole("textbox", { name: /Objective name/ }), { target: { value: "Find the old map" } })
+        fireEvent.click(within(editForm()).getByRole("button", { name: "Save objective" }))
+        await waitFor(() => expect(server.callsTo("POST", O1_UPDATE)).toHaveLength(1))
+        await act(async () => release())
+        await waitFor(() => expect(document.getElementById("objective-o1")).toHaveFocus())
     })
 })
