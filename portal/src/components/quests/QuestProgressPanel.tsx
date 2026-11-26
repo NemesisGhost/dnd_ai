@@ -4,27 +4,18 @@ import { useSession } from "../../context/SessionContext"
 import { useAuthoringMutation } from "../../hooks/useAuthoringMutation"
 import type { RefreshOutcome } from "../../hooks/useAuthoringMutation"
 import { useAuthoringResource } from "../../hooks/useAuthoringResource"
+import type { QuestOutcomeView } from "../../types/questAuthoring"
 import type { QuestAction, QuestProgress, RuntimeCommand, RuntimeReceipt, ScopeProgress } from "../../types/questRuntime"
 import { combineRefetchOutcomes } from "../../utils/refreshOutcome"
 import { useAnnounce } from "../authoring/announcer"
 import { ConfirmDialog } from "../authoring/ConfirmDialog"
 import { MutationStatusMessage, StaleWriteNotice } from "../authoring/feedback"
+import { QuestFinishReview } from "./QuestFinishReview"
+import type { QuestOptionLabels } from "./QuestFinishReview"
+import { statusLabel } from "./questStatusLabel"
 import { useUnsavedReport } from "./useUnsavedReport"
 import type { ReportUnsaved } from "./useUnsavedReport"
 import "../authoring/authoring.css"
-
-const STATUS_LABEL: Readonly<Record<string, string>> = {
-    unavailable: "Not available",
-    available: "Available",
-    active: "Active",
-    suspended: "Suspended",
-    completed: "Completed",
-    failed: "Failed",
-    abandoned: "Abandoned",
-    hidden: "Hidden",
-    skipped: "Skipped",
-    superseded: "Replaced",
-}
 
 const ACTION_LABEL: Readonly<Record<QuestAction, string>> = {
     activate: "Activate quest",
@@ -50,11 +41,10 @@ const CODE_MESSAGE: Readonly<Record<string, string>> = {
     clock_required: "Set the campaign time first.",
 }
 
+const NO_LABELS: QuestOptionLabels = { outcomeCategories: [], rewardTypes: [] }
+
 // Finishing a quest is a decision the GM confirms; the rest act at once.
 const CONFIRMED: ReadonlySet<QuestAction> = new Set(["complete", "fail", "abandon"])
-
-const statusLabel = (status: string | null): string =>
-    status === null ? "Not started" : (STATUS_LABEL[status] ?? status)
 
 interface Props {
     campaignId: string
@@ -69,13 +59,27 @@ interface Props {
     // Called after a command succeeded and progress was read again, so the page reads what progress
     // decides (whether the structure is now locked) again too.
     onChanged?: () => Promise<RefreshOutcome> | void
+    // The quest's authored outcomes and rewards, and the words for their kinds, from the reads the page
+    // already holds. They are shown before finishing the quest as descriptions only: nothing here applies them.
+    // Omitted where the quest's definition cannot be read (the page's progress-only view for a campaign GM).
+    outcomes?: readonly QuestOutcomeView[]
+    optionLabels?: QuestOptionLabels
 }
 
 // How far the campaign and each party have got, and the explicit moves the GM can make. This is
 // timeline state under decision D-16: only these commands change it, and nothing completes a quest
 // by itself. It is separate from the quest's publication and from the authored stages. Mounted
 // only for editors, inside the Quest workspace.
-export function QuestProgressPanel({ campaignId, questId, blockedText, refreshToken, onUnsaved, onChanged }: Props) {
+export function QuestProgressPanel({
+    campaignId,
+    questId,
+    blockedText,
+    refreshToken,
+    onUnsaved,
+    onChanged,
+    outcomes,
+    optionLabels,
+}: Props) {
     const { reload } = useSession()
     const announce = useAnnounce()
     const { state, refetch } = useAuthoringResource<QuestProgress>(questProgressPath(campaignId, questId))
@@ -249,7 +253,16 @@ export function QuestProgressPanel({ campaignId, questId, blockedText, refreshTo
                     setNote("")
                     mutation.reset()
                 }}
-            />
+            >
+                {confirm === null ? null : (
+                    <QuestFinishReview
+                        scope={confirm.scope}
+                        action={confirm.action}
+                        outcomes={outcomes ?? null}
+                        labels={optionLabels ?? NO_LABELS}
+                    />
+                )}
+            </ConfirmDialog>
         </>
     )
 }
