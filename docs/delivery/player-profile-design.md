@@ -1262,6 +1262,19 @@ Review one slice per pass, naming the parent and target SHAs. Run the new tests 
 
 A5a passed independent re-review at `5cd7012fdc28dca36a68f15c3608960840c802f9`: the earlier parser blocker (an over-long decimal version segment escaping as `400 validation_failed`) is resolved; 742 independent focused tests and the static checks passed. The full-suite result of 7,721 passed belongs to the A5a commit `6123d9a`, not to the later heads. **CI on the current head is pending**; nothing here claims CI coverage. The prerequisite review gate of §13 for A5b is met.
 
+*Later scope transition (added 2026-11-26; the A5a record above is unchanged).* A5a's structural test `test_no_controller_capability_vocabulary_exists_in_the_application_or_the_seeds` enforced this design's §3 boundary: A5 adds no `character.view_player_profile` or `character.edit_player_profile` vocabulary, matrix entry or grant path. It was not a permanent prohibition, because §2 item 6 assigns `CONTROL_ASSIGNMENT_CAPABILITIES` and both codes to P03-B. P15-C11-S01-T02 delivers that matrix.
+
+The [S01 plan](p15-c11-s01-assignment-storage-plan.md) section 3.2 item 1a and R-17 therefore replace the test with a narrower guard (its E37), which:
+- allows the two codes only as set elements of the matrix declaration in `domain/access.py`;
+- lets only the resolver and the effective-access explanation name the matrix;
+- still rejects every other `src` use, every seed and every migration.
+
+Unchanged:
+- the database check that no `security.capabilities` row exists for either code;
+- the GM-only read rule.
+
+The controller read and edit, the vocabulary rows and any deny semantics remain P15-C12's, behind [profile-authority](work-register.md#profile-authority).
+
 ### A5b implementation record (2026-11-12)
 
 **Status: implemented, awaiting independent review (Codex Luna Medium). Not accepted, not run in CI, not pushed.** A5b delivers the database and read/save/release behaviour for the `player_profile` origin. **It adds no command that writes that origin**: A5a left no profile writer and the copy is A5c, so no application path creates a `player_profile` field yet. Tests seed it through `tests/player_profile_support.py`. A5b is infrastructure, not usable player authoring or publication.
