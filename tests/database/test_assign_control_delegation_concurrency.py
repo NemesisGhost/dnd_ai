@@ -50,6 +50,11 @@ from tests.database.test_control_assignment_concurrency import (  # noqa: F401 -
     _revoke_role,
     _together,
 )
+from tests.database.test_control_unique_wait_evidence import (
+    LIVE_DELEGATION,
+    constraint_of,
+    fk_checks_started,
+)
 from tests.database.test_r01_s5e2_membership_routes import Scene, waiting_statement
 from tests.factories import make_system_role_assignment, make_user
 from tests.http_race_support import (
@@ -365,11 +370,16 @@ def test_a_competing_delegation_for_the_same_grantee_is_a_unique_wait(
     s: Scene, env: Env, pooled: Engine, pooled_factory: Factory
 ) -> None:
     """*race*, `ux_character_assign_control_delegations_live` on the INSERT: a competing delegation for the same
-    grantee, inserted while the grant is parked at its audit insert (its row inserted, uncommitted), queues behind *the
+    grantee, inserted while the grant is parked at its audit insert (its row inserted, uncommitted), is blocked by *the
     request* (observed through `pg_blocking_pids`, the waiting statement is the competitor's INSERT) and, when the
-    request commits, fails on the unique index: one live delegation remains. Whether the competitor waits at its
-    foreign key on the grantee's `assistant_gm` row (which the grant holds `FOR UPDATE`) or at the index key is not
-    distinguishable from outside, and is not claimed: either way it can never produce a second live row."""
+    request commits, fails on the unique index naming `..._live`: one live delegation remains.
+
+    S02-R3 correction: the original record said the competitor's wait could not be told apart from a wait at its
+    foreign key on the `assistant_gm` row the grant holds `FOR UPDATE`. It can: the competitor has started no
+    foreign-key check while it waits (`fk_checks_started` is false here, and true for the same-parents
+    closed-delegation control in `test_control_unique_wait_evidence.py`), so it waits at the index insertion. The
+    step's own declared wait is shown in isolation by
+    `test_control_unique_wait_evidence.py::test_r3_each_insert_statement_waits_on_the_named_index_alone`."""
     role = assistant_row(s, env.assistant)
     with StatementGate(pooled, AUDIT_INSERT) as gate:
         request = run_in_thread(
@@ -392,11 +402,14 @@ def test_a_competing_delegation_for_the_same_grantee_is_a_unique_wait(
             )
             race.wait_blocked_by(gate, expected=1)
             assert "character_assign_control_delegations" in waiting_statement(s.w.engine, gate.pid)
+            assert queued.pid is not None
+            assert fk_checks_started(s.w.engine, queued.pid) is False
             gate.release()
             response = request.wait("the grant finishes")
             race.join_all()
     assert code(response) == 201, response.text
     assert isinstance(queued.error, IntegrityError), queued.error
+    assert constraint_of(queued.error) == LIVE_DELEGATION
     assert [row["live"] for row in delegations(s)] == [True]
 
 

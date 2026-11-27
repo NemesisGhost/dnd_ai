@@ -41,6 +41,12 @@ from tests.database.test_control_assignment_commands import (  # noqa: F401 - fi
     seed,
     state,
 )
+from tests.database.test_control_unique_wait_evidence import (
+    LIVE_ASSIGNMENT,
+    LIVE_PRIMARY,
+    constraint_of,
+    fk_checks_started,
+)
 from tests.database.test_r01_s2_profile_routes import (  # noqa: F401 - fixtures used by name
     pooled,
     pooled_factory,
@@ -101,8 +107,14 @@ def test_a_competing_live_primary_is_a_unique_wait(
 ) -> None:
     """*race*, `ux_membership_character_relationships_live_primary` on the INSERT: a competitor inserting a primary of
     another membership on the same character while the request is parked at its audit insert (its row inserted,
-    uncommitted) queues behind *the request* on the index key; when the request commits it fails on the unique index
-    (409-class), never a second live primary."""
+    uncommitted) is blocked by *the request*; when the request commits it fails on the unique index naming
+    `..._live_primary`, never a second live primary.
+
+    S02-R3 correction: "blocked by the request" alone does not name the wait (a same-parents competitor outside the
+    index is blocked too, at its foreign key: `test_control_unique_wait_evidence.py`). The competitor here has started
+    no foreign-key check while it waits (`fk_checks_started`), so it waits at the index insertion, and the violation
+    names the index. The declared wait of the step's own statement is shown in isolation by
+    `test_control_unique_wait_evidence.py::test_r3_each_insert_statement_waits_on_the_named_index_alone`."""
     path, body = _compete(s, env, route)
 
     def competitor(c: Any) -> Any:
@@ -123,11 +135,14 @@ def test_a_competing_live_primary_is_a_unique_wait(
             queued = race.start("insert", competitor)
             race.wait_blocked_by(gate, expected=1)
             assert re.search(r"INSERT INTO security\.", waiting_statement(s.w.engine, gate.pid))
+            assert queued.pid is not None
+            assert fk_checks_started(s.w.engine, queued.pid) is False
             gate.release()
             response = request.wait("the writer finishes")
             race.join_all()
     assert code(response) == 201, response.text
     assert isinstance(queued.error, IntegrityError), queued.error
+    assert constraint_of(queued.error) == LIVE_PRIMARY
     live = [r for r in state(s).rows if r[1] == "primary_controller" and not r[7]]
     assert len(live) == 1
 
@@ -137,8 +152,11 @@ def test_a_competing_live_assignment_is_a_unique_wait(
     s: Scene, env: Env, pooled: Engine, pooled_factory: Factory, route: str
 ) -> None:
     """*race*, `ux_membership_character_relationships_live_assignment` on the INSERT: a competitor inserting a second
-    assignment of the same membership on the same character queues behind the request on the index key and then fails
-    on the unique index."""
+    assignment of the same membership on the same character is blocked by the request and then fails on the unique
+    index naming `..._live_assignment`.
+
+    S02-R3 correction: as for the live primary, the competitor has started no foreign-key check while it waits, and the
+    violation names the index; the step's own wait is shown in isolation in `test_control_unique_wait_evidence.py`."""
     if route == "assign":
         path, body = assign_path(s, env.character), assign_body(env.p1, "co_controller")
     else:
@@ -163,11 +181,14 @@ def test_a_competing_live_assignment_is_a_unique_wait(
             queued = race.start("insert", competitor)
             race.wait_blocked_by(gate, expected=1)
             assert re.search(r"INSERT INTO security\.", waiting_statement(s.w.engine, gate.pid))
+            assert queued.pid is not None
+            assert fk_checks_started(s.w.engine, queued.pid) is False
             gate.release()
             response = request.wait("the writer finishes")
             race.join_all()
     assert code(response) == 201, response.text
     assert isinstance(queued.error, IntegrityError), queued.error
+    assert constraint_of(queued.error) == LIVE_ASSIGNMENT
     mine = [r for r in state(s).rows if r[2] == env.p1.membership and not r[7]]
     assert len(mine) == 1
 
