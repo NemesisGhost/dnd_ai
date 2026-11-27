@@ -88,9 +88,10 @@ def test_the_four_routes_are_the_e4_set_finalized_and_in_no_other_registry() -> 
 
 
 def test_the_inventory_is_187_finalized_0_pending_5_excluded() -> None:
-    # 187 at R01 E4; P15-C11-S02-T01 added its three keyed control-assignment routes: 190
+    # 187 at R01 E4; P15-C11-S02-T01 added its three keyed control-assignment routes: 190; T02 its two unkeyed
+    # delegation routes: 192
     assert (len(R01_FINALIZED_ROUTES), len(R01_PENDING_ROUTES), len(R01_EXCLUDED_WORLD_ROUTES)) == (
-        190,
+        192,
         0,
         5,
     )

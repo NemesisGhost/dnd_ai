@@ -1026,6 +1026,7 @@ class UnauthorizedTimelineError(DomainAuthorizationError):
 
 BUILTIN_CAMPAIGN_OWNER_ROLE_CODE = "campaign_owner"
 BUILTIN_CAMPAIGN_GM_ROLE_CODE = "gm"
+BUILTIN_CAMPAIGN_ASSISTANT_GM_ROLE_CODE = "assistant_gm"
 
 
 class IsolationLevelError(RuntimeError):
@@ -1065,7 +1066,7 @@ RevealAuthority = Literal["owner", "delegation", "none"]
 #: Who may assign character control in the route's campaign (P15-C11-S02-T01): a live built-in `campaign_owner`, a live
 #: built-in `gm`, or nobody. Read from the built-in role rows only, never from assignment- or clock-derived capabilities
 #: (S01 section 3.2 item 3a; F33).
-AssignControlAuthority = Literal["campaign_owner", "gm", "none"]
+AssignControlAuthority = Literal["campaign_owner", "gm", "delegation", "none"]
 
 
 @dataclass(frozen=True)
@@ -1105,9 +1106,11 @@ class AuthoritySnapshot:
     #: with no row lock. `None` unless declared (`with_account`).
     account_active: bool | None = None
     #: P15-C11-S02-T01: the caller's assign-control authority and the live built-in assignment row it comes from
-    #: (`None` when `none`). Both `None` unless declared (`with_assign_control`).
+    #: (`None` when `none`; for a delegation, the bound `assistant_gm` row). Both `None` unless declared
+    #: (`with_assign_control`). T02: `assign_control_delegation` is the live delegation the `delegation` source comes from.
     assign_control_authority: AssignControlAuthority | None = None
     assign_control_row: uuid.UUID | None = None
+    assign_control_delegation: uuid.UUID | None = None
 
 
 _LIVE_REVELATIONS_IN_STATEMENT_SQL = LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL.replace(
@@ -1531,10 +1534,13 @@ _SUBJECT_GM_COLUMNS = """
 """
 
 # Assign-control authority (P15-C11-S02-T01, lock `none`): a live built-in `campaign_owner` assignment; failing that, a
-# live built-in `gm` assignment. Expiry is judged at `t_auth`. It reads the built-in role rows and the caller's
-# membership and account, **nothing else**: no assignment table, no clock table, no capability table, so neither an
-# assignment, a clock nor a stored capability can confer it (F33). `assign_control_row` is the row the source comes
-# from (the owner's by preference, else the `gm`'s, the first by id), the row a pre-write plan locks.
+# live built-in `gm` assignment; failing that (T02, OD-4a), a live unrevoked assign-control delegation bound to a live
+# built-in `assistant_gm` assignment of the caller in this campaign. Expiry is judged at `t_auth`. It reads the built-in
+# role rows, the delegation table and the caller's membership and account, **nothing else**: no assignment table, no
+# clock table, no capability table, so neither an assignment, a clock nor a stored capability can confer it (F33).
+# `assign_control_row` is the row the source comes from (the owner's by preference, else the `gm`'s, else the bound
+# `assistant_gm` row; the first by id), the row a pre-write plan locks; `assign_control_delegation` is the delegation
+# row of the `delegation` source (the delegation row a pre-write plan locks next).
 _ASSIGN_CONTROL_CTES = f"""
     ac_live AS (
         SELECT mr.membership_role_id, r.code AS role_code
@@ -1558,23 +1564,63 @@ _ASSIGN_CONTROL_CTES = f"""
           AND ms.is_active
           AND uls.code = 'active'
     ),
+    ac_assistant AS (
+        SELECT mr.membership_role_id
+        FROM security.membership_roles mr
+        JOIN security.roles r ON r.role_id = mr.role_id
+        JOIN security.campaign_memberships cm
+          ON cm.campaign_membership_id = mr.campaign_membership_id
+        JOIN security.membership_statuses ms
+          ON ms.membership_status_id = cm.membership_status_id
+        JOIN security.users u ON u.user_id = cm.user_id
+        JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+        WHERE mr.campaign_membership_id = {_MEMBERSHIP}
+          AND cm.campaign_id = :campaign_id
+          AND r.campaign_id IS NULL
+          AND r.code = '{BUILTIN_CAMPAIGN_ASSISTANT_GM_ROLE_CODE}'
+          AND r.is_active
+          AND mr.revoked_at IS NULL
+          AND (mr.expires_at IS NULL OR mr.expires_at > {_T_AUTH})
+          AND cm.ended_at IS NULL
+          AND ms.code = 'active'
+          AND ms.is_active
+          AND uls.code = 'active'
+    ),
+    ac_delegation AS (
+        SELECT d.character_assign_control_delegation_id AS delegation_id,
+               d.assistant_gm_membership_role_id AS row_id
+        FROM security.character_assign_control_delegations d
+        WHERE d.campaign_id = :campaign_id
+          AND d.grantee_campaign_membership_id = {_MEMBERSHIP}
+          AND d.revoked_at IS NULL
+          AND d.assistant_gm_membership_role_id IN (SELECT membership_role_id FROM ac_assistant)
+        ORDER BY d.character_assign_control_delegation_id
+        LIMIT 1
+    ),
     assign_control AS (
         SELECT CASE
                    WHEN EXISTS (SELECT 1 FROM ac_live WHERE role_code = '{BUILTIN_CAMPAIGN_OWNER_ROLE_CODE}')
                        THEN 'campaign_owner'
                    WHEN EXISTS (SELECT 1 FROM ac_live WHERE role_code = '{BUILTIN_CAMPAIGN_GM_ROLE_CODE}')
                        THEN 'gm'
+                   WHEN EXISTS (SELECT 1 FROM ac_delegation) THEN 'delegation'
                    ELSE 'none'
                END AS source,
-               (SELECT membership_role_id FROM ac_live
-                ORDER BY (role_code <> '{BUILTIN_CAMPAIGN_OWNER_ROLE_CODE}'), membership_role_id
-                LIMIT 1) AS row_id
+               COALESCE(
+                   (SELECT membership_role_id FROM ac_live
+                    ORDER BY (role_code <> '{BUILTIN_CAMPAIGN_OWNER_ROLE_CODE}'), membership_role_id
+                    LIMIT 1),
+                   (SELECT row_id FROM ac_delegation)
+               ) AS row_id,
+               CASE WHEN NOT EXISTS (SELECT 1 FROM ac_live)
+                    THEN (SELECT delegation_id FROM ac_delegation) END AS delegation_id
     )
 """
 
 _ASSIGN_CONTROL_COLUMNS = """
         (SELECT source FROM assign_control) AS assign_control_source,
-        (SELECT row_id FROM assign_control) AS assign_control_row
+        (SELECT row_id FROM assign_control) AS assign_control_row,
+        (SELECT delegation_id FROM assign_control) AS assign_control_delegation
 """
 
 
@@ -1608,6 +1654,7 @@ AUTHORITY_READER_TABLES: Final[frozenset[str]] = frozenset(
         "security.capabilities",
         "security.character_relationship_type_capabilities",
         "security.character_relationship_types",
+        "security.character_assign_control_delegations",
         "security.character_reveal_delegations",
         "security.character_revelation_members",
         "security.character_revelations",
@@ -1775,6 +1822,11 @@ def read_authority_snapshot(
             if not with_assign_control or row["assign_control_row"] is None
             else _as_uuid(row["assign_control_row"])
         ),
+        assign_control_delegation=(
+            None
+            if not with_assign_control or row["assign_control_delegation"] is None
+            else _as_uuid(row["assign_control_delegation"])
+        ),
     )
 
 
@@ -1784,6 +1836,8 @@ def _assign_control_authority(row: RowMapping) -> AssignControlAuthority:
         return "campaign_owner"
     if source == "gm":
         return "gm"
+    if source == "delegation":
+        return "delegation"
     assert source == "none"
     return "none"
 

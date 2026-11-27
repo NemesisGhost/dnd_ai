@@ -97,12 +97,19 @@ def test_the_guards_refusal_rolls_back_the_dbapi_connection_but_never_commits_it
 
 
 def test_the_reader_constant_names_exactly_the_tables_the_statement_reads() -> None:
-    sql = _authority_snapshot_sql(instant="fresh", with_world=True, with_reveal=True)
+    # P15-C11-S02-T02: the assign-control component is the one that names the delegation table
+    sql = _authority_snapshot_sql(
+        instant="fresh", with_world=True, with_reveal=True, with_assign_control=True
+    )
     named = set(re.findall(r"(?:FROM|JOIN)\s+([a-z_]+\.[a-z_]+)", sql))
     assert named == AUTHORITY_READER_TABLES
     # R01 S5-E6: the recipient's `gm` source reads no table the statement did not already read
     with_subject = _authority_snapshot_sql(
-        instant="fresh", with_world=True, with_reveal=True, with_subject_gm=True
+        instant="fresh",
+        with_world=True,
+        with_reveal=True,
+        with_subject_gm=True,
+        with_assign_control=True,
     )
     assert (
         set(re.findall(r"(?:FROM|JOIN)\s+([a-z_]+\.[a-z_]+)", with_subject))

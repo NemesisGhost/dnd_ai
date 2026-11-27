@@ -33,6 +33,7 @@ from dnd_ai.domain.public_profiles import (
 from dnd_ai.domain.world_authority import WorldAuthority
 from tests.r01_manifest import (
     _C11S02_ROUTES,
+    _C11S02T02_ROUTES,
     _S3_ROUTES,
     _S4_ROUTES,
     _S4B_ROUTES,
@@ -70,6 +71,7 @@ S2_ROUTES = (
     - _S5E5_ROUTES
     - _S5E6_ROUTES
     - _C11S02_ROUTES  # P15-C11-S02-T01: checked by test_r01_c11_route_shape.py
+    - _C11S02T02_ROUTES  # P15-C11-S02-T02: checked by test_r01_c11_route_shape.py
     - E1_ROUTES
     - E2_ROUTES  # R01 E2: checked by test_r01_e2_route_shape.py
     - E3_ROUTES  # R01 E3: checked by test_r01_e3_route_shape.py

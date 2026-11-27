@@ -281,6 +281,7 @@ EXPECTED_TABLES = {
         "security.campaign_invitations",
         "security.campaign_memberships",
         "security.capabilities",
+        "security.character_assign_control_delegations",
         "security.character_relationship_type_capabilities",
         "security.character_relationship_types",
         "security.character_reveal_delegations",

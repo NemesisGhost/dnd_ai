@@ -13,6 +13,16 @@
 | `POST /campaigns/{campaign_id}/characters/{character_id}/control-assignments/replace-primary` | ReplaceRequest → 201 PrimaryReplacedResponse | campaign.view · assign-control authority · campaign receipt |
 | `POST /campaigns/{campaign_id}/control-assignments/{control_assignment_id}/revoke` | RevokeRequest (optional) → 200 AssignmentRevokedResponse | campaign.view · assign-control authority · campaign receipt |
 
+## Assign-control delegations
+
+[Handler and route-specific decisions](../../src/dnd_ai/api/assign_control_delegations.py) · [Contract](ACCESS_CONTROL.md#3aa-delegate-assign-control-to-an-assistant-gm-p15-c11-s02-t02)
+
+| Method and API path | Request → success | Entry checks / receipt |
+|---|---|---|
+| `GET /campaigns/{campaign_id}/assign-control-delegations` | — → 200 AssignControlDelegationsResponse | campaign.view · built-in owner or gm only (a delegated holder is refused), judged first · no lock |
+| `POST /campaigns/{campaign_id}/assign-control-delegations` | grantee_campaign_membership_id, reason → 201 (created) or 200 (already bound, `granted: false`) DelegateAssignControlResponse | campaign.view · built-in owner or gm only · unkeyed, naturally idempotent, no receipt |
+| `POST /campaigns/{campaign_id}/assign-control-delegations/{grantee_campaign_membership_id}/revoke` | reason → 200 RevokeAssignControlDelegationResponse (`revoked: false` is a no-op) | campaign.view · built-in owner or gm only · unkeyed, no receipt |
+
 ## Access grants
 
 [Handler and route-specific decisions](../../src/dnd_ai/api/access_grants.py)

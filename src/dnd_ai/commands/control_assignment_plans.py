@@ -8,10 +8,12 @@ the tests compare the routes with the stored rows.
 ## Authority
 
 `character.assign_control` is **not** a stored capability. It is held by a live built-in `campaign_owner` or `gm`
-assignment in the route's campaign (ADR 0021 OD-4; T02 adds the OD-4a delegation to an assistant GM). `access.manage`,
+assignment in the route's campaign (ADR 0021 OD-4), or by a live assign-control delegation bound to the holder's live
+built-in `assistant_gm` assignment (OD-4a, T02: `dnd_ai.commands.assign_control_delegation_plans`). `access.manage`,
 `canon.edit`, custom roles, resource grants and control assignments never confer it, and neither does anything the
 campaign clock decides: the authority component of the snapshot (`with_assign_control`) names no assignment table, no
-clock table and no capability table (F33).
+clock table and no capability table (F33). A delegated holder uses the three writers here and the read, and nothing
+more: the delegation routes themselves are refused to it (no redelegation).
 
 The route requirement is `campaign.view`. The operation authority is judged **before any target lookup**, so the
 refusal (403 `character_assign_control_required`, one fixed body) is identical for an existing and a missing
@@ -25,7 +27,7 @@ reservation `INSERT` (the actor's account KS; the campaign FK deferred) and ends
 
 | Writer | Locks |
 |---|---|
-| assign | caller's authority row(s) S; caller's membership S and the assignee's U (ascending id); caller's account S, the assignee's KS; **campaign U**; the relationship type row KS (by code); the character's entity row U (the anchor, taken even when no assignment exists); the character row KS; the character's live assignment rows U; the dated world-time rows KS; [receipt U] |
+| assign | caller's authority row(s) S (a delegated holder: the bound `assistant_gm` row S, then the delegation row S); caller's membership S and the assignee's U (ascending id); caller's account S, the assignee's KS; **campaign U**; the relationship type row KS (by code); the character's entity row U (the anchor, taken even when no assignment exists); the character row KS; the character's live assignment rows U; the dated world-time rows KS; [receipt U] |
 | replace | the same, with the old primary's membership U in the membership pass (ascending id; one lock when it is the assignee's) |
 | revoke | caller's authority row(s) S; caller's membership S and the revoked row's membership U; caller's account S; **campaign U**; the character's entity row U; the assignment row U (only while unrevoked; its evidence is the "this request revokes" fact); [receipt U] |
 
@@ -63,6 +65,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from sqlalchemy import Connection, bindparam, func, insert, select, text, update
 
 from dnd_ai.domain.access import (
+    BUILTIN_CAMPAIGN_ASSISTANT_GM_ROLE_CODE,
     BUILTIN_CAMPAIGN_GM_ROLE_CODE,
     BUILTIN_CAMPAIGN_OWNER_ROLE_CODE,
     AuthoritySnapshot,
@@ -84,6 +87,7 @@ from dnd_ai.domain.errors import DomainAuthorizationError, SafeMessageError
 from dnd_ai.persistence.tables.audit import change_log
 from dnd_ai.persistence.tables.security import (
     campaign_memberships,
+    character_assign_control_delegations,
     character_relationship_types,
     membership_character_relationships,
     membership_roles,
@@ -141,11 +145,13 @@ cm = campaign_memberships
 mcr = membership_character_relationships
 mr = membership_roles
 crt = character_relationship_types
+dl = character_assign_control_delegations
 
 _TABLE_NAME = "membership_character_relationships"
 _NOW = func.pg_catalog.clock_timestamp
 _OWNER_KIND = "campaign_owner"
 _GM_KIND = "gm"
+_DELEGATION_KIND = "delegation"
 
 
 # -- errors ---------------------------------------------------------------------------------------------
@@ -270,6 +276,18 @@ AUTHORITY_ROW_LOCK = PreLock(
     .where(mr.c.membership_role_id == bindparam("row"))
     .where(mr.c.campaign_membership_id == bindparam("membership"))
     .where(mr.c.revoked_at.is_(None))
+    .with_for_update(read=True),
+)
+#: A delegated holder's live delegation row, `FOR SHARE`, **bound to the row the unlocked discovery found** (bound
+#: `delegation`, `membership`), taken right after the bound `assistant_gm` row (T02, plan section 3.2: role class, then
+#: delegation class, before any membership). A revocation of the delegation waits for this transaction, or commits first
+#: and the request is refused after its wait.
+DELEGATION_ROW_LOCK = PreLock(
+    "assign_delegation_row_share",
+    select(dl.c.character_assign_control_delegation_id)
+    .where(dl.c.character_assign_control_delegation_id == bindparam("delegation"))
+    .where(dl.c.grantee_campaign_membership_id == bindparam("membership"))
+    .where(dl.c.revoked_at.is_(None))
     .with_for_update(read=True),
 )
 #: The old primary's membership, `FOR UPDATE` (replace; bound `campaign`, `target`). The same shape as the assignee's.
@@ -482,6 +500,7 @@ _UNLOCKED = CHANGE_LOG_UNLOCKED_FK_TARGETS
 
 _ASSIGN_LOCKS = (
     AUTHORITY_ROW_LOCK,
+    DELEGATION_ROW_LOCK,
     ACTOR_MEMBERSHIP_LOCK,
     TARGET_MEMBERSHIP_LOCK,
     ACTOR_ACCOUNT_LOCK,
@@ -506,6 +525,7 @@ ASSIGN_DECLARATIONS = ReservationDeclarations(
 )
 _REPLACE_LOCKS = (
     AUTHORITY_ROW_LOCK,
+    DELEGATION_ROW_LOCK,
     ACTOR_MEMBERSHIP_LOCK,
     TARGET_MEMBERSHIP_LOCK,
     OLD_PRIMARY_MEMBERSHIP_LOCK,
@@ -531,6 +551,7 @@ REPLACE_DECLARATIONS = ReservationDeclarations(
 )
 _REVOKE_LOCKS = (
     AUTHORITY_ROW_LOCK,
+    DELEGATION_ROW_LOCK,
     ACTOR_MEMBERSHIP_LOCK,
     TARGET_MEMBERSHIP_LOCK,
     ACTOR_ACCOUNT_LOCK,
@@ -557,11 +578,12 @@ def assign_control_requirement(
     campaign_id: uuid.UUID, actor_membership_id: uuid.UUID
 ) -> Requirement:
     """The operation's own authority, judged again at `finalize`'s one `t_auth`: the caller holds a live built-in
-    `campaign_owner` or `gm` assignment (the `assign_control` source of the same snapshot). Reads **only** that source:
-    never the caller's capabilities, assignments or the campaign clock (F33)."""
+    `campaign_owner` or `gm` assignment, or a live delegation bound to a live `assistant_gm` assignment (the
+    `assign_control` source of the same snapshot). Reads **only** that source: never the caller's capabilities,
+    assignments or the campaign clock (F33)."""
 
     def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
-        if snapshot.assign_control_authority in (_OWNER_KIND, _GM_KIND):
+        if snapshot.assign_control_authority in (_OWNER_KIND, _GM_KIND, _DELEGATION_KIND):
             return None
         return AssignControlRequiredError(
             f"membership {actor_membership_id} holds no live campaign_owner or gm assignment "
@@ -594,6 +616,35 @@ _DISCOVER_AUTHORITY_SQL = text(f"""
       AND uls.code = 'active'
     ORDER BY mr.membership_role_id
 """)  # noqa: S608 - the interpolated names are module constants
+
+# T02 (OD-4a): the caller's live delegation and the live built-in `assistant_gm` row it is bound to, at `:t`. The same
+# predicate as the snapshot component's `ac_assistant` and `ac_delegation` CTEs, read plainly (the lock follows).
+_DISCOVER_DELEGATED_SQL = text(f"""
+    SELECT d.character_assign_control_delegation_id AS delegation_id,
+           d.assistant_gm_membership_role_id AS role_row_id
+    FROM security.character_assign_control_delegations d
+    JOIN security.membership_roles mr ON mr.membership_role_id = d.assistant_gm_membership_role_id
+    JOIN security.roles r ON r.role_id = mr.role_id
+    JOIN security.campaign_memberships cm ON cm.campaign_membership_id = mr.campaign_membership_id
+    JOIN security.membership_statuses ms ON ms.membership_status_id = cm.membership_status_id
+    JOIN security.users u ON u.user_id = cm.user_id
+    JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+    WHERE d.grantee_campaign_membership_id = :caller
+      AND d.campaign_id = :campaign
+      AND d.revoked_at IS NULL
+      AND mr.campaign_membership_id = d.grantee_campaign_membership_id
+      AND cm.campaign_id = :campaign
+      AND r.campaign_id IS NULL
+      AND r.code = '{BUILTIN_CAMPAIGN_ASSISTANT_GM_ROLE_CODE}'
+      AND r.is_active
+      AND mr.revoked_at IS NULL
+      AND (mr.expires_at IS NULL OR mr.expires_at > :t)
+      AND cm.ended_at IS NULL
+      AND ms.code = 'active'
+      AND ms.is_active
+      AND uls.code = 'active'
+    ORDER BY d.character_assign_control_delegation_id
+""")  # noqa: S608 - the interpolated name is a module constant
 
 _LIVE_ASSIGNMENTS_SQL = text("""
     SELECT mcr.membership_character_relationship_id AS row_id, mcr.campaign_membership_id,
@@ -660,32 +711,164 @@ class ControlPrepared:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class HeldAuthority:
+    """What a request locked as its authority: the role rows (owner, `gm`, or the bound `assistant_gm` row) and the
+    delegation rows, `FOR SHARE`. A built-in row is authority by itself; a delegation counts only with both its own row
+    and the bound role row locked. `others` are the extra role rows a caller asked to lock in the same ascending pass
+    (the delegation grant's recipient row), and are never authority."""
+
+    role_rows: frozenset[uuid.UUID]
+    delegations: frozenset[uuid.UUID]
+    others: frozenset[uuid.UUID] = frozenset()
+
+
+@dataclass(frozen=True)
+class DiscoveredAuthority:
+    """The caller's candidate authority rows, found without a lock: the built-in owner and `gm` rows, and a delegated
+    holder's `(delegation, bound assistant_gm row)` pairs."""
+
+    built_in: list[uuid.UUID]
+    delegated: list[tuple[uuid.UUID, uuid.UUID]]
+
+
+def _discover_delegated(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    caller_membership_id: uuid.UUID,
+    as_of: datetime | None,
+) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    """The caller's live delegation and its bound live `assistant_gm` row (`(delegation, role row)`), ascending."""
+    instant = connection.execute(text("SELECT now()")).scalar_one() if as_of is None else as_of
+    return [
+        (row.delegation_id, row.role_row_id)
+        for row in connection.execute(
+            _DISCOVER_DELEGATED_SQL,
+            {"caller": caller_membership_id, "campaign": campaign_id, "t": instant},
+        )
+    ]
+
+
+def _usable(discovered: DiscoveredAuthority, held: HeldAuthority) -> bool:
+    return any(row in held.role_rows for row in discovered.built_in) or any(
+        role in held.role_rows and delegation in held.delegations
+        for delegation, role in discovered.delegated
+    )
+
+
+def _discover_authority(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    allow_delegation: bool,
+    as_of: datetime | None,
+) -> DiscoveredAuthority:
+    return DiscoveredAuthority(
+        built_in=_discover_authority_rows(
+            connection,
+            campaign_id=campaign_id,
+            caller_membership_id=actor_membership_id,
+            as_of=as_of,
+        ),
+        delegated=(
+            _discover_delegated(
+                connection,
+                campaign_id=campaign_id,
+                caller_membership_id=actor_membership_id,
+                as_of=as_of,
+            )
+            if allow_delegation
+            else []
+        ),
+    )
+
+
+def _discover_or_refuse(
+    connection: Connection,
+    *,
+    campaign_id: uuid.UUID,
+    actor_membership_id: uuid.UUID,
+    allow_delegation: bool = True,
+) -> DiscoveredAuthority:
+    """Discover (unlocked) the caller's authority rows; 403 before anything is locked when there are none."""
+    discovered = _discover_authority(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=actor_membership_id,
+        allow_delegation=allow_delegation,
+        as_of=None,
+    )
+    if not discovered.built_in and not discovered.delegated:
+        raise AssignControlRequiredError(
+            f"membership {actor_membership_id} holds no live owner or gm assignment in campaign {campaign_id}"
+        )
+    return discovered
+
+
+def _lock_authority(
+    connection: Connection,
+    plan: AuthorizationPlan,
+    *,
+    actor_membership_id: uuid.UUID,
+    discovered: DiscoveredAuthority,
+    others: tuple[tuple[uuid.UUID, PreLock, dict[str, Any]], ...] = (),
+) -> HeldAuthority:
+    """Lock the caller's authority rows: the role class first (the built-in rows, a delegated holder's bound
+    `assistant_gm` row and any `others`, **one ascending pass over all of them**, each at its own mode), then the
+    delegation row. 403 when none of the caller's rows survives its lock."""
+    wanted: dict[uuid.UUID, tuple[PreLock, dict[str, Any], bool]] = {}
+    for row_id in sorted({*discovered.built_in, *(role for _, role in discovered.delegated)}):
+        wanted[row_id] = (
+            AUTHORITY_ROW_LOCK,
+            {"row": row_id, "membership": actor_membership_id},
+            True,
+        )
+    for row_id, lock, binds in others:
+        wanted[row_id] = (lock, binds, False)
+    locked_roles: set[uuid.UUID] = set()
+    locked_others: set[uuid.UUID] = set()
+    for row_id in sorted(wanted):
+        lock, binds, is_authority = wanted[row_id]
+        if plan.lock(connection, lock, binds):
+            (locked_roles if is_authority else locked_others).add(row_id)
+    locked_delegations: set[uuid.UUID] = set()
+    for delegation, role in discovered.delegated:
+        if role in locked_roles and plan.lock(
+            connection,
+            DELEGATION_ROW_LOCK,
+            {"delegation": delegation, "membership": actor_membership_id},
+        ):
+            locked_delegations.add(delegation)
+    held = HeldAuthority(
+        frozenset(locked_roles), frozenset(locked_delegations), frozenset(locked_others)
+    )
+    if not _usable(discovered, held):
+        raise AssignControlRequiredError(
+            f"membership {actor_membership_id}'s authority rows were revoked while the request waited"
+        )
+    return held
+
+
 def _require_authority(
     connection: Connection,
     plan: AuthorizationPlan,
     *,
     campaign_id: uuid.UUID,
     actor_membership_id: uuid.UUID,
-) -> set[uuid.UUID]:
-    """Discover (unlocked) and lock the caller's authority rows. 403 before anything is locked when there are none."""
-    rows = _discover_authority_rows(
-        connection, campaign_id=campaign_id, caller_membership_id=actor_membership_id, as_of=None
+    allow_delegation: bool = True,
+) -> HeldAuthority:
+    """Discover and lock the caller's authority rows (the control writers' first step)."""
+    discovered = _discover_or_refuse(
+        connection,
+        campaign_id=campaign_id,
+        actor_membership_id=actor_membership_id,
+        allow_delegation=allow_delegation,
     )
-    if not rows:
-        raise AssignControlRequiredError(
-            f"membership {actor_membership_id} holds no live owner or gm assignment in campaign {campaign_id}"
-        )
-    locked: set[uuid.UUID] = set()
-    for row_id in rows:
-        if plan.lock(
-            connection, AUTHORITY_ROW_LOCK, {"row": row_id, "membership": actor_membership_id}
-        ):
-            locked.add(row_id)
-    if not locked:
-        raise AssignControlRequiredError(
-            f"membership {actor_membership_id}'s authority rows were revoked while the request waited"
-        )
-    return locked
+    return _lock_authority(
+        connection, plan, actor_membership_id=actor_membership_id, discovered=discovered
+    )
 
 
 def _rejudge_authority(
@@ -693,20 +876,22 @@ def _rejudge_authority(
     *,
     campaign_id: uuid.UUID,
     actor_membership_id: uuid.UUID,
-    locked: set[uuid.UUID],
+    locked: HeldAuthority,
+    allow_delegation: bool = True,
 ) -> None:
     """After the last lock wait, at a fresh database instant: the caller still holds a live authority row, and one that
     this request locked (a row that appeared after discovery is not held, so it cannot be relied on)."""
-    live = _discover_authority_rows(
+    live = _discover_authority(
         connection,
         campaign_id=campaign_id,
-        caller_membership_id=actor_membership_id,
+        actor_membership_id=actor_membership_id,
+        allow_delegation=allow_delegation,
         as_of=_database_clock(connection),
     )
-    if not any(row in locked for row in live):
+    if not _usable(live, locked):
         raise AssignControlRequiredError(
-            f"membership {actor_membership_id} no longer holds a live owner or gm assignment "
-            f"in campaign {campaign_id}"
+            f"membership {actor_membership_id} no longer holds a live owner, gm or delegated assignment "
+            f"authority in campaign {campaign_id}"
         )
 
 
@@ -1258,7 +1443,10 @@ __all__ = [
     "REPLACE_DECLARATIONS",
     "REVOKE_DECLARATIONS",
     "RECEIPT",
+    "AUTHORITY_ROW_LOCK",
     "AssignControlRequiredError",
+    "ControlAssignmentRequestError",
+    "HeldAuthority",
     "assign_control_requirement",
     "prepare_assign",
     "prepare_replace",

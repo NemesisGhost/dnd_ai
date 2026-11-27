@@ -1144,6 +1144,84 @@
   "unresolved": []
  },
  {
+  "audit": false,
+  "command_markers": {
+   "dnd_ai.commands.assign_control_delegation_plans.prepare_grant": [],
+   "dnd_ai.commands.assign_control_delegation_plans.write_grant": []
+  },
+  "command_scope_markers": [],
+  "command_writes": {
+   "dnd_ai.commands.assign_control_delegation_plans.prepare_grant": [],
+   "dnd_ai.commands.assign_control_delegation_plans.write_grant": []
+  },
+  "commands": [
+   "dnd_ai.commands.assign_control_delegation_plans.prepare_grant",
+   "dnd_ai.commands.assign_control_delegation_plans.write_grant"
+  ],
+  "dependencies": [
+   {
+    "allow_archived_campaign": false,
+    "allow_foundry_access": false,
+    "capability": "campaign.view",
+    "foundry_scope": null,
+    "kind": "campaign_capability",
+    "world_capability": null
+   }
+  ],
+  "early_commit": false,
+  "family": "access_management",
+  "handler": "dnd_ai.api.assign_control_delegations.delegate_character_assign_control_endpoint",
+  "idempotency": [],
+  "method": "POST",
+  "path": "/campaigns/{campaign_id}/assign-control-delegations",
+  "precheck_markers": [],
+  "route_markers": [
+   "reader:access_context",
+   "reader:world_authority",
+   "reader:world_capability"
+  ],
+  "unresolved": []
+ },
+ {
+  "audit": false,
+  "command_markers": {
+   "dnd_ai.commands.assign_control_delegation_plans.prepare_revoke": [],
+   "dnd_ai.commands.assign_control_delegation_plans.write_revoke": []
+  },
+  "command_scope_markers": [],
+  "command_writes": {
+   "dnd_ai.commands.assign_control_delegation_plans.prepare_revoke": [],
+   "dnd_ai.commands.assign_control_delegation_plans.write_revoke": []
+  },
+  "commands": [
+   "dnd_ai.commands.assign_control_delegation_plans.prepare_revoke",
+   "dnd_ai.commands.assign_control_delegation_plans.write_revoke"
+  ],
+  "dependencies": [
+   {
+    "allow_archived_campaign": false,
+    "allow_foundry_access": false,
+    "capability": "campaign.view",
+    "foundry_scope": null,
+    "kind": "campaign_capability",
+    "world_capability": null
+   }
+  ],
+  "early_commit": false,
+  "family": "access_management",
+  "handler": "dnd_ai.api.assign_control_delegations.revoke_character_assign_control_delegation_endpoint",
+  "idempotency": [],
+  "method": "POST",
+  "path": "/campaigns/{campaign_id}/assign-control-delegations/{grantee_campaign_membership_id}/revoke",
+  "precheck_markers": [],
+  "route_markers": [
+   "reader:access_context",
+   "reader:world_authority",
+   "reader:world_capability"
+  ],
+  "unresolved": []
+ },
+ {
   "audit": true,
   "command_markers": {
    "dnd_ai.commands.character_builds.create_character_build": [

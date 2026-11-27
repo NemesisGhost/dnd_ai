@@ -53,6 +53,7 @@ from .access_groups import router as access_groups_router
 from .access_overview import router as access_overview_router
 from .ai_npc import router as ai_npc_router
 from .ai_synthesis import router as ai_synthesis_router
+from .assign_control_delegations import router as assign_control_delegations_router
 from .audit_history import router as audit_history_router
 from .auth import dispose_jwks_client
 from .cache_control import NoStoreMiddleware
@@ -218,6 +219,7 @@ def create_app() -> FastAPI:
     app.include_router(location_authoring_router)
     app.include_router(character_reveal_router)
     app.include_router(control_assignments_router)
+    app.include_router(assign_control_delegations_router)
     app.include_router(character_revelations_router)
     app.include_router(character_public_profile_router)
     app.include_router(player_profiles_router)

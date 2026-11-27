@@ -10,7 +10,7 @@ the original receipt, a changed body under the same key is refused, every lock a
 every write and the receipt are declared steps after it. The body is taken as a plain mapping and validated after the
 authority is judged (403 before 422).
 
-The read is limited to the same holders (R-7) and takes no lock.
+The read is limited to the same holders (R-7: the built-in owner and `gm`, and a delegated assistant GM, T02) and takes no lock.
 """
 
 import uuid
@@ -321,7 +321,7 @@ def get_character_control_endpoint(
         campaign_id=campaign_id,
         with_assign_control=True,
     )
-    if snapshot.assign_control_authority not in ("campaign_owner", "gm"):
+    if snapshot.assign_control_authority not in ("campaign_owner", "gm", "delegation"):
         raise AssignControlRequiredError(
             f"membership {access.campaign_membership_id} holds no live owner or gm assignment "
             f"in campaign {campaign_id}"

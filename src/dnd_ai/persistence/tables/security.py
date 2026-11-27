@@ -1856,6 +1856,107 @@ Index(
 )
 
 # ---------------------------------------------------------------------------
+# Character assign-control delegations (revision 151)
+# ---------------------------------------------------------------------------
+
+character_assign_control_delegations = Table(
+    "character_assign_control_delegations",
+    metadata,
+    _uuid_pk("character_assign_control_delegation_id"),
+    Column(
+        "campaign_id",
+        UUID(),
+        ForeignKey("campaign.campaigns.campaign_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "grantee_campaign_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "assistant_gm_membership_role_id",
+        UUID(),
+        ForeignKey("security.membership_roles.membership_role_id", ondelete="CASCADE"),
+        nullable=False,
+        comment=(
+            "The grantee's built-in assistant_gm assignment this delegation is bound to. Immutable; "
+            "the delegation authorizes only while this exact row is live."
+        ),
+    ),
+    Column(
+        "granted_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),
+        comment=(
+            "The owner or GM membership that granted it. Provenance, not authority: the delegation "
+            "survives the grantor losing the role. NULL only if that membership row was "
+            "physically deleted."
+        ),
+    ),
+    Column("granted_at", TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")),
+    Column("reason", Text(), nullable=False),
+    Column("revoked_at", TIMESTAMP(timezone=True)),
+    Column(
+        "revoked_by_membership_id",
+        UUID(),
+        ForeignKey("security.campaign_memberships.campaign_membership_id", ondelete="SET NULL"),
+    ),
+    Column("revocation_reason", Text()),
+    Column(
+        "end_reason",
+        Text(),
+        comment=(
+            "Why the row was closed; NULL while it is live. revoked is an explicit revocation "
+            "(revoked_by_membership_id and revocation_reason set); assistant_gm_assignment_lapsed is "
+            "a later grant that found the bound assistant_gm assignment no longer live and closed "
+            "the row."
+        ),
+    ),
+    *_timestamps(),
+    schema="security",
+    comment=(
+        "A campaign owner's or GM's delegation of character.assign_control to a member holding the "
+        "built-in assistant_gm role (P15-C11-S02 OD-4a). Bound to the grantee's specific "
+        "assistant_gm assignment (assistant_gm_membership_role_id): it authorizes only while that "
+        "assignment is live, and losing it, ending the membership or regaining assistant GM status "
+        "later leaves it not in force, which needs a fresh row. Closed rows are kept as history "
+        "(never deleted by commands). One live row per grantee. Not a reveal delegation "
+        "(security.character_reveal_delegations)."
+    ),
+)
+
+Index(
+    "ix_character_assign_control_delegations_campaign_id",
+    character_assign_control_delegations.c.campaign_id,
+)
+Index(
+    "ix_character_assign_control_delegations_grantee",
+    character_assign_control_delegations.c.grantee_campaign_membership_id,
+)
+Index(
+    "ix_character_assign_control_delegations_assistant_role",
+    character_assign_control_delegations.c.assistant_gm_membership_role_id,
+)
+Index(
+    "ix_character_assign_control_delegations_granted_by",
+    character_assign_control_delegations.c.granted_by_membership_id,
+    postgresql_where=character_assign_control_delegations.c.granted_by_membership_id.isnot(None),
+)
+Index(
+    "ix_character_assign_control_delegations_revoked_by",
+    character_assign_control_delegations.c.revoked_by_membership_id,
+    postgresql_where=character_assign_control_delegations.c.revoked_by_membership_id.isnot(None),
+)
+Index(
+    "ux_character_assign_control_delegations_live",
+    character_assign_control_delegations.c.grantee_campaign_membership_id,
+    unique=True,
+    postgresql_where=character_assign_control_delegations.c.revoked_at.is_(None),
+)
+
+# ---------------------------------------------------------------------------
 # Character revelations (revision 145)
 # ---------------------------------------------------------------------------
 

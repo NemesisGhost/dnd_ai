@@ -1,6 +1,6 @@
 # PostgreSQL table inventory
 
-The imported [SQLAlchemy metadata](../../src/dnd_ai/persistence/tables/__init__.py) at `881786c` declares 228 tables in 12 populated schemas. Bootstrap also creates the reserved `import` schema. Alembic defines roles, triggers, functions, grants and revision history in addition to tables. The revision head is `150_control_assignments`. This is a source inventory. Compare a particular installation with Alembic on that database. [Logical model and invariants](../architecture/DATABASE_MODEL.md) · [Migrations](../../database/migrations/versions/)
+The imported [SQLAlchemy metadata](../../src/dnd_ai/persistence/tables/__init__.py) at `881786c` declares 229 tables in 12 populated schemas. Bootstrap also creates the reserved `import` schema. Alembic defines roles, triggers, functions, grants and revision history in addition to tables. The revision head is `151_assign_control_delegations`. This is a source inventory. Compare a particular installation with Alembic on that database. [Logical model and invariants](../architecture/DATABASE_MODEL.md) · [Migrations](../../database/migrations/versions/)
 
 ## Declared tables
 
@@ -48,7 +48,7 @@ Names below are qualified by the schema in each heading.
 
 ### security
 
-`access_group_memberships`, `access_groups`, `actor_idempotent_requests`, `browser_sessions`, `campaign_creation_reservations`, `campaign_invitations`, `campaign_memberships`, `capabilities`, `character_relationship_type_capabilities`, `character_relationship_types`, `character_reveal_delegations`, `character_revelation_members`, `character_revelations`, `external_identities`, `foundry_access_tokens`, `foundry_connections`, `foundry_devices`, `foundry_pairing_codes`, `idempotent_requests`, `invitation_onboarding_sessions`, `local_credentials`, `membership_character_relationships`, `membership_roles`, `membership_statuses`, `password_reset_tokens`, `resource_grants`, `revelation_audience_kinds`, `role_capabilities`, `roles`, `service_accounts`, `system_roles`, `timeline_bootstrap_grants`, `user_activation_tokens`, `user_portal_preferences`, `user_system_roles`, `users`, `world_memberships`, `world_roles`, `world_use_grants`.
+`access_group_memberships`, `access_groups`, `actor_idempotent_requests`, `browser_sessions`, `campaign_creation_reservations`, `campaign_invitations`, `campaign_memberships`, `capabilities`, `character_assign_control_delegations`, `character_relationship_type_capabilities`, `character_relationship_types`, `character_reveal_delegations`, `character_revelation_members`, `character_revelations`, `external_identities`, `foundry_access_tokens`, `foundry_connections`, `foundry_devices`, `foundry_pairing_codes`, `idempotent_requests`, `invitation_onboarding_sessions`, `local_credentials`, `membership_character_relationships`, `membership_roles`, `membership_statuses`, `password_reset_tokens`, `resource_grants`, `revelation_audience_kinds`, `role_capabilities`, `roles`, `service_accounts`, `system_roles`, `timeline_bootstrap_grants`, `user_activation_tokens`, `user_portal_preferences`, `user_system_roles`, `users`, `world_memberships`, `world_roles`, `world_use_grants`.
 
 ### world
 

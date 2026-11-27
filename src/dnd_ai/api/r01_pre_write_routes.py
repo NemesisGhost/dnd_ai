@@ -6,7 +6,7 @@ outcome (`ReservationDeclarations`). Every lock of the request is taken before `
 is a declared `plan.execute` step after it, and the reservation's campaign foreign key is deferred.
 
 The set grows only with a reviewed slice (S5-D: the two invitation routes; S5-E1: the three campaign
-lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4: resource grants and character relationships; S5-E5: the six access-group routes; S5-E6: the two reveal-delegation routes, unkeyed; P15-C11-S02: assign, replace and revoke control; S5-F onward: the rest).
+lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4: resource grants and character relationships; S5-E5: the six access-group routes; S5-E6: the two reveal-delegation routes, unkeyed; P15-C11-S02: assign, replace and revoke control (T01, keyed) and the two assign-control delegation routes (T02, unkeyed); S5-F onward: the rest).
 
 `R01_UNKEYED_PRE_WRITE_ROUTES` (S5-E2 ownership-transfer amendment, T4) is the registry of routes that open a
 pre-write plan with **one** declaration and no reservation: they are not idempotent, an `Idempotency-Key`
@@ -42,6 +42,12 @@ from dnd_ai.commands.access_group_plans import (
 )
 from dnd_ai.commands.access_group_plans import (
     UPDATE_DECLARATIONS as UPDATE_GROUP_DECLARATIONS,
+)
+from dnd_ai.commands.assign_control_delegation_plans import (
+    GRANT_DECLARATION as GRANT_ASSIGN_CONTROL_DELEGATION_DECLARATION,
+)
+from dnd_ai.commands.assign_control_delegation_plans import (
+    REVOKE_DECLARATION as REVOKE_ASSIGN_CONTROL_DELEGATION_DECLARATION,
 )
 from dnd_ai.commands.campaign_invitation_plans import CREATE_DECLARATIONS, REVOKE_DECLARATIONS
 from dnd_ai.commands.campaign_lifecycle_plans import (
@@ -171,6 +177,14 @@ R01_UNKEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], PreWriteDeclaration
                 "POST",
                 "/campaigns/{campaign_id}/reveal-delegations/{grantee_campaign_membership_id}/revoke",
             ): REVOKE_REVEAL_DELEGATION_DECLARATION,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/assign-control-delegations",
+            ): GRANT_ASSIGN_CONTROL_DELEGATION_DECLARATION,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/assign-control-delegations/{grantee_campaign_membership_id}/revoke",
+            ): REVOKE_ASSIGN_CONTROL_DELEGATION_DECLARATION,
         }
     )
 )

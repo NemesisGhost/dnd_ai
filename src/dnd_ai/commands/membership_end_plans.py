@@ -342,6 +342,12 @@ GRANT_TRIGGERS = frozenset(
             "9334dcfb854da2b93743ae815823e661",
         ),
         _pin(
+            "tr_resource_grants_reject_assign_control",
+            "security",
+            "reject_character_assign_control_capability_row",
+            "b975fb781bd972df91e08e3fb00485df",
+        ),
+        _pin(
             "tr_resource_grants_reject_view_public_profile",
             "security",
             "reject_view_public_profile_capability_row",

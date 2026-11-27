@@ -1,10 +1,10 @@
 # HTTP API
 
-At `881786c` the registered FastAPI handlers and OpenAPI described 348 distinct method/path operations on 333 distinct paths; P15-C02-S03 adds one read (`GET /campaigns/{campaign_id}/reveal-delegations`, on an existing path), so they described 349 distinct method/path operations on 333 distinct paths; P15-C11-S02-T01 adds the four control-assignment operations (three writes and one read, on three new paths), so they now describe **353 distinct method/path operations on 336 distinct paths**. A GET and a POST on the same path count separately. The 192 writes in the bounded R01 inventory use a different scope. Paths below are backend paths. The portal's development proxy removes the leading `/api` from ordinary API requests and preserves `/auth`.
+At `881786c` the registered FastAPI handlers and OpenAPI described 348 distinct method/path operations on 333 distinct paths; P15-C02-S03 adds one read (`GET /campaigns/{campaign_id}/reveal-delegations`, on an existing path), so they described 349 distinct method/path operations on 333 distinct paths; P15-C11-S02-T01 adds the four control-assignment operations (three writes and one read, on three new paths), P15-C11-S02-T02 adds the three assign-control delegation operations (two writes and one read, on two new paths), so they now describe **356 distinct method/path operations on 338 distinct paths**. A GET and a POST on the same path count separately. The 192 writes in the bounded R01 inventory use a different scope. Paths below are backend paths. The portal's development proxy removes the leading `/api` from ordinary API requests and preserves `/auth`.
 
 | Contract family | Catalog | Additional policy |
 |---|---|---|
-| Identity, invitations, membership, sharing, audit and profiles | [79 operations](identity-and-access.md) | [Access and account contracts](ACCESS_CONTROL.md) · [Audit history](../reference/audit-history.md) |
+| Identity, invitations, membership, sharing, audit and profiles | [82 operations](identity-and-access.md) | [Access and account contracts](ACCESS_CONTROL.md) · [Audit history](../reference/audit-history.md) |
 | World setup, lifecycle and typed content | [157 operations](world-and-authoring.md) | [Lifecycle and command rules](../ENTITY_LIFECYCLE.md) |
 | Session operation, state, reads, AI, reference corpus and Foundry | [117 operations](play-and-integrations.md) | [Audience-filtered reads](READ_API.md) · [Character sheets](CHARACTER_SHEET.md) · [Runtime integrations](../reference/runtime.md) |
 

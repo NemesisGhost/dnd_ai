@@ -30,8 +30,8 @@ from tests.scenario.phase15_route_manifest import CAMPAIGN, FOUNDRY_PERMITTED, E
 pytestmark = pytest.mark.scenario
 
 # Pinned on purpose: adding or removing a route changes these and forces a conscious update.
-EXPECTED_GUARDED = 252  # (+4 in P15-C11-S02-T01: the control-assignment read, assign, replace and revoke routes) (+1 in P15-C02-S03: the read-only reveal-delegation state GET, access.manage) (+1 in A5c: the player-profile copy route) 194 Phase 15 (incl. the clock cause-choices read, CP-9b, (incl. session-scoped travel and the area runtime projection) + 45 earlier-phase GM routes (two are Knowledge preview reads; one is campaign ownership transfer; two are the character.reveal delegation grant and revoke) + 2 world-scoped
-EXPECTED_PHASE15_GM = 201  # +1 in P15-C11-S02-T01: the control-assignment revoke route; +1 in A5c: the player-profile copy route
+EXPECTED_GUARDED = 255  # (+3 in P15-C11-S02-T02: the assign-control delegation read, grant and revoke routes) (+4 in P15-C11-S02-T01: the control-assignment read, assign, replace and revoke routes) (+1 in P15-C02-S03: the read-only reveal-delegation state GET, access.manage) (+1 in A5c: the player-profile copy route) 194 Phase 15 (incl. the clock cause-choices read, CP-9b, (incl. session-scoped travel and the area runtime projection) + 45 earlier-phase GM routes (two are Knowledge preview reads; one is campaign ownership transfer; two are the character.reveal delegation grant and revoke) + 2 world-scoped
+EXPECTED_PHASE15_GM = 204  # +3 in P15-C11-S02-T02: the assign-control delegation read, grant and revoke routes; +1 in P15-C11-S02-T01: the control-assignment revoke route; +1 in A5c: the player-profile copy route
 # 25 + the character's party list + the party roster + the World category counts + the character's reader relationships
 # + the location children read (P15-C08-S01)
 EXPECTED_MEMBER_READS = 35

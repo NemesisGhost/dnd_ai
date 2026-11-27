@@ -359,7 +359,7 @@ def classify(record: dict[str, Any]) -> str:
         return ENGINE_TWO_PHASE
     if (str(record.get("method")), str(record.get("path"))) in E3_ROUTES:
         return ENGINE_CLAIM_WORK
-    if (str(record.get("method")), str(record.get("path"))) in _C11S02_ROUTES:
+    if (str(record.get("method")), str(record.get("path"))) in _C11S02_ROUTES | _C11S02T02_ROUTES:
         return "access_management"
     if record["early_commit"]:
         return "engine_early_commit"
@@ -673,6 +673,20 @@ _C11S02_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: P15-C11-S02-T02 migrates the two assign-control delegation routes: **unkeyed pre-write** plans
+#: (`R01_UNKEYED_PRE_WRITE_ROUTES`, `dnd_ai.commands.assign_control_delegation_plans`). They write
+#: `security.character_assign_control_delegations`, a table the authority statement reads, so they belong to the
+#: pre-write access-management family (`classify()` returns `access_management`), with no reviewed post-write exemption.
+_C11S02T02_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/assign-control-delegations"),
+        (
+            "POST",
+            _CAMPAIGN + "/assign-control-delegations/{grantee_campaign_membership_id}/revoke",
+        ),
+    }
+)
+
 #: R01 E1 migrates the proposal-review route: an **unkeyed post-write** plan on the request-owned transaction
 #: (`dnd_ai.commands.ai_proposals.review_proposed_change`, `lock_operation_scope` first). It calls the operation
 #: scope helper but is **not** an operation-scope route for the reservation opt-in: it has no reservation, so it
@@ -750,6 +764,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S5E5_ROUTES
     | _S5E6_ROUTES
     | _C11S02_ROUTES
+    | _C11S02T02_ROUTES
     | E1_ROUTES
     | E2_ROUTES
     | E3_ROUTES

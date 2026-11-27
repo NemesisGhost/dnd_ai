@@ -42,6 +42,8 @@ R01_FINALIZED_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("POST", "/campaigns/{campaign_id}/ai/proposed-changes/{ai_proposed_change_id}/review"),
         ("POST", "/campaigns/{campaign_id}/ai/synthesis"),
         ("POST", "/campaigns/{campaign_id}/archive"),
+        ("POST", "/campaigns/{campaign_id}/assign-control-delegations"),
+        ("POST", "/campaigns/{campaign_id}/assign-control-delegations/{grantee_campaign_membership_id}/revoke"),
         ("POST", "/campaigns/{campaign_id}/authoring/characters/{character_id}/builds"),
         ("POST", "/campaigns/{campaign_id}/authoring/characters/{character_id}/builds/{build_id}/activate"),
         ("POST", "/campaigns/{campaign_id}/authoring/characters/{character_id}/state/initialize"),

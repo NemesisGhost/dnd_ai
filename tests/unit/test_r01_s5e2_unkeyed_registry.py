@@ -19,7 +19,7 @@ from dnd_ai.api.r01_pre_write_routes import (
 from dnd_ai.api.r01_route_plans import UnclassifiedRouteError, begin_route_plan
 from dnd_ai.commands import membership_role_plans as plans
 from dnd_ai.domain.authorization_steps import PreWriteDeclaration
-from tests.r01_manifest import _S5E6_ROUTES
+from tests.r01_manifest import _C11S02T02_ROUTES, _S5E6_ROUTES
 
 pytestmark = pytest.mark.unit
 
@@ -30,7 +30,8 @@ UUID = "00000000-0000-0000-0000-000000000000"
 def test_the_registry_holds_exactly_the_transfer_route_and_the_two_reveal_delegation_routes() -> (
     None
 ):
-    assert set(R01_UNKEYED_PRE_WRITE_ROUTES) == {TRANSFER, *_S5E6_ROUTES}
+    # P15-C11-S02-T02 added the two assign-control delegation routes (unkeyed pre-write)
+    assert set(R01_UNKEYED_PRE_WRITE_ROUTES) == {TRANSFER, *_S5E6_ROUTES, *_C11S02T02_ROUTES}
     declaration = R01_UNKEYED_PRE_WRITE_ROUTES[TRANSFER]
     assert declaration is plans.TRANSFER_DECLARATION
     assert isinstance(declaration, PreWriteDeclaration) and not declaration.replay

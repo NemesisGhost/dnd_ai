@@ -58,6 +58,9 @@ _GM_FAMILIES: dict[str, tuple[str, str, bool]] = {
     # P15-C11-S02-T01: revoke a control assignment (the assign and replace routes sit under `characters`); the
     # operation authority is the built-in owner or `gm` (`character.assign_control`), never a stored capability
     "control-assignments": ("control assignment revoke", "character.assign_control", True),
+    # P15-C11-S02-T02: delegate and revoke `character.assign_control` to an assistant GM, and read the delegations; the
+    # operation authority is the built-in owner or `gm` (a delegated holder is refused), never a stored capability
+    "assign-control-delegations": ("assign-control delegation", "character.assign_control", True),
     "character-relationships": ("character-relationship administration", "access.manage", True),
     "resource-grants": ("resource grants", "access.manage", False),
     "access-groups": ("access groups", "access.manage", False),

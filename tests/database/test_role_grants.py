@@ -252,6 +252,8 @@ MANAGED_TABLES = [
     ("security", "world_use_grants"),
     # P03-A A1 reveal delegations (migration 141)
     ("security", "character_reveal_delegations"),
+    # P15-C11-S02-T02 assign-control delegations (migration 151)
+    ("security", "character_assign_control_delegations"),
     # P03-A A2a public-profile origins lookup (migration 142)
     ("campaign", "public_profile_field_origins"),
     # P03-A A3a revelation audience-kind lookup (migration 145)
