@@ -528,6 +528,9 @@ class Requirement:
     perspective: tuple[uuid.UUID, uuid.UUID] | None = None
     #: R01 E3-D5: whether the snapshot must carry the caller's account lifecycle (`AuthoritySnapshot.account_active`).
     account: bool = False
+    #: P15-C11-S02-T01: whether the snapshot must carry the caller's assign-control authority
+    #: (`AuthoritySnapshot.assign_control_authority`), read from the built-in role rows only.
+    assign_control: bool = False
 
 
 @dataclass(frozen=True)
@@ -1115,6 +1118,7 @@ class AuthorizationPlan:
                 subject_gm_membership_id=next(iter(gm_subjects)) if gm_subjects else None,
                 perspective=next(iter(perspectives)) if perspectives else None,
                 with_account=any(r.account for r in self._requirements),
+                with_assign_control=any(r.assign_control for r in self._requirements),
                 as_of=FRESH_INSTANT,
             )
         finally:

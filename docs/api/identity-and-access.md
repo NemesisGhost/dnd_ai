@@ -2,6 +2,17 @@
 
 [HTTP catalog and common refusal/transaction rules](operations.md). The wire column names the JSON body and documented success response. A dash indicates no JSON request body. Check OpenAPI for path, header and query parameters. The gate column lists declared entry checks and known receipt stores. A handler can apply additional target and audience restrictions.
 
+## Control assignments
+
+[Handler and route-specific decisions](../../src/dnd_ai/api/control_assignments.py) · [Contract](ACCESS_CONTROL.md#3z-assign-replace-and-revoke-control-p15-c11-s02-t01)
+
+| Method and API path | Request → success | Entry checks / receipt |
+|---|---|---|
+| `GET /campaigns/{campaign_id}/characters/{character_id}/control-assignments` | — → 200 CharacterControlResponse | campaign.view · assign-control authority (built-in owner or gm), judged before any character lookup · no lock |
+| `POST /campaigns/{campaign_id}/characters/{character_id}/control-assignments` | AssignRequest → 201 AssignmentCreatedResponse | campaign.view · assign-control authority · campaign receipt |
+| `POST /campaigns/{campaign_id}/characters/{character_id}/control-assignments/replace-primary` | ReplaceRequest → 201 PrimaryReplacedResponse | campaign.view · assign-control authority · campaign receipt |
+| `POST /campaigns/{campaign_id}/control-assignments/{control_assignment_id}/revoke` | RevokeRequest (optional) → 200 AssignmentRevokedResponse | campaign.view · assign-control authority · campaign receipt |
+
 ## Access grants
 
 [Handler and route-specific decisions](../../src/dnd_ai/api/access_grants.py)

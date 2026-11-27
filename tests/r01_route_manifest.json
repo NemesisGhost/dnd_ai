@@ -5124,6 +5124,96 @@
   "unresolved": []
  },
  {
+  "audit": false,
+  "command_markers": {
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.control_assignment_plans.prepare_assign": [],
+   "dnd_ai.commands.control_assignment_plans.write_assign": []
+  },
+  "command_scope_markers": [],
+  "command_writes": {
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.control_assignment_plans.prepare_assign": [],
+   "dnd_ai.commands.control_assignment_plans.write_assign": []
+  },
+  "commands": [
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.control_assignment_plans.prepare_assign",
+   "dnd_ai.commands.control_assignment_plans.write_assign"
+  ],
+  "dependencies": [
+   {
+    "allow_archived_campaign": false,
+    "allow_foundry_access": false,
+    "capability": "campaign.view",
+    "foundry_scope": null,
+    "kind": "campaign_capability",
+    "world_capability": null
+   }
+  ],
+  "early_commit": false,
+  "family": "access_management",
+  "handler": "dnd_ai.api.control_assignments.assign_character_control_endpoint",
+  "idempotency": [
+   "idempotency:campaign"
+  ],
+  "method": "POST",
+  "path": "/campaigns/{campaign_id}/characters/{character_id}/control-assignments",
+  "precheck_markers": [],
+  "route_markers": [
+   "idempotency:campaign",
+   "reader:access_context",
+   "reader:world_authority",
+   "reader:world_capability"
+  ],
+  "unresolved": []
+ },
+ {
+  "audit": false,
+  "command_markers": {
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.control_assignment_plans.prepare_replace": [],
+   "dnd_ai.commands.control_assignment_plans.write_replace": []
+  },
+  "command_scope_markers": [],
+  "command_writes": {
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.control_assignment_plans.prepare_replace": [],
+   "dnd_ai.commands.control_assignment_plans.write_replace": []
+  },
+  "commands": [
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.control_assignment_plans.prepare_replace",
+   "dnd_ai.commands.control_assignment_plans.write_replace"
+  ],
+  "dependencies": [
+   {
+    "allow_archived_campaign": false,
+    "allow_foundry_access": false,
+    "capability": "campaign.view",
+    "foundry_scope": null,
+    "kind": "campaign_capability",
+    "world_capability": null
+   }
+  ],
+  "early_commit": false,
+  "family": "access_management",
+  "handler": "dnd_ai.api.control_assignments.replace_primary_controller_endpoint",
+  "idempotency": [
+   "idempotency:campaign"
+  ],
+  "method": "POST",
+  "path": "/campaigns/{campaign_id}/characters/{character_id}/control-assignments/replace-primary",
+  "precheck_markers": [],
+  "route_markers": [
+   "idempotency:campaign",
+   "reader:access_context",
+   "reader:world_authority",
+   "reader:world_capability"
+  ],
+  "unresolved": []
+ },
+ {
   "audit": true,
   "command_markers": {
    "dnd_ai.commands.character_state._adjust_hit_points_impl": []
@@ -5813,6 +5903,51 @@
   "unresolved": [
    "command"
   ]
+ },
+ {
+  "audit": false,
+  "command_markers": {
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.control_assignment_plans.prepare_revoke": [],
+   "dnd_ai.commands.control_assignment_plans.write_revoke": []
+  },
+  "command_scope_markers": [],
+  "command_writes": {
+   "dnd_ai.commands._pre_write_steps.receipt_params": [],
+   "dnd_ai.commands.control_assignment_plans.prepare_revoke": [],
+   "dnd_ai.commands.control_assignment_plans.write_revoke": []
+  },
+  "commands": [
+   "dnd_ai.commands._pre_write_steps.receipt_params",
+   "dnd_ai.commands.control_assignment_plans.prepare_revoke",
+   "dnd_ai.commands.control_assignment_plans.write_revoke"
+  ],
+  "dependencies": [
+   {
+    "allow_archived_campaign": false,
+    "allow_foundry_access": false,
+    "capability": "campaign.view",
+    "foundry_scope": null,
+    "kind": "campaign_capability",
+    "world_capability": null
+   }
+  ],
+  "early_commit": false,
+  "family": "access_management",
+  "handler": "dnd_ai.api.control_assignments.revoke_character_control_endpoint",
+  "idempotency": [
+   "idempotency:campaign"
+  ],
+  "method": "POST",
+  "path": "/campaigns/{campaign_id}/control-assignments/{control_assignment_id}/revoke",
+  "precheck_markers": [],
+  "route_markers": [
+   "idempotency:campaign",
+   "reader:access_context",
+   "reader:world_authority",
+   "reader:world_capability"
+  ],
+  "unresolved": []
  },
  {
   "audit": true,

@@ -6,7 +6,7 @@ outcome (`ReservationDeclarations`). Every lock of the request is taken before `
 is a declared `plan.execute` step after it, and the reservation's campaign foreign key is deferred.
 
 The set grows only with a reviewed slice (S5-D: the two invitation routes; S5-E1: the three campaign
-lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4: resource grants and character relationships; S5-E5: the six access-group routes; S5-E6: the two reveal-delegation routes, unkeyed; S5-F onward: the rest).
+lifecycle routes; S5-E2: add member and the four role operations; S5-E3: end membership; S5-E4: resource grants and character relationships; S5-E5: the six access-group routes; S5-E6: the two reveal-delegation routes, unkeyed; P15-C11-S02: assign, replace and revoke control; S5-F onward: the rest).
 
 `R01_UNKEYED_PRE_WRITE_ROUTES` (S5-E2 ownership-transfer amendment, T4) is the registry of routes that open a
 pre-write plan with **one** declaration and no reservation: they are not idempotent, an `Idempotency-Key`
@@ -48,6 +48,15 @@ from dnd_ai.commands.campaign_lifecycle_plans import (
     ARCHIVE_DECLARATIONS,
     REACTIVATE_DECLARATIONS,
     UPDATE_DECLARATIONS,
+)
+from dnd_ai.commands.control_assignment_plans import (
+    ASSIGN_DECLARATIONS as ASSIGN_CONTROL_DECLARATIONS,
+)
+from dnd_ai.commands.control_assignment_plans import (
+    REPLACE_DECLARATIONS as REPLACE_PRIMARY_DECLARATIONS,
+)
+from dnd_ai.commands.control_assignment_plans import (
+    REVOKE_DECLARATIONS as REVOKE_CONTROL_DECLARATIONS,
 )
 from dnd_ai.commands.membership_end_plans import END_DECLARATIONS
 from dnd_ai.commands.membership_role_plans import (
@@ -108,6 +117,18 @@ R01_KEYED_PRE_WRITE_ROUTES: Final[Mapping[tuple[str, str], ReservationDeclaratio
                 "POST",
                 "/campaigns/{campaign_id}/character-relationships/{membership_character_relationship_id}/revoke",
             ): REVOKE_RELATIONSHIP_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/characters/{character_id}/control-assignments",
+            ): ASSIGN_CONTROL_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/characters/{character_id}/control-assignments/replace-primary",
+            ): REPLACE_PRIMARY_DECLARATIONS,
+            (
+                "POST",
+                "/campaigns/{campaign_id}/control-assignments/{control_assignment_id}/revoke",
+            ): REVOKE_CONTROL_DECLARATIONS,
             ("POST", "/campaigns/{campaign_id}/resource-grants"): CREATE_GRANT_DECLARATIONS,
             (
                 "POST",

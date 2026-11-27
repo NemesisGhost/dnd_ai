@@ -50,6 +50,7 @@ def judged_requirement(
     gm_subject: uuid.UUID | None = None,
     perspective: tuple[uuid.UUID, uuid.UUID] | None = None,
     account: bool = False,
+    assign_control: bool = False,
 ) -> Requirement:
     """A requirement that holds when `decide(snapshot)` is `None` and otherwise refuses with the
     exception `decide` returned. `world_id`, `reveal` and `gm_subject` declare the extra sources `decide` reads."""
@@ -63,4 +64,5 @@ def judged_requirement(
         gm_subject=gm_subject,
         perspective=perspective,
         account=account,
+        assign_control=assign_control,
     )

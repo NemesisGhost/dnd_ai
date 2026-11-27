@@ -91,7 +91,8 @@ def test_the_two_routes_are_the_s5e6_set_finalized_unkeyed_and_no_longer_pending
     # R01 E1 (plan 6.45) migrated the proposal-review route (180 / 7); R01 E2 (plan 6.48) the two AI
     # provider routes: 182 finalized, 5 pending; R01 E3 (plan 6.51) the Foundry combat sync: 183 finalized, 4 pending
     # R01 E4 (plan 6.54) the four reference-corpus routes: 187 finalized, 0 pending
-    assert len(R01_FINALIZED_ROUTES) == 187 and len(R01_PENDING_ROUTES) == 0
+    # 187 at R01 E4; 190 with the three P15-C11-S02-T01 control-assignment routes
+    assert len(R01_FINALIZED_ROUTES) == 190 and len(R01_PENDING_ROUTES) == 0
     # S5-F bookkeeping: the five world routes are the explicit exclusions, neither finalized nor pending
     assert len([r for r in R01_EXCLUDED_WORLD_ROUTES if r[1].startswith("/worlds/")]) == 5
     assert not [r for r in R01_PENDING_ROUTES if r[1].startswith("/worlds/")]

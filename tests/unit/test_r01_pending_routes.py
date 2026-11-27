@@ -28,6 +28,9 @@ from dnd_ai.api.r01_pending_routes import (
 )
 from dnd_ai.api.r01_route_plans import UnclassifiedRouteError, route_is_pending
 from tests.r01_manifest import (
+    _C11S02_ROUTES as C11S02_ROUTES,
+)
+from tests.r01_manifest import (
     _S3_ROUTES as S3_ROUTES,
 )
 from tests.r01_manifest import (
@@ -120,8 +123,9 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
     the 5 world routes are the explicit planned exclusions (neither finalized nor pending) and the 8 engine routes stay pending."""
     # R01 E1 (plan 6.45): the proposal-review route moved from pending to finalized: 180 / 7 / 5.
     # R01 E2 (plan 6.48): the two AI provider routes moved the same way: 182 / 5 / 5; R01 E3: the Foundry combat
-    # sync did too: 183 / 4 / 5; R01 E4 (plan 6.54) the four reference-corpus routes: 187 / 0 / 5.
-    assert len(R01_FINALIZED_ROUTES) == 187
+    # sync did too: 183 / 4 / 5; R01 E4 (plan 6.54) the four reference-corpus routes: 187 / 0 / 5; P15-C11-S02-T01
+    # (the three keyed control-assignment routes): 190 / 0 / 5.
+    assert len(R01_FINALIZED_ROUTES) == 190
     assert len(R01_PENDING_ROUTES) == 0 and len(R01_EXCLUDED_WORLD_ROUTES) == 5
     assert set(R01_FINALIZED_ROUTES) >= E4_ROUTES and len(E4_ROUTES) == 4
     assert set(R01_FINALIZED_ROUTES) >= E3_ROUTES and len(E3_ROUTES) == 1
@@ -142,6 +146,7 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
         | S5E4_ROUTES
         | S5E5_ROUTES
         | S5E6_ROUTES
+        | C11S02_ROUTES
         | E1_ROUTES
         | E2_ROUTES
         | E3_ROUTES
@@ -175,6 +180,9 @@ def test_the_finalized_routes_are_s2s_six_s3s_71_s4s_54_s4bs_21_s5ds_5_s5e1s_3_s
     assert set(R01_FINALIZED_ROUTES) >= S5E4_ROUTES
     assert len(S5E6_ROUTES) == 2
     assert set(R01_FINALIZED_ROUTES) >= S5E6_ROUTES
+    # P15-C11-S02-T01: the three keyed control-assignment routes (pre-write, access management)
+    assert len(C11S02_ROUTES) == 3
+    assert set(R01_FINALIZED_ROUTES) >= C11S02_ROUTES
     assert not S5E6_ROUTES & (
         S5E5_ROUTES
         | S5E4_ROUTES
@@ -221,9 +229,8 @@ def test_the_pending_counts_by_family_are_pinned() -> None:
         dict(Counter(R01_PENDING_ROUTES.values())) == {}
     )  # R01 E4: nothing is pending in production
     records = Counter(str(r["family"]) for r in _inside())
-    assert records["access_management"] == 32, (
-        "S5-E5 removed the duplicated members decorator (B-4)"
-    )
+    # 32 at S5-E5 (which removed the duplicated members decorator, B-4) + the three P15-C11-S02-T01 control routes
+    assert records["access_management"] == 35
     duplicated = [
         key
         for key, count in Counter((str(r["method"]), str(r["path"])) for r in _inside()).items()

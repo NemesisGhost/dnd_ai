@@ -359,6 +359,8 @@ def classify(record: dict[str, Any]) -> str:
         return ENGINE_TWO_PHASE
     if (str(record.get("method")), str(record.get("path"))) in E3_ROUTES:
         return ENGINE_CLAIM_WORK
+    if (str(record.get("method")), str(record.get("path"))) in _C11S02_ROUTES:
+        return "access_management"
     if record["early_commit"]:
         return "engine_early_commit"
     scope = set(record["command_scope_markers"]) | set(record["precheck_markers"])
@@ -658,6 +660,19 @@ _S5E6_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+#: P15-C11-S02-T01 migrates the three control-assignment writers, **keyed** pre-write plans
+#: (`dnd_ai.commands.control_assignment_plans`, `R01_KEYED_PRE_WRITE_ROUTES`). Their route requirement is only
+#: `campaign.view`; the operation authority (`character.assign_control`, the built-in owner and `gm`) is a plan
+#: requirement. They write `security.membership_character_relationships`, a table the authority statement reads, so
+#: they belong to the pre-write access-management family and `classify()` returns `access_management` for them.
+_C11S02_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", _CAMPAIGN + "/characters/{character_id}/control-assignments"),
+        ("POST", _CAMPAIGN + "/characters/{character_id}/control-assignments/replace-primary"),
+        ("POST", _CAMPAIGN + "/control-assignments/{control_assignment_id}/revoke"),
+    }
+)
+
 #: R01 E1 migrates the proposal-review route: an **unkeyed post-write** plan on the request-owned transaction
 #: (`dnd_ai.commands.ai_proposals.review_proposed_change`, `lock_operation_scope` first). It calls the operation
 #: scope helper but is **not** an operation-scope route for the reservation opt-in: it has no reservation, so it
@@ -734,6 +749,7 @@ MIGRATED_ROUTES: frozenset[tuple[str, str]] = (
     | _S5E4_ROUTES
     | _S5E5_ROUTES
     | _S5E6_ROUTES
+    | _C11S02_ROUTES
     | E1_ROUTES
     | E2_ROUTES
     | E3_ROUTES

@@ -55,6 +55,9 @@ _GM_FAMILIES: dict[str, tuple[str, str, bool]] = {
     "memberships": ("memberships and roles", "access.manage", False),
     "ownership-transfer": ("campaign ownership transfer", "access.manage", False),
     "reveal-delegations": ("character reveal delegation", "access.manage", False),
+    # P15-C11-S02-T01: revoke a control assignment (the assign and replace routes sit under `characters`); the
+    # operation authority is the built-in owner or `gm` (`character.assign_control`), never a stored capability
+    "control-assignments": ("control assignment revoke", "character.assign_control", True),
     "character-relationships": ("character-relationship administration", "access.manage", True),
     "resource-grants": ("resource grants", "access.manage", False),
     "access-groups": ("access groups", "access.manage", False),

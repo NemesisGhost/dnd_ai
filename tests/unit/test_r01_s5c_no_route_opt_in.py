@@ -56,6 +56,7 @@ _S5D_ADOPTERS = {
         "commands/access_group_plans.py",
         "commands/campaign_invitation_plans.py",
         "commands/campaign_lifecycle_plans.py",
+        "commands/control_assignment_plans.py",
         "commands/membership_end_plans.py",
         "commands/membership_role_plans.py",
     },

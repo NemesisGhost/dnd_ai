@@ -1062,6 +1062,11 @@ Instant = datetime | _FreshInstant | None
 
 RevealAuthority = Literal["owner", "delegation", "none"]
 
+#: Who may assign character control in the route's campaign (P15-C11-S02-T01): a live built-in `campaign_owner`, a live
+#: built-in `gm`, or nobody. Read from the built-in role rows only, never from assignment- or clock-derived capabilities
+#: (S01 section 3.2 item 3a; F33).
+AssignControlAuthority = Literal["campaign_owner", "gm", "none"]
+
 
 @dataclass(frozen=True)
 class PerspectiveResult:
@@ -1099,6 +1104,10 @@ class AuthoritySnapshot:
     #: R01 E3-D5: whether the caller's account is `active` at the snapshot, from the same statement and MVCC snapshot,
     #: with no row lock. `None` unless declared (`with_account`).
     account_active: bool | None = None
+    #: P15-C11-S02-T01: the caller's assign-control authority and the live built-in assignment row it comes from
+    #: (`None` when `none`). Both `None` unless declared (`with_assign_control`).
+    assign_control_authority: AssignControlAuthority | None = None
+    assign_control_row: uuid.UUID | None = None
 
 
 _LIVE_REVELATIONS_IN_STATEMENT_SQL = LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL.replace(
@@ -1521,6 +1530,53 @@ _SUBJECT_GM_COLUMNS = """
         (SELECT membership_role_id FROM subject_gm) AS subject_gm_assignment
 """
 
+# Assign-control authority (P15-C11-S02-T01, lock `none`): a live built-in `campaign_owner` assignment; failing that, a
+# live built-in `gm` assignment. Expiry is judged at `t_auth`. It reads the built-in role rows and the caller's
+# membership and account, **nothing else**: no assignment table, no clock table, no capability table, so neither an
+# assignment, a clock nor a stored capability can confer it (F33). `assign_control_row` is the row the source comes
+# from (the owner's by preference, else the `gm`'s, the first by id), the row a pre-write plan locks.
+_ASSIGN_CONTROL_CTES = f"""
+    ac_live AS (
+        SELECT mr.membership_role_id, r.code AS role_code
+        FROM security.membership_roles mr
+        JOIN security.roles r ON r.role_id = mr.role_id
+        JOIN security.campaign_memberships cm
+          ON cm.campaign_membership_id = mr.campaign_membership_id
+        JOIN security.membership_statuses ms
+          ON ms.membership_status_id = cm.membership_status_id
+        JOIN security.users u ON u.user_id = cm.user_id
+        JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+        WHERE mr.campaign_membership_id = {_MEMBERSHIP}
+          AND cm.campaign_id = :campaign_id
+          AND r.campaign_id IS NULL
+          AND r.code IN ('{BUILTIN_CAMPAIGN_OWNER_ROLE_CODE}', '{BUILTIN_CAMPAIGN_GM_ROLE_CODE}')
+          AND r.is_active
+          AND mr.revoked_at IS NULL
+          AND (mr.expires_at IS NULL OR mr.expires_at > {_T_AUTH})
+          AND cm.ended_at IS NULL
+          AND ms.code = 'active'
+          AND ms.is_active
+          AND uls.code = 'active'
+    ),
+    assign_control AS (
+        SELECT CASE
+                   WHEN EXISTS (SELECT 1 FROM ac_live WHERE role_code = '{BUILTIN_CAMPAIGN_OWNER_ROLE_CODE}')
+                       THEN 'campaign_owner'
+                   WHEN EXISTS (SELECT 1 FROM ac_live WHERE role_code = '{BUILTIN_CAMPAIGN_GM_ROLE_CODE}')
+                       THEN 'gm'
+                   ELSE 'none'
+               END AS source,
+               (SELECT membership_role_id FROM ac_live
+                ORDER BY (role_code <> '{BUILTIN_CAMPAIGN_OWNER_ROLE_CODE}'), membership_role_id
+                LIMIT 1) AS row_id
+    )
+"""
+
+_ASSIGN_CONTROL_COLUMNS = """
+        (SELECT source FROM assign_control) AS assign_control_source,
+        (SELECT row_id FROM assign_control) AS assign_control_row
+"""
+
 
 #: Every table the single-statement authority reader reads (the access, world-authority and
 #: reveal-authority sources). A post-write plan is valid only for a request that writes none of them,
@@ -1595,6 +1651,7 @@ def _authority_snapshot_sql(
     with_subject_gm: bool = False,
     with_perspective: bool = False,
     with_account: bool = False,
+    with_assign_control: bool = False,
 ) -> str:
     ctes = [f"clock AS MATERIALIZED (SELECT {_INSTANT_SQL[instant]} AS t_auth)", _ACCESS_CTES]
     columns = [
@@ -1616,6 +1673,9 @@ def _authority_snapshot_sql(
     if with_account:
         ctes.append(_ACCOUNT_CTES)
         columns.append(_ACCOUNT_COLUMNS)
+    if with_assign_control:
+        ctes.append(_ASSIGN_CONTROL_CTES)
+        columns.append(_ASSIGN_CONTROL_COLUMNS)
     return "WITH " + ",\n".join(part.strip() for part in ctes) + "\nSELECT " + ",\n".join(columns)
 
 
@@ -1630,11 +1690,13 @@ def read_authority_snapshot(
     subject_gm_membership_id: uuid.UUID | None = None,
     perspective: tuple[uuid.UUID, uuid.UUID] | None = None,
     with_account: bool = False,
+    with_assign_control: bool = False,
     as_of: Instant = None,
 ) -> AuthoritySnapshot:
     """Read the declared authority sources in ONE statement and return them with the instant expiry
     was judged at (plan sections 3 and 6.1). Always declared: the caller's access to the campaign.
-    Optionally: the caller's authority over `world_id`, and the caller's reveal authority
+    Optionally: the caller's authority over `world_id`, the caller's assign-control authority
+    (`with_assign_control`), and the caller's reveal authority
     (`with_reveal`), and the live built-in `gm` assignment of `subject_gm_membership_id` (R01 S5-E6). No row locks
     are taken.
 
@@ -1655,6 +1717,7 @@ def read_authority_snapshot(
         with_subject_gm=subject_gm_membership_id is not None,
         with_perspective=perspective is not None,
         with_account=with_account,
+        with_assign_control=with_assign_control,
     )
     parameters: dict[str, object] = {"campaign_id": campaign_id, "user_id": user_id}
     if instant == "explicit":
@@ -1706,7 +1769,23 @@ def read_authority_snapshot(
         if perspective is not None
         else None,
         account_active=bool(row["account_active"]) if with_account else None,
+        assign_control_authority=_assign_control_authority(row) if with_assign_control else None,
+        assign_control_row=(
+            None
+            if not with_assign_control or row["assign_control_row"] is None
+            else _as_uuid(row["assign_control_row"])
+        ),
     )
+
+
+def _assign_control_authority(row: RowMapping) -> AssignControlAuthority:
+    source = _as_str(row["assign_control_source"])
+    if source == "campaign_owner":
+        return "campaign_owner"
+    if source == "gm":
+        return "gm"
+    assert source == "none"
+    return "none"
 
 
 def _world_authority_from_row(
