@@ -717,7 +717,7 @@ The clock/E36 supplement ran 8 files: 265 passed, 1 failure, the documented cloc
 The C11 PR may merge only when all of these hold. They are the register rule; nothing is added.
 
 1. S01 and S02 are each independently reviewed, including the compatibility review in the C11 criteria, with any corrections confirmed.
-2. On the integration head, D1–D21 (with D11b and D16b), G1–G4 (with G1-control) and E1–E37 (this plan) and F1–F33 and H1–H22 ([S02 plan](p15-c11-s02-control-changes-plan.md#6-acceptance-cases)) pass, with:
+2. On the integration head, D1–D21 (with D11b and D16b), G1–G4 (with G1-control) and E1–E37 (this plan) and F1–F38, H1–H26 and W1–W4 (the S02 correction cases added 2026-11-27) ([S02 plan](p15-c11-s02-control-changes-plan.md#6-acceptance-cases)) pass, with:
    - one full backend shard run on the final executable code;
    - the non-pytest checks (`ruff format --check`, `ruff check`, `mypy src`, `uv lock --check`, `alembic check`, `git diff --check`).
 

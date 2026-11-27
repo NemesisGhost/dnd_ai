@@ -124,6 +124,13 @@ Pin the sequence in the plan declarations and in the route-shape test. If any re
 - `gm_operated`: true when no assignment is in effect (ADR §2.6: "controller: none (GM-operated)");
 - `clock`: set or not, plus its display;
 - `assignments`: every row for this character in this campaign, newest first, at most 200 with `truncated`. Each has its id, role, kind and membership. Ongoing rows read "ongoing since `granted_at`" and never carry a fictional date. Dated rows carry their period's displays. Each row carries a status (`in_effect`, `upcoming`, `ended`, `undetermined` (no clock), `revoked`), `granted_at`/`granted_by`, and `revoked_at`/`revoked_by`/`revocation_reason`. Status is derived from the same in-effect rule as S01's `asgn` CTE (a shared SQL fragment).
+- *Clarified 2026-11-27 (correction S02-R1).* "One snapshot" means one SQL statement after the route's campaign gate. It embeds the authority statement (`build_authority_statement` with the assign-control component) and, in that statement:
+  - reads the effective clock (`CAMPAIGN_CLOCK_CTE`) and the clock's display row;
+  - reads every status (the shared fragment) and the history, with each period's display rows.
+
+  The response's decision is judged from that statement's row, in the gate's refusal order. The history is read only when that statement's authority source is a holder's.
+
+  The contract is statement coherence, not commit-time serialization: a change committed after the statement does not retract its response. No row lock is taken, and the response shape, ordering and the 200-row bound are unchanged.
 
 **Documentation.**
 - [identity-and-access.md](../api/identity-and-access.md) rows for the four operations, and the counts in [operations.md](../api/operations.md).
@@ -162,6 +169,15 @@ There are no lifecycle hooks. When the role ends, the delegation simply stops be
 **Rules.**
 - **Grantor and revoker.** A caller with a live built-in `campaign_owner` or `gm` assignment in this campaign. A delegated holder is refused 403: no redelegation. `access.manage` and custom roles are refused too.
 - **Recipient.** An active membership of this campaign with a live built-in `assistant_gm` row. Otherwise 409 `assign_control_recipient_not_assistant_gm`; another campaign's membership is 404.
+  - *Final-recipient instant (clarified 2026-11-27, correction S02-R2).* The recipient is judged again by `plan.finalize`'s one statement, after the grantor and at the same `t_auth`. That statement must find:
+    - the membership of this campaign, open and active;
+    - its account, active;
+    - the bound built-in `assistant_gm` assignment, unrevoked, unexpired at `t_auth`, with its role active;
+    - that assignment equal to the row the grant locked.
+
+    The mechanism is an opt-in snapshot source declared by a requirement (`Requirement.assistant_gm_subject`, `AuthoritySnapshot.subject_assistant_gm_assignment`), the `subject_gm` predicate with the role code changed. The plain read after the last wait stays an early check. It is never the final word, and no other plain pre-finalization query substitutes for this check.
+
+    Grantor checks, campaign binding, refusal order (grantor 403 before recipient 409), audit atomicity and the lock order are unchanged. This clarifies the existing eligibility rule and adds no scope.
 - **Reasons.** Required on grant and on revoke (422 when blank or too long).
 - **Lapsed rows.** A grant that finds a live row bound to a lapsed role row closes it (`end_reason = 'assistant_gm_assignment_lapsed'`) before inserting.
 - **Revocation scope.** Revoking leaves every assignment the holder made unchanged and in force (T86).
@@ -270,6 +286,24 @@ There are no lifecycle hooks. When the role ends, the delegation simply stops be
 | H21 | Delegations read: owner and GM see live and closed rows with status, reasons and actors; anyone else 403 | fails |
 | H22 | Migration 151 upgrade leaves every existing row unchanged and creates no delegation; downgrade removes the table, guard and capability row; reveal delegations are untouched | fails |
 
+**Corrections S02-R1 to S02-R3 (added 2026-11-27; review record in section 11.4, correction record in section 11.5).** Baseline column: the correction baseline `7339d3e8e89692b01d47f890a76fdb8467ede22d` code.
+
+| ID | Case (file) | Finding | Baseline |
+|---|---|---|---|
+| F34 | Role revoked and committed while the read is parked before the statement that reads the history: the fixed 403, no history (`test_control_assignment_read_snapshot.py`) | R1 | fails (200 with the history) |
+| F35 | Clock moved t10 → t20 while the read is parked before that statement: the display and every status come from one snapshot, here (t20, `ended`, not listed) | R1 | fails ((t10, `ended`)) |
+| F36 | *Controls.* A role revoke, or a clock move, committed right **after** that statement ran. The response is the statement's own: 200 with the history, or (t10, `in_effect`). Statement coherence, not commit-time serialization | R1 | **guard** (passes) |
+| F37 | One statement: exactly one statement after the route gate carries the assign-control authority, and it also reads `campaign_clock`, `core.world_times` and the history. Nothing runs after it, and no statement takes a row lock. It replaces F28's boundary argument | R1 | fails |
+| F38 | The displayed clock equals `resolve_membership_clock` for six clock shapes: own root clock, none, branch inheriting below the branch point, bounded at it, unset parent, own branch clock | R1 | **guard** |
+| H23 | The recipient's `assistant_gm` row is live at the eligibility read and expired at the final statement. The request's own bound instant is asserted to be before the expiry, otherwise the case is inconclusive. Result: 409 not-assistant, no delegation, no audit (`test_assign_control_delegation_recipient_final.py`) | R2 | fails (201) |
+| H24 | The recipient's account is deactivated (committed without waiting: the grant does not lock it) while the grant is parked before `finalize`: 409, nothing written | R2 | fails (201) |
+| H25 | Requirement capture: the grant's `finalize` judges the grantor, then the recipient, and its snapshot carries the bound row. The revoke declares no recipient. A unit test (`tests/unit/test_s02_r2_recipient_requirement.py`) adds three checks: the requirement's decisions; the new source reads no new table; the source is the `subject_gm` predicate with the role code changed | R2 | fails |
+| H26 | *Guards.* The gated grant succeeds with no change, and a recipient membership suspension waits for the grant (the existing `FOR NO KEY UPDATE` protection) | R2 | **guard** |
+| W1 | Statement isolation, for each of five step/index pairs (assign and replace × live primary and live assignment; the delegation INSERT × live delegation). The step's own statement waits on another connection's uncommitted competing key, for that transaction id, with no foreign-key check started. The competitor commits: a unique violation naming the index. The competitor rolls back: success (`test_control_unique_wait_evidence.py`) | R3 | **guard** (the evidence was missing, not the behaviour) |
+| W2 | Same-parents control for each pair: the competitor's key is outside the index's predicate, and the step completes under `lock_timeout` with no wait | R3 | **guard** |
+| W3 | Route controls: a same-parents competitor outside the index, behind a parked assign and a parked grant, is blocked by the request's pid (the old observation) **at its foreign key** (`fk_checks_started` true), and completes | R3 | **guard**: shows why the old observation was not discriminating |
+| W4 | The three declared route tests (`test_a_competing_live_primary_is_a_unique_wait`, `..._live_assignment_...`, `test_a_competing_delegation_for_the_same_grantee_is_a_unique_wait`) additionally assert `fk_checks_started` false while the competitor waits, and the violation's constraint name | R3 | **guard** |
+
 **Structural (not acceptance cases).**
 - `tests/unit/test_r01_c11_route_shape.py` pins:
   - the three keyed and two unkeyed registrations;
@@ -302,6 +336,13 @@ There are no lifecycle hooks. When the role ends, the delegation simply stops be
 | N8 | Delegation revoke also revokes the holder's assignments | H13 |
 | N9 | Drop the campaign filter from delegation resolution | H10 |
 | N10 | Remove the `role_capabilities` guard | H12 |
+| N11 (S02-R1, added 2026-11-27) | Split the snapshot: judge the read's authority from an earlier `read_authority_snapshot` and read the history without the statement's holder filter | F34, F37 |
+| N12 (S02-R1) | Display the clock from a separate `resolve_membership_clock` statement after the read's statement | F36 (clock control), F37 |
+| N13 (S02-R2) | Omit the recipient final requirement | H23, H24, H25 |
+| N14 (S02-R2) | Replace it with another plain read of the live `assistant_gm` row at a fresh instant before `finalize` | H23, H24, H25 |
+| N15 (S02-R3) | The competitor's key is outside the index, and it holds the campaign row `FOR UPDATE` (a parent-row wait, not an index wait) | W1 (all ten) |
+| N16 (S02-R3) | The discriminator always reports "no foreign-key check" | W3 |
+| N17 (S02-R3) | Swap the expected index names (live primary ↔ live assignment) | W1 (the four assignment commit cases), W4 (the four assignment route cases) |
 
 ## 8. Authorization, disclosure, isolation and outcomes
 
@@ -465,3 +506,129 @@ T01's actual baseline through T02's records commit, with the compatibility revie
 - **Review checks (separate from implementation history).** Focused S02 authorization, assignment concurrency, delegation, migration and R01 structure set: 244 passed. Controlled recipient-expiry probe: reproduced the post-expiry 201; controlled authority-revocation probe: reproduced the read after revocation. The temporary probe files were removed. `ruff format --check`, `ruff check`, `mypy src` (307 files), `uv lock --check`, documentation validation and `git diff --check` pass after probe cleanup. `alembic heads` reports the single expected head `151_assign_control_delegations`; `alembic check` could not run against the configured target because that database is not at the migration head. Migration 151's focused fresh-database tests passed in the 244-test run. No full shard was repeated.
 - **History remains separate.** T01 first nine scenario-guard failures and final 11,566 passed/6 skipped; the overlapped unit run's 43 unexplained failures; T02's neighbor run (5,061 passed/6 skipped, four implementation failures later corrected), corrected related-file run (1,097 passed), and full run (11,637 passed/6 skipped) remain as recorded in §11.3. This review does not diagnose or replace those results.
 - **Readiness.** Combined S02 is **CHANGES REQUIRED** until R1 and R2 are corrected and the declared unique-wait evidence is discriminating. The prior T01 note that F28 boundary pinning made its split snapshot acceptable is retained as implementation history, but does not satisfy the plan's explicit one-snapshot contract. No owner decision is inferred or recorded. C11 checkpoint acceptance remains ungranted; exact-head CI and the integrated C11 acceptance/full-backend evidence remain pending the checkpoint PR. No PR, consumers, browser/AX checks, pilot work or acceptance were started.
+
+### 11.5 Correction of S02-R1, S02-R2 and S02-R3 (Opus, 2026-11-27)
+
+**Status.** Every finding is **corrected, pending independent confirmation**. T01, T02 and combined S02 stay at Luna's **CHANGES REQUIRED** (section 11.4, kept unchanged as history) until Luna's re-review. S01's PASS WITH VERIFICATION LIMITS carries forward: no S01 regression was demonstrated. No owner decision was needed or inferred.
+
+**Commits.** Correction baseline `7339d3e8e89692b01d47f890a76fdb8467ede22d`; HEAD and origin agreed. Luna's uncommitted review edits were backed up and committed verbatim, hash-identical to the uncommitted files, as `ed1babc70e2346072bb900a63d336f0b98d50ec3`. Then:
+
+| Finding | Commit | Review range |
+|---|---|---|
+| S02-R1 | `d63653a1e0eb6ce3d8c827f3d34388a1373609e1` | `ed1babc70e2346072bb900a63d336f0b98d50ec3..d63653a1e0eb6ce3d8c827f3d34388a1373609e1` |
+| S02-R2 | `38863655766a6bcfd99b3a5e29c0eddb9b08f843` | `d63653a1e0eb6ce3d8c827f3d34388a1373609e1..38863655766a6bcfd99b3a5e29c0eddb9b08f843` |
+| S02-R3 | `beb0ff965d73b6a61ed2b4f73fc554d86d706d84` (tests only) | `38863655766a6bcfd99b3a5e29c0eddb9b08f843..beb0ff965d73b6a61ed2b4f73fc554d86d706d84` |
+
+These records follow in their own commit. The combined correction range is `ed1babc70e2346072bb900a63d336f0b98d50ec3..` the records commit. Luna's original S02 range (section 11.4) is unchanged.
+
+**S02-R1: design.**
+- **One statement.** The read (`queries/control_assignments.read_character_control`) is one SQL statement, with no row lock. Its first CTE is the authority statement `read_authority_snapshot` runs (`domain/access.build_authority_statement`, with the assign-control component). `read_authority_snapshot` was refactored to build and parse through the same object, with the same SQL and parameters.
+- **What the statement also reads.** Beside the authority CTE:
+  - `CAMPAIGN_CLOCK_CTE`;
+  - `clock_point`, the same timeline chain carrying the world-time id, so the display row is read in the statement;
+  - every status, from the shared in-effect fragment;
+  - the history with its period display rows, read only when the statement's own `assign_control_source` is a holder's.
+- **Refusals.** The route judges the campaign `404`, the `campaign.view` `403` and the fixed `403 character_assign_control_required` from that row, in the route gate's order.
+- **Unchanged.** Response shape, ordering, the 200-row bound and `truncated` are unchanged; the route dependency stays the early gate.
+- **Self-check.** On every read, the clock point's key is checked against the statement's `campaign_clock` key and the authority statement's own `control_clock_key`; a mismatch raises.
+
+**S02-R2: design.**
+- **New snapshot source.** It is opt-in and declared by a requirement: `Requirement.assistant_gm_subject` → `AuthoritySnapshot.subject_assistant_gm_assignment`. It is the existing `subject_gm` predicate (R01 S5-E6) with the role code and the bind name changed, and it reads no new table.
+- **The recipient requirement.** `assign_control_delegation_plans.recipient_requirement` is registered after `grantor_requirement`, so the grantor's 403 still precedes the recipient's 409. It refuses with `409 assign_control_recipient_not_assistant_gm` when the grantee holds no live assistant GM assignment at the final `t_auth`: the membership open and active in this campaign, the account active, the assignment unrevoked and unexpired, the role active. It refuses with `409 assign_control_recipient_changed` when the live row is not the locked row. Both refusals come before any write.
+- **The early read.** It stays an early check.
+- **Unchanged.** Locks and their order, grantor checks, campaign binding and audit atomicity. The revoke declares no recipient.
+- **R01 pin.** `AuthorizationPlan.require` gains the one-subject-per-plan guard for the new source, exactly as the R01 E2 C-1 correction did for perspectives. Its R01 O-1 AST pin (`tests/unit/test_r01_o1_authorization_structure.py`) is re-pinned from `742c5127e08b421e` to `4be22a5b90b82899`, with the reason and the old digest in the comment.
+
+  This is a **named adaptation for review**. The pin exists to force review of pre-write code changes, and this change is the reviewed one. Both digests were measured under Python 3.12.13 and 3.13.12 and agree, so the pin stays version-independent.
+- **S01's E32.** It also asserts that the clock routes declare no assistant-GM subject, which keeps E32 closed for the new field.
+
+**S02-R3: design (tests only).**
+- **The mechanism.** PostgreSQL inserts the heap tuple and its index entries (where the unique check runs) before the AFTER-trigger foreign-key checks. A foreign-key check takes `RowShareLock` on its parent relation and holds a heavyweight `tuple` lock while it waits for a row lock. `fk_checks_started(pid)` reads exactly that from `pg_locks`.
+- **W1, statement isolation.** For each of the five step/index pairs:
+  - the step's own statement waits on another connection's uncommitted competing key, for that transaction id, with no foreign-key check started;
+  - when the competitor commits, the unique violation's `constraint_name` is the declared index;
+  - when it rolls back, the step succeeds.
+- **W2, same-parents controls.** No wait under `lock_timeout`, so the shared parents (`FOR KEY SHARE` only) cause no wait.
+- **W3, route controls.** They show that a foreign-key wait satisfies the old "blocked by the request" observation.
+- **W4.** The three declared route tests also assert `fk_checks_started` false and the constraint name.
+- **The declarations.** They still point at those three tests; no production declaration changed.
+- **Limits.**
+  - A route request cannot itself be shown waiting on these indexes with an outside competitor, because the competitor's `FOR KEY SHARE` on the campaign makes the request wait at its campaign `FOR UPDATE` first. Inside the application every writer of these rows takes that lock, so the index wait is a conservative declaration, demonstrated by statement isolation.
+  - The discriminator relies on PostgreSQL's documented order of index insertion and AFTER-trigger checks and on `pg_locks`' lock vocabulary. It does not observe the wait at the index page.
+
+**Why the original R3 tests could pass through an unrelated wait (prototype probe, baseline code, temporary file deleted).**
+- *Conflicting competitor* (a primary of another member on the same character, behind an assign parked at its audit insert):
+  - waiting on a `transactionid` `ShareLock`;
+  - holding only `AccessShareLock` on the parent relations (its BEFORE-trigger reads);
+  - no `RowShareLock` and no `tuple` lock;
+  - result: `UniqueViolation ux_membership_character_relationships_live_primary`.
+- *Same-parents competitor* (a co-controller of another member, no index conflict):
+  - holding `RowShareLock` on `campaign.campaigns`, `character.characters`, `security.campaign_memberships` and `security.character_relationship_types`;
+  - a granted `tuple` lock on `campaign.campaigns`;
+  - waiting on a `transactionid` `ShareLock`;
+  - result: completes once the request commits.
+- Both satisfied the old assertions: blocked by the request's pid, and a waiting statement `INSERT INTO security.`.
+
+**Test first, at the baseline code.**
+- *First R1 run:* 3 failed as designated, 7 passed.
+  - revoke-before: 200 with the revocation reason;
+  - clock-before: `('Year 1010', 'ended', False)`;
+  - one-statement: first recorded no statement. That was a test mistake: a thread-name filter, while the test client runs the app on another thread. Corrected in the test, it then failed for the designated reason.
+- *R2:* 2 failed (expiry and account, each 201 with a delegation and audit), 2 passed. The expiry case's precondition held: the eligibility read's bound instant came before the expiry.
+- *R3:* 17 + 5 passed, as expected for an evidence gap.
+- *Final baseline pass over every new and modified case:* the six production files were replaced by their `HEAD` versions, then restored hash-identical. Result: **9 failed (designated), 33 passed (guards and controls)**.
+  - R1: 3 failed, 8 passed, including the clock-after control added after N12;
+  - R2 database: 3 failed (H25 included), 2 passed;
+  - R2 unit: 3 failed, 1 passed;
+  - R3: 17 + 5 passed.
+
+**Mutation probes** (a temporary script outside the repository, run on the final code before the records). Each probe was applied, its tests run, and the exact bytes restored. SHA-256 of `api/control_assignments.py`, `queries/control_assignments.py`, `commands/assign_control_delegation_plans.py` and `test_control_unique_wait_evidence.py` matched after every probe.
+
+| Probe | Result |
+|---|---|
+| N11 | F34 and F37 fail; F35 passes (its display is in the statement under the mutation) |
+| N12 | first run: only F37 failed (a later display read pairs with a later clock only if the clock moves after the statement). The clock-after control (F36) was then added; rerun: F36 and F37 fail |
+| N13 | H23, H24, H25 fail |
+| N14 | H23, H24, H25 fail (the plain re-read runs before the gate, sees the row live and grants) |
+| N15 | all ten W1 cases fail |
+| N16 | both W3 route controls fail |
+| N17 | the four W1 assignment commit cases and the four W4 assignment route cases fail |
+
+**Verification on the final code (`beb0ff965d73b6a61ed2b4f73fc554d86d706d84`).**
+- *Focused run.* Serial: 37 database files plus `tests/unit`. The database files are every C11 assignment and delegation file (commands, concurrency, read snapshot, clock routes, resolution, storage, migrations), the R3 evidence, every file with a live-catalogue declaration test, the legacy grant and R01 S5-E3/E4/E5/E6/F files, reveal delegation, recovery and stranding, the snapshot differential, E2 perspective and role grants.
+  - Result: **4,568 passed, 6 skipped, 2 failed**, 17m58s.
+  - Failure 1: the environmental `tests/unit/test_config.py::test_local_session_allowed_origins_defaults_to_dev_topology_outside_production` (an extra local allowed origin; not changed).
+  - Failure 2: `test_r01_o1_authorization_structure.py::test_the_pre_write_code_is_unchanged_from_the_parent`, the `require` pin, re-pinned as described. That file then passed 16 of 16.
+- *Earlier focused runs during the work:* the read, delegation, snapshot, structure and C11 shape files gave 172 passed; the R2 neighbours gave 127 passed.
+- *Per-commit checks* (throwaway worktrees, each with its own synced environment and interpreter):
+  - `d63653a` (R1 read, commands, R01 structure and O-1 files): 92 passed;
+  - `3886365` (R2 files, delegation, clock routes, R01 structure and O-1): 82 passed.
+  - **A first per-commit attempt is invalid and not counted:** the worktree environment lacked the `dev` extra, so `uv run pytest` reached the main checkout's pytest and imported the main `src`. It reported 1 failed and 91 passed for `d63653a`, and 82 passed for `3886365`.
+- *Full backend shards:* `uv run python scripts/run_sharded_tests.py` on `beb0ff9`, alone on the machine, launched after the environment restore below. **First run: 11,673 passed, 6 skipped, 1 failed**; 11,680 collected and executed; 32m25s. Shards: 3,102, 2,838, 2,668 and 3,065 + 1 failed. The failure was `tests/database/test_r01_e4_reference_corpus.py::test_a_lapse_before_the_final_check_refuses_rolls_everything_back_and_a_retry_succeeds[grant-capability_removed_from_the_role-final]` (shard 4). The gate on the final authority statement was not reached after 18.2s, the request was still running, and no backend was non-idle (deadline report kept in the run directory). **No cause is claimed.** *Rerun, reported separately:* that test alone, all 30 parametrizations, passed, and the whole file passed (99). No second full run was made.
+- *Non-pytest checks* on the final tree:
+  - `ruff format --check` (1,015 files), `ruff check`, `mypy src` (307 files), `uv lock --check` and `scripts/check_documentation.py` pass;
+  - `git diff --check` reports only the repository's line-ending notices;
+  - `alembic upgrade head`, `alembic heads` (single head `151_assign_control_delegations`) and `alembic check` (exit 0) pass on a throwaway database created and dropped for this check. The configured database was not migrated. The existing foreign-key cycle sort warning was printed. No migration is part of this correction.
+- *Environment incident (mine, recorded).* A diagnostic `uv run --python 3.12` in the main checkout rebuilt the project `.venv` with Python 3.12 and without the `dev` extra, so the first shard launch stopped at its partition check ("No module named pytest", no test run). The environment was restored with `uv sync --frozen --extra dev --python 3.13`: Python 3.13.12, pytest 9.1.1, editable `src`. Every main-checkout result above (the focused runs, the static checks, Alembic and the mutations) ran before that rebuild, on the original 3.13 environment.
+
+**Named adaptations and file changes for review.**
+- Production:
+  - `domain/access.py`: `AuthorityStatement` and `build_authority_statement` (R1); the subject assistant-GM source (R2);
+  - `queries/control_assignments.py` (R1; `get_character_control` replaced by `read_character_control`);
+  - `api/control_assignments.py` (R1);
+  - `domain/authorization.py` and `domain/authorization_requirements.py` (R2);
+  - `commands/assign_control_delegation_plans.py` (R2).
+- Tests:
+  - new: `test_control_assignment_read_snapshot.py`, `test_assign_control_delegation_recipient_final.py`, `tests/unit/test_s02_r2_recipient_requirement.py`, `test_control_unique_wait_evidence.py`;
+  - strengthened (assertions and docstrings only): the three declared route tests;
+  - one assertion added to S01's E32;
+  - the R01 O-1 `require` pin.
+- Docs: ACCESS_CONTROL §3z and §3aa; this plan's sections 3.1, 3.2, 6, 7 and 11.5; the S01 plan §12.2 case ranges; the register.
+- No lock or lock-order change, no R01 checker weakened, no reviewed-table exemption, no capability adoption, no migration.
+
+**Remaining limitations.**
+- **The expiry case (H23).** It depends on one bounded interval: `expires_at` is set one second after the request is parked before its role lock, and the request must reach its eligibility read inside that second. The case asserts this from the request's own bound parameter, so a slow machine makes it fail inconclusively, never pass falsely.
+- **The R3 limits.** As stated in the S02-R3 design above.
+- **The R1 contract.** It is statement coherence. A revocation that commits after the read's statement does not retract the response (F36), by design.
+- **Unchanged history.** The T01 and T02 history in section 11.3, Luna's review checks in section 11.4, the environmental `test_config` failure and the earlier unexplained anomalies remain as recorded.
+- **Not done.** Exact-head CI and the integrated C11 acceptance and full-backend evidence are pending the checkpoint PR. No PR, merge, consumers, browser or AX checks, pilots or acceptance.
