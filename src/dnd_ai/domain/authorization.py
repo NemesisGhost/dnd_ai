@@ -531,6 +531,10 @@ class Requirement:
     #: P15-C11-S02-T01: whether the snapshot must carry the caller's assign-control authority
     #: (`AuthoritySnapshot.assign_control_authority`), read from the built-in role rows only.
     assign_control: bool = False
+    #: P15-C11-S02 correction S02-R2: a membership of this campaign whose live built-in `assistant_gm` assignment the
+    #: snapshot must carry (the recipient of an assign-control delegation), read in the same statement at the same
+    #: instant (`AuthoritySnapshot.subject_assistant_gm_assignment`).
+    assistant_gm_subject: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -1022,6 +1026,13 @@ class AuthorizationPlan:
         subjects = {r.gm_subject for r in self._requirements if r.gm_subject is not None}
         if requirement.gm_subject is not None and subjects - {requirement.gm_subject}:
             raise ValueError("a plan's requirements name one gm subject")
+        assistants = {
+            r.assistant_gm_subject for r in self._requirements if r.assistant_gm_subject is not None
+        }
+        if requirement.assistant_gm_subject is not None and assistants - {
+            requirement.assistant_gm_subject
+        }:
+            raise ValueError("a plan's requirements name one assistant_gm subject")
         declared_perspectives = {
             r.perspective for r in self._requirements if r.perspective is not None
         }
@@ -1106,6 +1117,9 @@ class AuthorizationPlan:
             return None
         world_ids = {r.world_id for r in self._requirements if r.world_id is not None}
         gm_subjects = {r.gm_subject for r in self._requirements if r.gm_subject is not None}
+        assistant_subjects = {
+            r.assistant_gm_subject for r in self._requirements if r.assistant_gm_subject is not None
+        }
         perspectives = {r.perspective for r in self._requirements if r.perspective is not None}
         self._reading = True
         try:
@@ -1119,6 +1133,9 @@ class AuthorizationPlan:
                 perspective=next(iter(perspectives)) if perspectives else None,
                 with_account=any(r.account for r in self._requirements),
                 with_assign_control=any(r.assign_control for r in self._requirements),
+                subject_assistant_gm_membership_id=(
+                    next(iter(assistant_subjects)) if assistant_subjects else None
+                ),
                 as_of=FRESH_INSTANT,
             )
         finally:

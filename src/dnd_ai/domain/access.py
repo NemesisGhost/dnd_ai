@@ -1111,6 +1111,11 @@ class AuthoritySnapshot:
     assign_control_authority: AssignControlAuthority | None = None
     assign_control_row: uuid.UUID | None = None
     assign_control_delegation: uuid.UUID | None = None
+    #: P15-C11-S02 correction S02-R2: the membership whose live built-in `assistant_gm` assignment was declared (the
+    #: recipient of an assign-control delegation), and that assignment's id (`None` when that membership holds no live
+    #: one at `t_auth`). Both `None` unless declared.
+    subject_assistant_membership_id: uuid.UUID | None = None
+    subject_assistant_gm_assignment: uuid.UUID | None = None
 
 
 _LIVE_REVELATIONS_IN_STATEMENT_SQL = LIVE_REVELATIONS_FOR_MEMBERSHIP_SQL.replace(
@@ -1533,6 +1538,41 @@ _SUBJECT_GM_COLUMNS = """
         (SELECT membership_role_id FROM subject_gm) AS subject_gm_assignment
 """
 
+# P15-C11-S02 correction S02-R2: the live built-in `assistant_gm` assignment of a declared membership (the recipient
+# of an assign-control delegation), judged in the same statement at the same `t_auth` as the grantor: the template,
+# the assignment (unrevoked, unexpired at `t_auth`, the role active), the membership (this campaign, open, active) and
+# its account (active). The `subject_gm` predicate with the role code changed; it reads no other table.
+_SUBJECT_ASSISTANT_GM_CTES = f"""
+    subject_assistant_gm AS (
+        SELECT mr.membership_role_id
+        FROM security.membership_roles mr
+        JOIN security.roles r ON r.role_id = mr.role_id
+        JOIN security.campaign_memberships cm
+          ON cm.campaign_membership_id = mr.campaign_membership_id
+        JOIN security.membership_statuses ms
+          ON ms.membership_status_id = cm.membership_status_id
+        JOIN security.users u ON u.user_id = cm.user_id
+        JOIN core.lifecycle_statuses uls ON uls.lifecycle_status_id = u.lifecycle_status_id
+        WHERE mr.campaign_membership_id = :subject_assistant_membership_id
+          AND cm.campaign_id = :campaign_id
+          AND r.campaign_id IS NULL
+          AND r.code = '{BUILTIN_CAMPAIGN_ASSISTANT_GM_ROLE_CODE}'
+          AND r.is_active
+          AND mr.revoked_at IS NULL
+          AND (mr.expires_at IS NULL OR mr.expires_at > {_T_AUTH})
+          AND cm.ended_at IS NULL
+          AND ms.code = 'active'
+          AND ms.is_active
+          AND uls.code = 'active'
+        ORDER BY mr.membership_role_id
+        LIMIT 1
+    )
+"""
+
+_SUBJECT_ASSISTANT_GM_COLUMNS = """
+        (SELECT membership_role_id FROM subject_assistant_gm) AS subject_assistant_gm_assignment
+"""
+
 # Assign-control authority (P15-C11-S02-T01, lock `none`): a live built-in `campaign_owner` assignment; failing that, a
 # live built-in `gm` assignment; failing that (T02, OD-4a), a live unrevoked assign-control delegation bound to a live
 # built-in `assistant_gm` assignment of the caller in this campaign. Expiry is judged at `t_auth`. It reads the built-in
@@ -1699,6 +1739,7 @@ def _authority_snapshot_sql(
     with_perspective: bool = False,
     with_account: bool = False,
     with_assign_control: bool = False,
+    with_subject_assistant_gm: bool = False,
 ) -> str:
     ctes = [f"clock AS MATERIALIZED (SELECT {_INSTANT_SQL[instant]} AS t_auth)", _ACCESS_CTES]
     columns = [
@@ -1723,6 +1764,9 @@ def _authority_snapshot_sql(
     if with_assign_control:
         ctes.append(_ASSIGN_CONTROL_CTES)
         columns.append(_ASSIGN_CONTROL_COLUMNS)
+    if with_subject_assistant_gm:
+        ctes.append(_SUBJECT_ASSISTANT_GM_CTES)
+        columns.append(_SUBJECT_ASSISTANT_GM_COLUMNS)
     return "WITH " + ",\n".join(part.strip() for part in ctes) + "\nSELECT " + ",\n".join(columns)
 
 
@@ -1738,6 +1782,7 @@ def read_authority_snapshot(
     perspective: tuple[uuid.UUID, uuid.UUID] | None = None,
     with_account: bool = False,
     with_assign_control: bool = False,
+    subject_assistant_gm_membership_id: uuid.UUID | None = None,
     as_of: Instant = None,
 ) -> AuthoritySnapshot:
     """Read the declared authority sources in ONE statement and return them with the instant expiry
@@ -1761,6 +1806,7 @@ def read_authority_snapshot(
         perspective=perspective,
         with_account=with_account,
         with_assign_control=with_assign_control,
+        subject_assistant_gm_membership_id=subject_assistant_gm_membership_id,
         as_of=as_of,
     )
     row = connection.execute(text(statement.sql), statement.parameters).mappings().one()
@@ -1786,6 +1832,7 @@ class AuthorityStatement:
     perspective: tuple[uuid.UUID, uuid.UUID] | None
     with_account: bool
     with_assign_control: bool
+    subject_assistant_gm_membership_id: uuid.UUID | None = None
 
     def snapshot(self, row: RowMapping) -> AuthoritySnapshot:
         return _snapshot_from_row(self, row)
@@ -1802,6 +1849,7 @@ def build_authority_statement(
     perspective: tuple[uuid.UUID, uuid.UUID] | None = None,
     with_account: bool = False,
     with_assign_control: bool = False,
+    subject_assistant_gm_membership_id: uuid.UUID | None = None,
     as_of: Instant = None,
 ) -> AuthorityStatement:
     """The statement `read_authority_snapshot` would run for the same arguments (same SQL, same parameters)."""
@@ -1819,6 +1867,7 @@ def build_authority_statement(
         with_perspective=perspective is not None,
         with_account=with_account,
         with_assign_control=with_assign_control,
+        with_subject_assistant_gm=subject_assistant_gm_membership_id is not None,
     )
     parameters: dict[str, object] = {"campaign_id": campaign_id, "user_id": user_id}
     if instant == "explicit":
@@ -1829,6 +1878,8 @@ def build_authority_statement(
         parameters["subject_membership_id"] = subject_gm_membership_id
     if perspective is not None:
         parameters["perspective_party_id"], parameters["perspective_character_id"] = perspective
+    if subject_assistant_gm_membership_id is not None:
+        parameters["subject_assistant_membership_id"] = subject_assistant_gm_membership_id
     return AuthorityStatement(
         sql=sql,
         parameters=parameters,
@@ -1841,6 +1892,7 @@ def build_authority_statement(
         perspective=perspective,
         with_account=with_account,
         with_assign_control=with_assign_control,
+        subject_assistant_gm_membership_id=subject_assistant_gm_membership_id,
     )
 
 
@@ -1904,6 +1956,13 @@ def _snapshot_from_row(statement: AuthorityStatement, row: RowMapping) -> Author
             None
             if not with_assign_control or row["assign_control_delegation"] is None
             else _as_uuid(row["assign_control_delegation"])
+        ),
+        subject_assistant_membership_id=statement.subject_assistant_gm_membership_id,
+        subject_assistant_gm_assignment=(
+            None
+            if statement.subject_assistant_gm_membership_id is None
+            or row["subject_assistant_gm_assignment"] is None
+            else _as_uuid(row["subject_assistant_gm_assignment"])
         ),
     )
 

@@ -328,7 +328,10 @@ PARENT_PINS: dict[str, str] = {
     "execute": "aae5e024ef1d1210",
     "finalize": "902df922d8c19b98",
     "lock": "4617045beaab9180",
-    "require": "742c5127e08b421e",  # R01 E2 correction C-1: one declared party perspective per plan (was 92302c364e2191b5)
+    # R01 E2 correction C-1: one declared party perspective per plan (was 92302c364e2191b5); P15-C11-S02 correction
+    # S02-R2: one declared assistant_gm subject per plan, the same guard for the new final-statement source
+    # (was 742c5127e08b421e)
+    "require": "4be22a5b90b82899",
 }
 
 

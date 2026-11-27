@@ -177,6 +177,8 @@ def test_each_clock_route_registers_exactly_its_two_role_only_requirements(
         for r in requirements:
             assert r.world_id is None and not r.reveal and not r.account
             assert r.gm_subject is None and r.perspective is None
+            # S02-R2 added a declarable subject source; the clock routes declare none (E32 kept closed)
+            assert r.assistant_gm_subject is None
 
 
 # --- E33 -------------------------------------------------------------------------------------------------------

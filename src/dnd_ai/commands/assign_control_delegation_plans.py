@@ -413,6 +413,38 @@ def grantor_requirement(campaign_id: uuid.UUID, actor_membership_id: uuid.UUID) 
     return judged_requirement("assign_control_delegation.grantor", decide, assign_control=True)
 
 
+def recipient_requirement(
+    campaign_id: uuid.UUID, grantee: uuid.UUID, assistant_row: uuid.UUID
+) -> Requirement:
+    """The grant's recipient at the same final instant (correction S02-R2): the grantee's live built-in `assistant_gm`
+    assignment (the template; the assignment unrevoked, unexpired at `t_auth`, its role active; the membership of this
+    campaign, open and active; its account active) exists (409 not-assistant otherwise) and is the very row the grant
+    locked and will bind the delegation to (`recipient_changed` otherwise). The row lock stops a concurrent update or
+    revoke of that row and the membership lock a concurrent membership change; neither stops expiry and neither covers
+    the account, which this check does. It reads the database at `finalize`, never the pre-finalization read."""
+
+    def decide(snapshot: AuthoritySnapshot) -> BaseException | None:
+        if snapshot.subject_assistant_membership_id != grantee:
+            return RuntimeError(
+                "the final snapshot does not carry the grantee's assistant_gm assignment"
+            )
+        held = snapshot.subject_assistant_gm_assignment
+        if held is None:
+            return AssignControlRecipientNotAssistantGmError(
+                f"membership {grantee} holds no live built-in assistant_gm assignment in campaign {campaign_id} "
+                "at the final authorization instant"
+            )
+        if held != assistant_row:
+            return AssignControlRecipientChangedError(
+                f"membership {grantee}'s live assistant_gm assignment {held} is not the locked {assistant_row}"
+            )
+        return None
+
+    return judged_requirement(
+        "assign_control_delegation.recipient_assistant_gm", decide, assistant_gm_subject=grantee
+    )
+
+
 # -- reads ----------------------------------------------------------------------------------------------
 
 _LIVE_ASSISTANT_SQL = text(f"""
@@ -592,9 +624,11 @@ def prepare_grant(
         raise AssignControlRecipientChangedError(
             f"membership {grantee}'s live delegations changed while the grant waited"
         )
-    # 9. the final requirement, registered after every early check (so refusal precedence is unchanged) and judged by
-    #    `finalize` at its own instant, read from the database again
+    # 9. the final requirements, registered after every early check (so refusal precedence is unchanged: the grantor's
+    #    403 before the recipient's 409) and judged by `finalize` at its own instant, read from the database again. The
+    #    recipient is part of that one statement (S02-R2): step 7's read is the early check, not the final word
     plan.require(connection, grantor_requirement(campaign_id, actor_membership_id))
+    plan.require(connection, recipient_requirement(campaign_id, grantee, live_assistant))
     return GrantPrepared(
         world_id=_scope_world(connection, campaign_id),
         action_id=lookup_id(connection, "audit", "change_actions", "change_action_id", "created"),
