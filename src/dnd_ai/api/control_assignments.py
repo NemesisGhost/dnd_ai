@@ -32,15 +32,15 @@ from dnd_ai.commands.control_assignment_plans import (
     write_replace,
     write_revoke,
 )
-from dnd_ai.domain.access import AccessContext, read_authority_snapshot
+from dnd_ai.domain.access import AccessContext
 from dnd_ai.domain.authorization import AuthorizationPlan
-from dnd_ai.queries.control_assignments import CharacterControl, get_character_control
-from dnd_ai.queries.party_membership_period import resolve_membership_clock
+from dnd_ai.queries.control_assignments import CharacterControl, read_character_control
 
 from .access import require_campaign_capability
 from .campaigns import _begin_lifecycle_request
 from .correlation import get_request_correlation_id
 from .deps import get_connection, get_idempotency_key
+from .errors import ForbiddenError, NotFoundError
 from .r01_route_plans import get_authorization_plan
 
 router = APIRouter(tags=["control-assignments"])
@@ -314,22 +314,25 @@ def get_character_control_endpoint(
 ) -> CharacterControlResponse:
     """The character's current control, the effective clock and every assignment row, newest first (at most 200, with
     `truncated`). Limited to the holders of `character.assign_control`; the refusal precedes any character lookup, so it
-    is one fixed 403 for an existing and a missing character. Writes nothing and takes no lock."""
-    snapshot = read_authority_snapshot(
+    is one fixed 403 for an existing and a missing character. Writes nothing and takes no lock.
+
+    S02-R1: the authority, the clock and the history are ONE statement (`read_character_control`). The route's
+    dependency is the early campaign gate; the decision that governs the response is judged from the read's own row, in
+    the dependency's order (campaign 404, `campaign.view` 403), then the fixed assign-control 403."""
+    read = read_character_control(
         connection,
         user_id=access.user_id,
         campaign_id=campaign_id,
-        with_assign_control=True,
-    )
-    if snapshot.assign_control_authority not in ("campaign_owner", "gm", "delegation"):
-        raise AssignControlRequiredError(
-            f"membership {access.campaign_membership_id} holds no live owner or gm assignment "
-            f"in campaign {campaign_id}"
-        )
-    state = get_character_control(
-        connection,
-        campaign_id=campaign_id,
         character_id=character_id,
-        clock=resolve_membership_clock(connection, timeline_id=access.timeline_id),
     )
-    return _response(state)
+    final = read.snapshot.access
+    if final is None or final.campaign_lifecycle_status in ("archived", "deleted"):
+        raise NotFoundError()
+    if not final.has_capability(_VIEW):
+        raise ForbiddenError()
+    if read.control is None:
+        raise AssignControlRequiredError(
+            f"membership {access.campaign_membership_id} holds no live owner, gm or delegated assign-control authority "
+            f"in campaign {campaign_id} at the read's statement"
+        )
+    return _response(read.control)

@@ -1751,6 +1751,60 @@ def read_authority_snapshot(
     `datetime`, or `FRESH_INSTANT`, the single in-statement `clock_timestamp()` that follows the
     statement's own relation-lock waits. Raises `IsolationLevelError` unless the transaction is
     `read committed` (section 3.1), checked from the same statement."""
+    statement = build_authority_statement(
+        user_id=user_id,
+        campaign_id=campaign_id,
+        timeline_id=timeline_id,
+        world_id=world_id,
+        with_reveal=with_reveal,
+        subject_gm_membership_id=subject_gm_membership_id,
+        perspective=perspective,
+        with_account=with_account,
+        with_assign_control=with_assign_control,
+        as_of=as_of,
+    )
+    row = connection.execute(text(statement.sql), statement.parameters).mappings().one()
+    return statement.snapshot(row)
+
+
+@dataclass(frozen=True)
+class AuthorityStatement:
+    """The single authority statement `read_authority_snapshot` runs, built but not executed (P15-C11-S02 correction
+    S02-R1). A read that must judge authority and read its own data **in the same statement** embeds `sql` as a CTE
+    (one MVCC snapshot, one `t_auth`), binds `parameters` (and only names of its own that do not collide), and turns the
+    resulting row into the snapshot with `snapshot(row)`, exactly as `read_authority_snapshot` does. The row may carry
+    other columns; `snapshot` reads only the statement's own."""
+
+    sql: str
+    parameters: dict[str, object]
+    user_id: uuid.UUID
+    campaign_id: uuid.UUID
+    timeline_id: uuid.UUID | None
+    world_id: uuid.UUID | None
+    with_reveal: bool
+    subject_gm_membership_id: uuid.UUID | None
+    perspective: tuple[uuid.UUID, uuid.UUID] | None
+    with_account: bool
+    with_assign_control: bool
+
+    def snapshot(self, row: RowMapping) -> AuthoritySnapshot:
+        return _snapshot_from_row(self, row)
+
+
+def build_authority_statement(
+    *,
+    user_id: uuid.UUID,
+    campaign_id: uuid.UUID,
+    timeline_id: uuid.UUID | None = None,
+    world_id: uuid.UUID | None = None,
+    with_reveal: bool = False,
+    subject_gm_membership_id: uuid.UUID | None = None,
+    perspective: tuple[uuid.UUID, uuid.UUID] | None = None,
+    with_account: bool = False,
+    with_assign_control: bool = False,
+    as_of: Instant = None,
+) -> AuthorityStatement:
+    """The statement `read_authority_snapshot` would run for the same arguments (same SQL, same parameters)."""
     if isinstance(as_of, _FreshInstant):
         instant = "fresh"
     elif as_of is None:
@@ -1775,7 +1829,31 @@ def read_authority_snapshot(
         parameters["subject_membership_id"] = subject_gm_membership_id
     if perspective is not None:
         parameters["perspective_party_id"], parameters["perspective_character_id"] = perspective
-    row = connection.execute(text(sql), parameters).mappings().one()
+    return AuthorityStatement(
+        sql=sql,
+        parameters=parameters,
+        user_id=user_id,
+        campaign_id=campaign_id,
+        timeline_id=timeline_id,
+        world_id=world_id,
+        with_reveal=with_reveal,
+        subject_gm_membership_id=subject_gm_membership_id,
+        perspective=perspective,
+        with_account=with_account,
+        with_assign_control=with_assign_control,
+    )
+
+
+def _snapshot_from_row(statement: AuthorityStatement, row: RowMapping) -> AuthoritySnapshot:
+    user_id = statement.user_id
+    campaign_id = statement.campaign_id
+    timeline_id = statement.timeline_id
+    world_id = statement.world_id
+    with_reveal = statement.with_reveal
+    subject_gm_membership_id = statement.subject_gm_membership_id
+    perspective = statement.perspective
+    with_account = statement.with_account
+    with_assign_control = statement.with_assign_control
 
     isolation = _as_str(row["isolation"])
     if isolation != "read committed":
